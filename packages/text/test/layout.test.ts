@@ -215,5 +215,11 @@ describe("drawing", () => {
     const first = layout.lines[0]!;
     const hits = new Scene(ctx.getDocument()).hitTest({ x: first.fragments[0]!.x + 2, y: first.baseline - 4 });
     expect(hits.map((h) => (h.op as { text: string }).text)).toEqual([first.fragments[0]!.text]);
+    // The hit names its line's group, inside the block's group, whose meta has the fingerprint.
+    const doc = ctx.getDocument();
+    const [lineGroup, blockGroup] = hits[0]!.groups.map((id) => doc.groups!.find((g) => g.id === id)!);
+    expect(lineGroup!.meta).toEqual({ type: "text-line", line: 0, paragraph: 0 });
+    expect(blockGroup!.meta!.type).toBe("text-block");
+    expect(blockGroup!.meta!.fingerprint).toEqual({ ...layout.fingerprint, fonts: [...layout.fingerprint.fonts] });
   });
 });

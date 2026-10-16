@@ -1,5 +1,5 @@
 import { IDENTITY, multiply } from "../math";
-import type { IRDocument, Matrix2D, Op, PathGeometry, Point, Rect } from "../types";
+import type { Group, IRDocument, Matrix2D, Op, PathGeometry, Point, Rect } from "../types";
 import { type Box, boxToRect, expandBox, isEmptyBox, pathBounds, rectToBox } from "./bounds";
 import { maxScale } from "./flatten";
 import { Grid } from "./grid";
@@ -31,6 +31,8 @@ export interface HitTestOptions {
 export interface Hit {
   readonly id: string;
   readonly op: Op;
+  /** The groups the op is in, innermost first. */
+  readonly groups: readonly string[];
 }
 
 export type RectQueryMode = "intersects" | "enclosed";
@@ -99,16 +101,46 @@ export class Scene {
   private readonly grid: Grid<Entry>;
   private entries: Entry[] = [];
   private readonly byId = new Map<string, Entry>();
+  private readonly groups = new Map<string, Group>();
 
   constructor(document: IRDocument, options: SceneOptions = {}) {
     this.tolerance = options.tolerance ?? 0.1;
     this.grid = new Grid(options.cellSize ?? 128);
+    for (const group of document.groups ?? []) this.groups.set(group.id, group);
     document.ops.forEach((op) => this.place(op, this.entries.length));
   }
 
-  /** The current ops, in drawing order. */
+  /** The current ops and groups, in drawing order. */
   get document(): IRDocument {
-    return { version: 1, ops: this.entries.map((e) => e.op) };
+    const ops = this.entries.map((e) => e.op);
+    return this.groups.size > 0 ? { version: 1, ops, groups: [...this.groups.values()] } : { version: 1, ops };
+  }
+
+  getGroup(id: string): Group | undefined {
+    return this.groups.get(id);
+  }
+
+  /** The groups an op or group is in, innermost first. */
+  groupChain(id: string): string[] {
+    const chain: string[] = [];
+    let current = this.byId.get(id)?.op.group ?? this.groups.get(id)?.parent;
+    while (current !== undefined) {
+      chain.push(current);
+      current = this.groups.get(current)?.parent;
+    }
+    return chain;
+  }
+
+  /** Ids of the ops in a group or any group nested in it, in drawing order. */
+  groupOps(groupId: string): string[] {
+    return this.entries.filter((e) => e.op.group !== undefined && (e.op.group === groupId || this.groupChain(e.op.id).includes(groupId))).map((e) => e.op.id);
+  }
+
+  /** Adds a group, so ops inserted later can belong to it. */
+  addGroup(group: Group): void {
+    if (this.groups.has(group.id) || this.byId.has(group.id)) throw new Error(`duplicate id ${group.id}`);
+    if (group.parent !== undefined && !this.groups.has(group.parent)) throw new Error(`no group ${group.parent}`);
+    this.groups.set(group.id, group);
   }
 
   get(id: string): Op | undefined {
@@ -117,11 +149,26 @@ export class Scene {
 
   /** Geometry bounds (the path, curve extrema exact) or paint bounds (what is painted, stroke included). */
   bounds(id: string, kind: "geometry" | "paint" = "paint"): Rect | null {
+    const box = this.boxOf(id, kind);
+    return box === null || isEmptyBox(box) ? null : boxToRect(box);
+  }
+
+  private boxOf(id: string, kind: "geometry" | "paint"): Box | null {
     const entry = this.byId.get(id);
-    if (!entry) return null;
-    const shape = this.shape(entry);
-    const box = kind === "geometry" ? shape.geometryBox : shape.paintBox;
-    return isEmptyBox(box) ? null : boxToRect(box);
+    if (entry) {
+      const shape = this.shape(entry);
+      return kind === "geometry" ? shape.geometryBox : shape.paintBox;
+    }
+    if (!this.groups.has(id)) return null;
+    // A group's bounds are the union of its ops'; clears paint nothing of their own.
+    let box: Box | null = null;
+    for (const opId of this.groupOps(id)) {
+      if (this.byId.get(opId)!.op.kind === "clear") continue;
+      const b = this.boxOf(opId, kind)!;
+      if (isEmptyBox(b)) continue;
+      box = box ? { minX: Math.min(box.minX, b.minX), minY: Math.min(box.minY, b.minY), maxX: Math.max(box.maxX, b.maxX), maxY: Math.max(box.maxY, b.maxY) } : b;
+    }
+    return box;
   }
 
   /**
@@ -141,7 +188,7 @@ export class Scene {
         continue;
       }
       if (!options.includeInvisible && entry.op.compositing.globalAlpha === 0) continue;
-      if (shapeContains(shape, point, tolerance)) hits.push({ id: entry.op.id, op: entry.op });
+      if (shapeContains(shape, point, tolerance)) hits.push({ id: entry.op.id, op: entry.op, groups: this.groupChain(entry.op.id) });
     }
     return hits;
   }
@@ -193,8 +240,12 @@ export class Scene {
     this.grid.insert(entry, entry.coarse);
   }
 
-  /** Composes `matrix` onto the op's transforms; see `transformOp`. */
+  /** Composes `matrix` onto the transforms of an op, or of every op in a group; see `transformOp`. */
   transform(id: string, matrix: Matrix2D): void {
+    if (this.groups.has(id)) {
+      for (const opId of this.groupOps(id)) this.replace(transformOp(this.get(opId)!, matrix));
+      return;
+    }
     const op = this.get(id);
     if (!op) throw new Error(`no op with id ${id}`);
     this.replace(transformOp(op, matrix));
@@ -203,10 +254,17 @@ export class Scene {
   /** Inserts an op at `index` in drawing order (default: on top). */
   insert(op: Op, index = this.entries.length): void {
     if (this.byId.has(op.id)) throw new Error(`duplicate op id ${op.id}`);
+    if (op.group !== undefined && !this.groups.has(op.group)) throw new Error(`no group ${op.group}`);
     this.place(op, index);
   }
 
+  /** Removes an op, or a group with its ops and nested groups. */
   remove(id: string): void {
+    if (this.groups.has(id)) {
+      for (const opId of this.groupOps(id)) this.remove(opId);
+      for (const g of [...this.groups.values()]) if (g.id === id || this.groupChain(g.id).includes(id)) this.groups.delete(g.id);
+      return;
+    }
     const entry = this.byId.get(id);
     if (!entry) return;
     this.grid.remove(entry);

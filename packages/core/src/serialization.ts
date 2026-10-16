@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { IRDocument } from "./types";
+import type { IRDocument, JsonValue } from "./types";
 
 const finite = z.number().finite();
 const point = z.object({ x: finite, y: finite }).strict();
@@ -119,7 +119,15 @@ const fillRule = z.enum(["nonzero", "evenodd"]);
 const clip = z.array(z.object({ fillRule, transform: matrix, path: pathGeometry }).strict()).min(1).optional();
 
 /** Fields every painting op has, in the order ops are built, so parsed documents serialize to the same JSON. */
-const base = { id: z.string(), transform: matrix, compositing, clip };
+const group = z.string().optional();
+const base = { id: z.string(), transform: matrix, compositing, clip, group };
+
+const jsonValue: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([z.null(), z.boolean(), finite, z.string(), z.array(jsonValue), z.record(jsonValue)]),
+);
+const groupSchema = z
+  .object({ id: z.string(), parent: z.string().optional(), meta: z.record(jsonValue).optional() })
+  .strict();
 
 const textStyle = z
   .object({
@@ -151,7 +159,7 @@ const textMeasure = z
 const op = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("fill"), ...base, fillRule, paint, path: pathGeometry }).strict(),
   z.object({ kind: z.literal("stroke"), ...base, stroke: strokeStyle, path: pathGeometry }).strict(),
-  z.object({ kind: z.literal("clear"), id: z.string(), transform: matrix, rect, clip }).strict(),
+  z.object({ kind: z.literal("clear"), id: z.string(), transform: matrix, rect, clip, group }).strict(),
   z
     .object({
       kind: z.literal("image"),
@@ -180,13 +188,25 @@ const op = z.discriminatedUnion("kind", [
 ]);
 
 export const irDocumentSchema = z
-  .object({ version: z.literal(1), ops: z.array(op) })
+  .object({ version: z.literal(1), ops: z.array(op), groups: z.array(groupSchema).optional() })
   .strict()
   .superRefine((doc, ctx) => {
     const seen = new Set<string>();
+    // Ids are one namespace, and a group's parent must come before it, so the nesting has no cycles.
+    (doc.groups ?? []).forEach((g, i) => {
+      if (g.parent !== undefined && !seen.has(g.parent)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["groups", i, "parent"], message: `parent ${g.parent} is not an earlier group` });
+      }
+      if (seen.has(g.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["groups", i, "id"], message: `duplicate id ${g.id}` });
+      seen.add(g.id);
+    });
+    const groupIds = new Set(seen);
     doc.ops.forEach((entry, i) => {
       if (entry.kind === "text" && (entry.mode === "stroke") !== (entry.stroke !== undefined)) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["ops", i, "stroke"], message: "stroked text, and only that, has a stroke" });
+      }
+      if (entry.group !== undefined && !groupIds.has(entry.group)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["ops", i, "group"], message: `no group ${entry.group}` });
       }
       if (seen.has(entry.id)) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["ops", i, "id"], message: `duplicate op id ${entry.id}` });

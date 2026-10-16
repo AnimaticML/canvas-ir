@@ -12,6 +12,8 @@ import {
 import { PathBuilder } from "./path";
 import { type DOMPointInitLike, RecordingPath2D, normalizeRadii } from "./path2d";
 import type {
+  Group,
+  JsonValue,
   ClipPath,
   Compositing,
   FillRule,
@@ -235,6 +237,9 @@ export class RecordingContext {
 
   private ops: Op[] = [];
   private nextId = 0;
+  private groups: Group[] = [];
+  private groupStack: string[] = [];
+  private nextGroupId = 0;
   private state: DrawingState = defaultState();
   private stack: DrawingState[] = [];
   private readonly path = new PathBuilder();
@@ -248,7 +253,35 @@ export class RecordingContext {
   }
 
   getDocument(): IRDocument {
-    return { version: 1, ops: [...this.ops] };
+    return this.groups.length > 0 ? { version: 1, ops: [...this.ops], groups: [...this.groups] } : { version: 1, ops: [...this.ops] };
+  }
+
+  // --- Groups (an extension; not part of Canvas 2D) ---
+
+  /**
+   * Opens a group: ops drawn until the matching `endGroup` belong to it, and to
+   * any group it is nested in. Returns the group's id. Groups are separate from
+   * `save`/`restore`. Passing the id of a closed group in the same parent, with
+   * no `meta`, adds to that group again.
+   */
+  beginGroup(options: { id?: string; meta?: { [key: string]: JsonValue } } = {}): string {
+    const id = options.id ?? `g${this.nextGroupId++}`;
+    const parent = this.groupStack[this.groupStack.length - 1];
+    const existing = this.groups.find((g) => g.id === id);
+    // Opening a closed group again, in the same parent, adds to it: a group's ops needn't be consecutive.
+    if (existing && existing.parent === parent && !this.groupStack.includes(id) && options.meta === undefined) {
+      this.groupStack.push(id);
+      return id;
+    }
+    if (existing || this.ops.some((op) => op.id === id)) throw new Error(`a group or op with id ${id} already exists`);
+    this.groups.push({ id, ...(parent !== undefined ? { parent } : {}), ...(options.meta ? { meta: options.meta } : {}) });
+    this.groupStack.push(id);
+    return id;
+  }
+
+  /** Closes the innermost open group. */
+  endGroup(): void {
+    if (this.groupStack.pop() === undefined) throw new Error("endGroup() without a matching beginGroup()");
   }
 
   // --- State ---
@@ -266,6 +299,9 @@ export class RecordingContext {
   reset(): void {
     this.ops = [];
     this.nextId = 0;
+    this.groups = [];
+    this.groupStack = [];
+    this.nextGroupId = 0;
     this.state = defaultState();
     this.stack = [];
     this.path.reset();
@@ -658,6 +694,7 @@ export class RecordingContext {
       transform: this.state.transform,
       rect: { x, y, width: w, height: h },
       ...(clip.length > 0 ? { clip } : {}),
+      ...this.groupField(),
     });
   }
 
@@ -780,14 +817,20 @@ export class RecordingContext {
   }
 
   /** The fields every painting op shares. */
-  private opBase(): { id: string; transform: Matrix2D; compositing: Compositing; clip?: readonly ClipPath[] } {
+  private opBase(): { id: string; transform: Matrix2D; compositing: Compositing; clip?: readonly ClipPath[]; group?: string } {
     const clip = this.state.clip;
     return {
       id: this.newId(),
       transform: this.state.transform,
       compositing: this.compositing(),
       ...(clip.length > 0 ? { clip } : {}),
+      ...this.groupField(),
     };
+  }
+
+  private groupField(): { group?: string } {
+    const group = this.groupStack[this.groupStack.length - 1];
+    return group !== undefined ? { group } : {};
   }
 
   private recordText(mode: "fill" | "stroke", text: string, x: number, y: number, maxWidth?: number): void {

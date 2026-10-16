@@ -18,6 +18,8 @@ export type {
   EllipseSegment,
   FillOp,
   FillRule,
+  Group,
+  JsonValue,
   GradientPaint,
   IRDocument,
   ImageOp,
@@ -51,3 +53,15 @@ export type {
 export { Scene, transformOp } from "./geometry/scene";
 export { pathRings } from "./geometry/flatten";
 export type { ClosestPointResult, Hit, HitTestOptions, RectQueryMode, SceneOptions } from "./geometry/scene";
+export { EventRouter } from "./interaction";
+export type {
+  EventRouterOptions,
+  KeyInput,
+  PointerInput,
+  RouterEvent,
+  RouterEventType,
+  RouterHandler,
+  WheelInput,
+} from "./interaction";
+export { ellipseAxes, svgPathData, toSVG } from "./svg";
+export type { SvgOptions } from "./svg";

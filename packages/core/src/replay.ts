@@ -1,5 +1,7 @@
 import { IDENTITY, multiply, sameMatrix } from "./math";
 import type {
+  Group,
+  JsonValue,
   ClipPath,
   Compositing,
   FillRule,
@@ -283,6 +285,45 @@ export const replayOp = (target: ReplayTarget, op: Op, options: ReplayOptions = 
   target.restore();
 };
 
+interface GroupTarget {
+  beginGroup(options: { id?: string; meta?: { [key: string]: JsonValue } }): string;
+  endGroup(): void;
+}
+
+const hasGroups = (target: unknown): target is GroupTarget =>
+  typeof (target as Partial<GroupTarget>).beginGroup === "function" && typeof (target as Partial<GroupTarget>).endGroup === "function";
+
+/**
+ * Replays every op in order. A target that records groups (a `RecordingContext`)
+ * gets them too, each opened before its first op; groups with no ops are dropped.
+ */
 export const replayDocument = (target: ReplayTarget, document: IRDocument, options: ReplayOptions = {}): void => {
-  for (const op of document.ops) replayOp(target, op, options);
+  const groups = new Map((document.groups ?? []).map((g) => [g.id, g]));
+  const chain = (id: string | undefined): Group[] => {
+    const out: Group[] = [];
+    for (let g = id === undefined ? undefined : groups.get(id); g; g = g.parent === undefined ? undefined : groups.get(g.parent)) out.unshift(g);
+    return out;
+  };
+  const open: string[] = [];
+  const opened = new Set<string>();
+  const grouped = hasGroups(target) && groups.size > 0;
+  for (const op of document.ops) {
+    if (grouped) {
+      const want = chain(op.group);
+      let keep = 0;
+      while (keep < open.length && keep < want.length && open[keep] === want[keep]!.id) keep++;
+      while (open.length > keep) {
+        target.endGroup();
+        open.pop();
+      }
+      for (const g of want.slice(keep)) {
+        // Meta goes with the first opening only; later ones add to the same group.
+        target.beginGroup({ id: g.id, ...(g.meta && !opened.has(g.id) ? { meta: g.meta } : {}) });
+        opened.add(g.id);
+        open.push(g.id);
+      }
+    }
+    replayOp(target, op, options);
+  }
+  if (grouped) for (let i = 0; i < open.length; i++) target.endGroup();
 };

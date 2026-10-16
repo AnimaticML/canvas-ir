@@ -19,6 +19,8 @@ export interface Fixture {
    * its hit tests may disagree with Chromium's on a small share of points.
    */
   readonly engineDeviation?: string;
+  /** Set where SVG has no exact equal of what the fixture draws, so its export may render differently. */
+  readonly svgDeviation?: string;
 }
 
 export const WIDTH = 200;

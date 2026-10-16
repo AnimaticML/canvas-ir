@@ -1,6 +1,6 @@
 export { type Interval, type Region, bandIntervals, insideForBand, touchedInBand } from "./bands";
 export { baseDirection, hasRtl, visualRuns, type VisualRun } from "./bidi";
-export { drawTextLayout } from "./draw";
+export { type DrawTextOptions, type TextTarget, drawTextLayout } from "./draw";
 export {
   type Container,
   type LayoutFingerprint,

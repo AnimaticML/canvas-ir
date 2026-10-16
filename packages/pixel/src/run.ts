@@ -3,9 +3,12 @@
 // paints, plainly or with transform calls applied as one `setTransform` of the same
 // matrix, and may differ from plain direct drawing only in anti-aliased edge pixels
 // (see withComposedTransforms in page.ts). Hit tests must agree with Chromium's.
+// Each drawing's SVG export, rendered by Chromium, must match its replay away
+// from edges. SVG_DEBUG=<name> writes that drawing's export and both renderings
+// to SVG_DEBUG_DIR.
 import { chromium } from "playwright-core";
 import { readdir } from "node:fs/promises";
-import type { Comparison, CorpusResult, FixtureResult, GeometryResult } from "./page";
+import type { Comparison, CorpusResult, FixtureResult, GeometryResult, SvgResult } from "./page";
 import type { TextResult } from "./text-page";
 
 const describe = (c: Comparison): string =>
@@ -75,7 +78,13 @@ try {
         const svg = await Bun.file(corpusDir + f).text();
         // A file can declare a known engine deviation in a comment, like the fixtures do.
         const deviation = /<!--\s*engine-deviation:\s*([\s\S]*?)\s*-->/.exec(svg)?.[1];
-        return { name: f, svg, ...(deviation ? { engineDeviation: deviation.replace(/\s+/g, " ") } : {}) };
+        const svgDeviation = /<!--\s*svg-deviation:\s*([\s\S]*?)\s*-->/.exec(svg)?.[1];
+        return {
+          name: f,
+          svg,
+          ...(deviation ? { engineDeviation: deviation.replace(/\s+/g, " ") } : {}),
+          ...(svgDeviation ? { svgDeviation: svgDeviation.replace(/\s+/g, " ") } : {}),
+        };
       }),
   );
   const corpus = await page.evaluate(
@@ -92,6 +101,31 @@ try {
   failed += geometryFailed;
   const corpusFailed = failed - failedBefore;
   console.log(`\n${corpus.length} corpus files, ${corpusFailed === 0 ? "all replay pixel-equal and hit-test like Chromium" : `${corpusFailed} checks failed`}\n`);
+
+  // SVG export: Chromium's rendering of the export must match the replay but for anti-aliasing.
+  const svgs = await page.evaluate(
+    (f) => (globalThis as unknown as { runSvg: (f: unknown) => Promise<SvgResult[]> }).runSvg(f),
+    files,
+  );
+  if (process.env.SVG_DEBUG) {
+    await page.evaluate((n) => ((globalThis as { svgDebug?: string }).svgDebug = n), process.env.SVG_DEBUG);
+    await page.evaluate((f) => (globalThis as unknown as { runSvg: (f: unknown) => Promise<SvgResult[]> }).runSvg(f), files);
+    const out = (await page.evaluate(() => (globalThis as { svgDebugOut?: unknown }).svgDebugOut)) as { svg: string; replay: number[]; exported: number[] };
+    const dir = process.env.SVG_DEBUG_DIR ?? ".";
+    await Bun.write(`${dir}/export.svg`, out.svg);
+    await Bun.write(`${dir}/replay.png`, new Uint8Array(out.replay));
+    await Bun.write(`${dir}/exported.png`, new Uint8Array(out.exported));
+  }
+  let svgFailed = 0;
+  for (const r of svgs) {
+    const ok = !r.error && (r.engineDeviation !== undefined || r.far === 0);
+    if (!ok) svgFailed++;
+    const detail = r.error ?? `${describe(r.comparison!)}; ${r.far} away from edges`;
+    console.log(`${ok ? "pass" : "FAIL"}  svg: ${r.name}  (${detail})`);
+    if (r.engineDeviation && r.far) console.log(`      known deviation: ${r.engineDeviation}`);
+  }
+  console.log(`\n${svgs.length - svgFailed} of ${svgs.length} SVG exports render like the replay\n`);
+  failed += svgFailed;
 
   // Text layout: lines must break where the browser's DOM layout breaks them, at the same heights.
   const texts = await page.evaluate(() =>

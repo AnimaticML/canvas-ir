@@ -185,6 +185,19 @@ export interface ClipPath {
   readonly path: PathGeometry;
 }
 
+/** Any JSON value, for caller metadata. */
+export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
+/**
+ * A named set of ops, such as an SVG asset or a text block, so it can be hit,
+ * moved and listened to as one object. Groups nest through `parent`.
+ */
+export interface Group {
+  readonly id: string;
+  readonly parent?: string;
+  readonly meta?: { readonly [key: string]: JsonValue };
+}
+
 interface OpBase {
   readonly id: string;
   /** The current transform when the op was drawn. Stroke widths and paints live in this space. */
@@ -192,6 +205,8 @@ interface OpBase {
   readonly compositing: Compositing;
   /** The clip region in effect: the intersection of these paths, outermost first. Absent when unclipped. */
   readonly clip?: readonly ClipPath[];
+  /** The innermost group the op was drawn in. */
+  readonly group?: string;
 }
 
 export interface FillOp extends OpBase {
@@ -214,6 +229,7 @@ export interface ClearOp {
   readonly transform: Matrix2D;
   readonly rect: Rect;
   readonly clip?: readonly ClipPath[];
+  readonly group?: string;
 }
 
 export type ImageSmoothingQuality = "low" | "medium" | "high";
@@ -279,4 +295,6 @@ export type Op = FillOp | StrokeOp | ClearOp | ImageOp | TextOp;
 export interface IRDocument {
   readonly version: 1;
   readonly ops: readonly Op[];
+  /** Groups in the order they were opened; absent when there are none. */
+  readonly groups?: readonly Group[];
 }

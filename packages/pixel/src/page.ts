@@ -15,6 +15,7 @@ import {
   replayDocument,
   replayOp,
   serializeDocument,
+  toSVG,
 } from "canvas-ir";
 import { type FixtureEnv, HEIGHT, WIDTH, fixtures } from "./fixtures";
 import "./text-page";
@@ -389,6 +390,118 @@ const runCorpus = async (
   return results;
 };
 
+export interface SvgResult {
+  readonly name: string;
+  readonly comparison?: Comparison;
+  /** Differing pixels by more than a sixteenth of the channel range, outside a one-pixel band around edges. */
+  readonly far?: number;
+  readonly engineDeviation?: string;
+  readonly error?: string;
+}
+
+const dataUrls = new Map<string, string>();
+const imageDataUrl = async (src: string): Promise<string> => {
+  let url = dataUrls.get(src);
+  if (url === undefined) {
+    const source = imagesById.get(src) as CanvasImageSource & { width: number; height: number; naturalWidth?: number; naturalHeight?: number };
+    const canvas = new OffscreenCanvas(source.naturalWidth ?? source.width, source.naturalHeight ?? source.height);
+    canvas.getContext("2d")!.drawImage(source, 0, 0);
+    const blob = await canvas.convertToBlob();
+    url = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsDataURL(blob);
+    });
+    dataUrls.set(src, url);
+  }
+  return url;
+};
+
+/** Draws the document's SVG export as Chromium renders an `<img>` of it. */
+const renderExport = async (document: IRDocument): Promise<CanvasRenderingContext2D> => {
+  const urls = new Map<string, string>();
+  for (const op of document.ops) {
+    const ref = op.kind === "image" ? op.image : undefined;
+    const paints = op.kind === "fill" || op.kind === "text" ? [op.paint] : op.kind === "stroke" ? [op.stroke.paint] : [];
+    for (const p of paints) if (typeof p !== "string" && p.kind === "pattern") urls.set(p.image.src, await imageDataUrl(p.image.src));
+    if (ref) urls.set(ref.src, await imageDataUrl(ref.src));
+  }
+  const svg = toSVG(document, { width: WIDTH, height: HEIGHT, images: (src) => urls.get(src) ?? src });
+  const img = new Image();
+  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  await img.decode();
+  const ctx = context();
+  ctx.drawImage(img, 0, 0);
+  lastExport = svg;
+  return ctx;
+};
+let lastExport = "";
+
+/** Pixels differing by more than 16 whose 5x5 neighbourhood in the reference is flat: wrong paint, not anti-aliasing. */
+const farPixels = (reference: CanvasRenderingContext2D, actual: CanvasRenderingContext2D): number => {
+  const a = reference.getImageData(0, 0, WIDTH, HEIGHT).data;
+  const b = actual.getImageData(0, 0, WIDTH, HEIGHT).data;
+  let count = 0;
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      const i = (y * WIDTH + x) * 4;
+      let delta = 0;
+      for (let c = 0; c < 4; c++) delta = Math.max(delta, Math.abs(a[i + c]! - b[i + c]!));
+      if (delta <= 16) continue;
+      let flat = true;
+      for (let dy = -2; dy <= 2 && flat; dy++) {
+        for (let dx = -2; dx <= 2 && flat; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= WIDTH || ny >= HEIGHT) continue;
+          const j = (ny * WIDTH + nx) * 4;
+          for (let c = 0; c < 4; c++) if (Math.abs(a[i + c]! - a[j + c]!) > 2) flat = false;
+        }
+      }
+      if (flat) count++;
+    }
+  }
+  return count;
+};
+
+/** Every fixture and corpus file exported to SVG, rendered by Chromium and compared with the canvas replay. */
+const runSvg = async (files: readonly { name: string; svg: string; svgDeviation?: string }[]): Promise<SvgResult[]> => {
+  const documents: { name: string; svgDeviation?: string; load: () => Promise<IRDocument> }[] = [
+    ...fixtures.map((f) => ({ name: f.name, ...(f.svgDeviation ? { svgDeviation: f.svgDeviation } : {}), load: async () => record(f.draw) })),
+    ...files.map((f) => ({
+      name: f.name,
+      ...(f.svgDeviation ? { svgDeviation: f.svgDeviation } : {}),
+      load: async () => {
+        const recorder = new RecordingContext(recorderOptions);
+        await renderSvg(recorder as unknown as CanvasRenderingContext2D, f.svg);
+        return recorder.getDocument();
+      },
+    })),
+  ];
+  const results: SvgResult[] = [];
+  for (const { name, svgDeviation, load } of documents) {
+    try {
+      const document = await load();
+      const replayed = context();
+      replayDocument(replayed, document, replayOptions);
+      const exported = await renderExport(document);
+      const result = { name, comparison: compare(replayed, exported), far: farPixels(replayed, exported) };
+      if (name === (globalThis as { svgDebug?: string }).svgDebug) {
+        (globalThis as { svgDebugOut?: unknown }).svgDebugOut = {
+          svg: lastExport,
+          replay: await (await (replayed.canvas as unknown as OffscreenCanvas).convertToBlob()).arrayBuffer().then((b) => [...new Uint8Array(b)]),
+          exported: await (await (exported.canvas as unknown as OffscreenCanvas).convertToBlob()).arrayBuffer().then((b) => [...new Uint8Array(b)]),
+        };
+      }
+      results.push(svgDeviation ? { ...result, engineDeviation: svgDeviation } : result);
+    } catch (error) {
+      results.push({ name, error: String(error) });
+    }
+  }
+  return results;
+};
+
+(globalThis as { runSvg?: typeof runSvg }).runSvg = runSvg;
 (globalThis as { runFixtures?: () => FixtureResult[] }).runFixtures = run;
 (globalThis as { runGeometry?: () => GeometryResult[] }).runGeometry = runGeometry;
 (globalThis as { runCorpus?: typeof runCorpus }).runCorpus = runCorpus;
