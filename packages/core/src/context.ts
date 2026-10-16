@@ -1,8 +1,22 @@
+import { canvasColor } from "./color";
+import { buildShape, shapeContains } from "./geometry/shape";
 import { IDENTITY, allFinite, multiply } from "./math";
+import {
+  RecordingGradient,
+  RecordingPattern,
+  createConicGradient,
+  createLinearGradient,
+  createRadialGradient,
+  parseRepetition,
+} from "./paint";
 import { PathBuilder } from "./path";
+import { type DOMPointInitLike, RecordingPath2D, normalizeRadii } from "./path2d";
 import type {
+  ClipPath,
   Compositing,
   FillRule,
+  ImageRef,
+  ImageSmoothingQuality,
   IRDocument,
   LineCap,
   LineJoin,
@@ -10,12 +24,21 @@ import type {
   Op,
   Paint,
   StrokeStyle,
+  TextAlign,
+  TextBaseline,
+  TextDirection,
+  TextMeasure,
+  TextStyle,
 } from "./types";
+
+/** What a style property holds: a color string, or a gradient or pattern object. */
+export type StyleValue = string | RecordingGradient | RecordingPattern;
 
 interface DrawingState {
   transform: Matrix2D;
-  fillStyle: Paint;
-  strokeStyle: Paint;
+  clip: readonly ClipPath[];
+  fillStyle: StyleValue;
+  strokeStyle: StyleValue;
   lineWidth: number;
   lineCap: LineCap;
   lineJoin: LineJoin;
@@ -29,10 +52,27 @@ interface DrawingState {
   shadowBlur: number;
   shadowOffsetX: number;
   shadowOffsetY: number;
+  imageSmoothingEnabled: boolean;
+  imageSmoothingQuality: ImageSmoothingQuality;
+  text: TextStyle;
 }
+
+const DEFAULT_TEXT: TextStyle = {
+  font: "10px sans-serif",
+  textAlign: "start",
+  textBaseline: "alphabetic",
+  direction: "inherit",
+  letterSpacing: "0px",
+  wordSpacing: "0px",
+  fontKerning: "auto",
+  fontStretch: "normal",
+  fontVariantCaps: "normal",
+  textRendering: "auto",
+};
 
 const defaultState = (): DrawingState => ({
   transform: IDENTITY,
+  clip: [],
   fillStyle: "#000000",
   strokeStyle: "#000000",
   lineWidth: 1,
@@ -48,7 +88,29 @@ const defaultState = (): DrawingState => ({
   shadowBlur: 0,
   shadowOffsetX: 0,
   shadowOffsetY: 0,
+  imageSmoothingEnabled: true,
+  imageSmoothingQuality: "low",
+  text: DEFAULT_TEXT,
 });
+
+const TEXT_ALIGNS: readonly string[] = ["start", "end", "left", "right", "center"];
+const TEXT_BASELINES: readonly string[] = ["top", "hanging", "middle", "alphabetic", "ideographic", "bottom"];
+const DIRECTIONS: readonly string[] = ["ltr", "rtl", "inherit"];
+const FONT_KERNINGS: readonly string[] = ["auto", "normal", "none"];
+const FONT_STRETCHES: readonly string[] = [
+  "ultra-condensed", "extra-condensed", "condensed", "semi-condensed", "normal",
+  "semi-expanded", "expanded", "extra-expanded", "ultra-expanded",
+];
+const FONT_VARIANT_CAPS: readonly string[] = [
+  "normal", "small-caps", "all-small-caps", "petite-caps", "all-petite-caps", "unicase", "titling-caps",
+];
+const TEXT_RENDERINGS: readonly string[] = ["auto", "optimizeSpeed", "optimizeLegibility", "geometricPrecision"];
+const SMOOTHING_QUALITIES: readonly string[] = ["low", "medium", "high"];
+const SYSTEM_FONTS = /^(caption|icon|menu|message-box|small-caption|status-bar)$/;
+/** A CSS font shorthand needs a size (optionally /line-height) followed by a family. */
+const FONT_SHORTHAND = /(^|\s)[+]?(\d*\.?\d+)(px|pt|pc|in|cm|mm|q|em|rem|ex|ch|%|vw|vh|vmin|vmax|xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)?(\/\S+)?\s+\S/i;
+const FONT_SIZE_KEYWORD = /(^|\s)(xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)(\/\S+)?\s+\S/i;
+const LENGTH = /^[+-]?(\d*\.?\d+)(px|pt|pc|in|cm|mm|q|em|rem|ex|ch)$|^0$/i;
 
 const LINE_CAPS: readonly string[] = ["butt", "round", "square"];
 const LINE_JOINS: readonly string[] = ["miter", "round", "bevel"];
@@ -87,7 +149,55 @@ export interface RecordingContextOptions {
   /** Size reported by `ctx.canvas`, for code that reads it. Defaults to the HTML canvas default, 300 x 150. */
   readonly width?: number;
   readonly height?: number;
+  /**
+   * Measures text for `measureText`, `fillText` and `strokeText`. Defaults to a
+   * real canvas where one exists (browsers, or anywhere `OffscreenCanvas` is
+   * defined); elsewhere, drawing text without a measurer throws.
+   */
+  readonly measureText?: (text: string, style: TextStyle) => TextMeasure;
+  /**
+   * Turns an image passed to `drawImage` or `createPattern` into a reference
+   * the IR can store. Return null for an image that isn't ready, which draws
+   * nothing. Defaults to the element's `src` and natural size.
+   */
+  readonly describeImage?: (image: unknown) => ImageRef | null;
 }
+
+/** The default image description: an `<img>`-like object's `src` and natural size. */
+export const describeImageElement = (image: unknown): ImageRef | null => {
+  const candidate = image as { src?: unknown; naturalWidth?: unknown; naturalHeight?: unknown; width?: unknown; height?: unknown };
+  if (typeof candidate?.src !== "string" || candidate.src === "") {
+    throw new UnsupportedCanvasCallError("drawing an image without a src (pass describeImage to record it)");
+  }
+  const width = typeof candidate.naturalWidth === "number" ? candidate.naturalWidth : candidate.width;
+  const height = typeof candidate.naturalHeight === "number" ? candidate.naturalHeight : candidate.height;
+  if (typeof width !== "number" || typeof height !== "number" || width <= 0 || height <= 0) return null;
+  return { src: candidate.src, width, height };
+};
+
+let measuringContext: OffscreenCanvasRenderingContext2D | null | undefined;
+
+/** Measures with a real canvas, where the environment has one. */
+const measureWithCanvas = (text: string, style: TextStyle): TextMeasure => {
+  if (measuringContext === undefined) {
+    measuringContext =
+      typeof OffscreenCanvas === "function" ? new OffscreenCanvas(1, 1).getContext("2d") : null;
+  }
+  const ctx = measuringContext;
+  if (!ctx) throw new UnsupportedCanvasCallError("text without a measureText option outside a browser");
+  const target = ctx as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(style)) if (key in target) target[key] = value;
+  const m = ctx.measureText(text);
+  return {
+    width: m.width,
+    actualBoundingBoxLeft: m.actualBoundingBoxLeft,
+    actualBoundingBoxRight: m.actualBoundingBoxRight,
+    actualBoundingBoxAscent: m.actualBoundingBoxAscent,
+    actualBoundingBoxDescent: m.actualBoundingBoxDescent,
+    fontBoundingBoxAscent: m.fontBoundingBoxAscent,
+    fontBoundingBoxDescent: m.fontBoundingBoxDescent,
+  };
+};
 
 const matrixFromInit = (init: Matrix2DInit): Matrix2D => ({
   a: init.a ?? init.m11 ?? 1,
@@ -100,6 +210,13 @@ const matrixFromInit = (init: Matrix2DInit): Matrix2D => ({
 
 const toDOMMatrix = (m: Matrix2D): DOMMatrix | Matrix2D =>
   typeof DOMMatrix === "function" ? new DOMMatrix([m.a, m.b, m.c, m.d, m.e, m.f]) : { ...m };
+
+const normalizeRect = (x: number, y: number, w: number, h: number) => ({
+  x: Math.min(x, x + w),
+  y: Math.min(y, y + h),
+  width: Math.abs(w),
+  height: Math.abs(h),
+});
 
 const parseFillRule = (value: unknown): FillRule => {
   if (value === undefined || value === "nonzero") return "nonzero";
@@ -121,9 +238,13 @@ export class RecordingContext {
   private state: DrawingState = defaultState();
   private stack: DrawingState[] = [];
   private readonly path = new PathBuilder();
+  private readonly measurer: (text: string, style: TextStyle) => TextMeasure;
+  private readonly describeImage: (image: unknown) => ImageRef | null;
 
   constructor(options: RecordingContextOptions = {}) {
     this.canvas = { width: options.width ?? 300, height: options.height ?? 150 };
+    this.measurer = options.measureText ?? measureWithCanvas;
+    this.describeImage = options.describeImage ?? describeImageElement;
   }
 
   getDocument(): IRDocument {
@@ -150,18 +271,20 @@ export class RecordingContext {
     this.path.reset();
   }
 
-  get fillStyle(): Paint {
+  get fillStyle(): StyleValue {
     return this.state.fillStyle;
   }
-  set fillStyle(value: Paint) {
-    this.state.fillStyle = this.paint(value, "fillStyle");
+  set fillStyle(value: StyleValue) {
+    const style = this.style(value, "fillStyle");
+    if (style !== null) this.state.fillStyle = style;
   }
 
-  get strokeStyle(): Paint {
+  get strokeStyle(): StyleValue {
     return this.state.strokeStyle;
   }
-  set strokeStyle(value: Paint) {
-    this.state.strokeStyle = this.paint(value, "strokeStyle");
+  set strokeStyle(value: StyleValue) {
+    const style = this.style(value, "strokeStyle");
+    if (style !== null) this.state.strokeStyle = style;
   }
 
   get lineWidth(): number {
@@ -233,7 +356,8 @@ export class RecordingContext {
     return this.state.shadowColor;
   }
   set shadowColor(value: string) {
-    this.state.shadowColor = String(value);
+    const color = canvasColor(String(value));
+    if (color !== null) this.state.shadowColor = color;
   }
 
   get shadowBlur(): number {
@@ -255,6 +379,95 @@ export class RecordingContext {
   }
   set shadowOffsetY(value: number) {
     if (Number.isFinite(value)) this.state.shadowOffsetY = value;
+  }
+
+  get imageSmoothingEnabled(): boolean {
+    return this.state.imageSmoothingEnabled;
+  }
+  set imageSmoothingEnabled(value: boolean) {
+    this.state.imageSmoothingEnabled = Boolean(value);
+  }
+
+  get imageSmoothingQuality(): ImageSmoothingQuality {
+    return this.state.imageSmoothingQuality;
+  }
+  set imageSmoothingQuality(value: ImageSmoothingQuality) {
+    if (SMOOTHING_QUALITIES.includes(value)) this.state.imageSmoothingQuality = value;
+  }
+
+  // --- Text state ---
+
+  get font(): string {
+    return this.state.text.font;
+  }
+  set font(value: string) {
+    const font = String(value).trim().replace(/\s+/g, " ");
+    if (SYSTEM_FONTS.test(font) || FONT_SHORTHAND.test(font) || FONT_SIZE_KEYWORD.test(font)) this.setText({ font });
+  }
+
+  get textAlign(): TextAlign {
+    return this.state.text.textAlign;
+  }
+  set textAlign(value: TextAlign) {
+    if (TEXT_ALIGNS.includes(value)) this.setText({ textAlign: value });
+  }
+
+  get textBaseline(): TextBaseline {
+    return this.state.text.textBaseline;
+  }
+  set textBaseline(value: TextBaseline) {
+    if (TEXT_BASELINES.includes(value)) this.setText({ textBaseline: value });
+  }
+
+  get direction(): TextDirection {
+    return this.state.text.direction;
+  }
+  set direction(value: TextDirection) {
+    if (DIRECTIONS.includes(value)) this.setText({ direction: value });
+  }
+
+  get letterSpacing(): string {
+    return this.state.text.letterSpacing;
+  }
+  set letterSpacing(value: string) {
+    const v = String(value).trim();
+    if (LENGTH.test(v)) this.setText({ letterSpacing: v === "0" ? "0px" : v });
+  }
+
+  get wordSpacing(): string {
+    return this.state.text.wordSpacing;
+  }
+  set wordSpacing(value: string) {
+    const v = String(value).trim();
+    if (LENGTH.test(v)) this.setText({ wordSpacing: v === "0" ? "0px" : v });
+  }
+
+  get fontKerning(): string {
+    return this.state.text.fontKerning;
+  }
+  set fontKerning(value: string) {
+    if (FONT_KERNINGS.includes(value)) this.setText({ fontKerning: value });
+  }
+
+  get fontStretch(): string {
+    return this.state.text.fontStretch;
+  }
+  set fontStretch(value: string) {
+    if (FONT_STRETCHES.includes(value)) this.setText({ fontStretch: value });
+  }
+
+  get fontVariantCaps(): string {
+    return this.state.text.fontVariantCaps;
+  }
+  set fontVariantCaps(value: string) {
+    if (FONT_VARIANT_CAPS.includes(value)) this.setText({ fontVariantCaps: value });
+  }
+
+  get textRendering(): string {
+    return this.state.text.textRendering;
+  }
+  set textRendering(value: string) {
+    if (TEXT_RENDERINGS.includes(value)) this.setText({ textRendering: value });
   }
 
   // --- Transforms ---
@@ -353,20 +566,67 @@ export class RecordingContext {
     this.path.rect(this.state.transform, x, y, w, h);
   }
 
+  roundRect(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    radii: number | DOMPointInitLike | readonly (number | DOMPointInitLike)[] = 0,
+  ): void {
+    if (!allFinite(x, y, w, h)) return;
+    const corners = normalizeRadii(radii);
+    if (corners) this.path.roundRect(this.state.transform, x, y, w, h, corners);
+  }
+
   closePath(): void {
     this.path.closePath();
   }
 
   // --- Drawing ---
 
-  fill(fillRule?: FillRule): void {
-    if (typeof fillRule === "object") throw new UnsupportedCanvasCallError("fill(Path2D)");
-    this.recordFill(this.path, parseFillRule(fillRule));
+  fill(fillRule?: FillRule): void;
+  fill(path: RecordingPath2D, fillRule?: FillRule): void;
+  fill(a?: FillRule | RecordingPath2D, b?: FillRule): void {
+    if (typeof a === "object") this.recordFill(this.pathFrom(a), parseFillRule(b));
+    else this.recordFill(this.path, parseFillRule(a));
   }
 
-  stroke(path?: unknown): void {
-    if (path !== undefined) throw new UnsupportedCanvasCallError("stroke(Path2D)");
-    this.recordStroke(this.path);
+  stroke(path?: RecordingPath2D): void {
+    this.recordStroke(path === undefined ? this.path : this.pathFrom(path));
+  }
+
+  /** Intersects the clip region with the path. Clipping is part of the saved state. */
+  clip(fillRule?: FillRule): void;
+  clip(path: RecordingPath2D, fillRule?: FillRule): void;
+  clip(a?: FillRule | RecordingPath2D, b?: FillRule): void {
+    const builder = typeof a === "object" ? this.pathFrom(a) : this.path;
+    const fillRule = parseFillRule(typeof a === "object" ? b : a);
+    this.state.clip = [...this.state.clip, { fillRule, transform: this.state.transform, path: builder.snapshot() }];
+  }
+
+  /** Whether the point, in canvas coordinates, is inside the current path (or `path`). Clipping is ignored, as in the spec. */
+  isPointInPath(x: number, y: number, fillRule?: FillRule): boolean;
+  isPointInPath(path: RecordingPath2D, x: number, y: number, fillRule?: FillRule): boolean;
+  isPointInPath(a: number | RecordingPath2D, b: number | FillRule | undefined, c?: number | FillRule, d?: FillRule): boolean {
+    const [builder, x, y, rule] =
+      typeof a === "object" ? [this.pathFrom(a), b as number, c as number, d] : [this.path, a, b as number, c as FillRule | undefined];
+    if (!allFinite(x, y)) return false;
+    const path = builder.snapshot();
+    if (path.subpaths.length === 0) return false;
+    const op: Op = { kind: "fill", ...this.probeBase(), fillRule: parseFillRule(rule), paint: "#000000", path };
+    return shapeContains(buildShape(op, 0.01), { x, y }, 0);
+  }
+
+  /** Whether the point, in canvas coordinates, is on the stroke of the current path (or `path`) with the current line style. */
+  isPointInStroke(x: number, y: number): boolean;
+  isPointInStroke(path: RecordingPath2D, x: number, y: number): boolean;
+  isPointInStroke(a: number | RecordingPath2D, b: number, c?: number): boolean {
+    const [builder, x, y] = typeof a === "object" ? [this.pathFrom(a), b, c as number] : [this.path, a, b];
+    if (!allFinite(x, y)) return false;
+    const path = builder.snapshot();
+    if (path.subpaths.length === 0) return false;
+    const op: Op = { kind: "stroke", ...this.probeBase(), stroke: this.strokeStyleSnapshot(), path };
+    return shapeContains(buildShape(op, 0.01), { x, y }, 0);
   }
 
   fillRect(x: number, y: number, w: number, h: number): void {
@@ -391,52 +651,86 @@ export class RecordingContext {
 
   clearRect(x: number, y: number, w: number, h: number): void {
     if (!allFinite(x, y, w, h)) return;
+    const clip = this.state.clip;
     this.ops.push({
       kind: "clear",
       id: this.newId(),
       transform: this.state.transform,
       rect: { x, y, width: w, height: h },
+      ...(clip.length > 0 ? { clip } : {}),
     });
   }
 
-  // --- Not yet supported ---
+  // --- Paints ---
 
-  clip(): never {
-    throw new UnsupportedCanvasCallError("clip");
+  createLinearGradient(x0: number, y0: number, x1: number, y1: number): RecordingGradient {
+    return createLinearGradient(x0, y0, x1, y1);
   }
-  isPointInPath(): never {
-    throw new UnsupportedCanvasCallError("isPointInPath");
+
+  createRadialGradient(x0: number, y0: number, r0: number, x1: number, y1: number, r1: number): RecordingGradient {
+    return createRadialGradient(x0, y0, r0, x1, y1, r1);
   }
-  isPointInStroke(): never {
-    throw new UnsupportedCanvasCallError("isPointInStroke");
+
+  createConicGradient(startAngle: number, x: number, y: number): RecordingGradient {
+    return createConicGradient(startAngle, x, y);
   }
-  roundRect(): never {
-    throw new UnsupportedCanvasCallError("roundRect");
+
+  /** A pattern of the image; null when the image has no pixels yet, as in the spec. */
+  createPattern(image: unknown, repetition: string | null): RecordingPattern | null {
+    const ref = this.describeImage(image);
+    const rep = parseRepetition(repetition);
+    return ref === null ? null : new RecordingPattern(ref, rep);
   }
-  fillText(): never {
-    throw new UnsupportedCanvasCallError("fillText");
+
+  // --- Images ---
+
+  drawImage(image: unknown, dx: number, dy: number): void;
+  drawImage(image: unknown, dx: number, dy: number, dw: number, dh: number): void;
+  drawImage(image: unknown, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number): void;
+  drawImage(image: unknown, ...args: number[]): void {
+    if (args.length !== 2 && args.length !== 4 && args.length !== 8) {
+      throw new TypeError(`drawImage() takes 3, 5 or 9 arguments, not ${args.length + 1}.`);
+    }
+    const ref = this.describeImage(image);
+    if (ref === null || !allFinite(...args)) return;
+    let source;
+    let dest;
+    if (args.length === 8) {
+      const [sx, sy, sw, sh, dx, dy, dw, dh] = args as [number, number, number, number, number, number, number, number];
+      source = normalizeRect(sx, sy, sw, sh);
+      dest = normalizeRect(dx, dy, dw, dh);
+    } else {
+      const [dx, dy, dw = ref.width, dh = ref.height] = args as [number, number, number?, number?];
+      source = { x: 0, y: 0, width: ref.width, height: ref.height };
+      dest = normalizeRect(dx, dy, dw, dh);
+    }
+    if (source.width === 0 || source.height === 0 || dest.width === 0 || dest.height === 0) return;
+    this.ops.push({
+      kind: "image",
+      ...this.opBase(),
+      image: ref,
+      source,
+      dest,
+      smoothing: { enabled: this.state.imageSmoothingEnabled, quality: this.state.imageSmoothingQuality },
+    });
   }
-  strokeText(): never {
-    throw new UnsupportedCanvasCallError("strokeText");
+
+  // --- Text ---
+
+  measureText(text: string): TextMeasure {
+    return this.measurer(String(text), this.state.text);
   }
-  measureText(): never {
-    throw new UnsupportedCanvasCallError("measureText");
+
+  fillText(text: string, x: number, y: number, maxWidth?: number): void {
+    this.recordText("fill", text, x, y, maxWidth);
   }
-  drawImage(): never {
-    throw new UnsupportedCanvasCallError("drawImage");
+
+  strokeText(text: string, x: number, y: number, maxWidth?: number): void {
+    this.recordText("stroke", text, x, y, maxWidth);
   }
-  createLinearGradient(): never {
-    throw new UnsupportedCanvasCallError("createLinearGradient");
-  }
-  createRadialGradient(): never {
-    throw new UnsupportedCanvasCallError("createRadialGradient");
-  }
-  createConicGradient(): never {
-    throw new UnsupportedCanvasCallError("createConicGradient");
-  }
-  createPattern(): never {
-    throw new UnsupportedCanvasCallError("createPattern");
-  }
+
+  // --- Not supported ---
+
   getImageData(): never {
     throw new UnsupportedCanvasCallError("getImageData");
   }
@@ -453,9 +747,66 @@ export class RecordingContext {
     this.state.transform = multiply(this.state.transform, m);
   }
 
-  private paint(value: unknown, property: string): Paint {
-    if (typeof value === "string") return value;
-    throw new UnsupportedCanvasCallError(`${property} set to a gradient or pattern`);
+  /** The value a style property takes, or null when the assignment is ignored. */
+  private style(value: unknown, property: string): StyleValue | null {
+    if (value instanceof RecordingGradient || value instanceof RecordingPattern) return value;
+    if (typeof value === "object" && value !== null) {
+      throw new UnsupportedCanvasCallError(`${property} set to a gradient or pattern from another context`);
+    }
+    return canvasColor(String(value));
+  }
+
+  private paintOf(style: StyleValue): Paint {
+    return typeof style === "string" ? style : style.snapshot();
+  }
+
+  private setText(change: Partial<TextStyle>): void {
+    this.state.text = { ...this.state.text, ...change };
+  }
+
+  /** A Path2D's calls replayed under the current transform. */
+  private pathFrom(path: RecordingPath2D): PathBuilder {
+    if (!(path instanceof RecordingPath2D)) {
+      throw new UnsupportedCanvasCallError("a Path2D created outside CanvasIR (use RecordingPath2D)");
+    }
+    const builder = new PathBuilder();
+    path.applyTo(builder, this.state.transform);
+    return builder;
+  }
+
+  /** Op fields for a query that records nothing: no id is used up, and clipping is left out. */
+  private probeBase(): { id: string; transform: Matrix2D; compositing: Compositing } {
+    return { id: "probe", transform: this.state.transform, compositing: this.compositing() };
+  }
+
+  /** The fields every painting op shares. */
+  private opBase(): { id: string; transform: Matrix2D; compositing: Compositing; clip?: readonly ClipPath[] } {
+    const clip = this.state.clip;
+    return {
+      id: this.newId(),
+      transform: this.state.transform,
+      compositing: this.compositing(),
+      ...(clip.length > 0 ? { clip } : {}),
+    };
+  }
+
+  private recordText(mode: "fill" | "stroke", text: string, x: number, y: number, maxWidth?: number): void {
+    if (!allFinite(x, y) || (maxWidth !== undefined && !(maxWidth > 0 && Number.isFinite(maxWidth)))) return;
+    const value = String(text);
+    const metrics = this.measurer(value, this.state.text);
+    this.ops.push({
+      kind: "text",
+      ...this.opBase(),
+      mode,
+      text: value,
+      x,
+      y,
+      ...(maxWidth !== undefined ? { maxWidth } : {}),
+      style: this.state.text,
+      paint: this.paintOf(mode === "fill" ? this.state.fillStyle : this.state.strokeStyle),
+      ...(mode === "stroke" ? { stroke: this.strokeStyleSnapshot() } : {}),
+      metrics,
+    });
   }
 
   private compositing(): Compositing {
@@ -474,7 +825,7 @@ export class RecordingContext {
   private strokeStyleSnapshot(): StrokeStyle {
     const s = this.state;
     return {
-      paint: s.strokeStyle,
+      paint: this.paintOf(s.strokeStyle),
       lineWidth: s.lineWidth,
       lineCap: s.lineCap,
       lineJoin: s.lineJoin,
@@ -487,28 +838,13 @@ export class RecordingContext {
   private recordFill(builder: PathBuilder, fillRule: FillRule): void {
     const path = builder.snapshot();
     if (path.subpaths.length === 0) return;
-    this.ops.push({
-      kind: "fill",
-      id: this.newId(),
-      transform: this.state.transform,
-      compositing: this.compositing(),
-      fillRule,
-      paint: this.state.fillStyle,
-      path,
-    });
+    this.ops.push({ kind: "fill", ...this.opBase(), fillRule, paint: this.paintOf(this.state.fillStyle), path });
   }
 
   private recordStroke(builder: PathBuilder): void {
     const path = builder.snapshot();
     if (path.subpaths.length === 0) return;
-    this.ops.push({
-      kind: "stroke",
-      id: this.newId(),
-      transform: this.state.transform,
-      compositing: this.compositing(),
-      stroke: this.strokeStyleSnapshot(),
-      path,
-    });
+    this.ops.push({ kind: "stroke", ...this.opBase(), stroke: this.strokeStyleSnapshot(), path });
   }
 
   private newId(): string {

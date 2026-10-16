@@ -3,9 +3,16 @@
  * also recorded, serialized, parsed and replayed onto a second canvas; the two
  * must match pixel for pixel.
  */
+/** What a fixture may use besides the context, so the recorder gets its own Path2D. */
+export interface FixtureEnv {
+  readonly Path2D: new (path?: string) => Path2D;
+  /** A small opaque image, 16 by 12. */
+  readonly image: OffscreenCanvas;
+}
+
 export interface Fixture {
   readonly name: string;
-  readonly draw: (ctx: CanvasRenderingContext2D) => void;
+  readonly draw: (ctx: CanvasRenderingContext2D, env: FixtureEnv) => void;
   /**
    * Set where Chromium departs from the spec and the IR follows the spec. Such a
    * fixture may differ from direct drawing in anti-aliased edge pixels only, and
@@ -347,6 +354,201 @@ export const fixtures: readonly Fixture[] = [
       ctx.moveTo(165, 140);
       ctx.lineTo(165, 140);
       ctx.stroke();
+    },
+  },
+  {
+    name: "linear and radial gradients under a transform",
+    draw: (ctx) => {
+      const linear = ctx.createLinearGradient(0, 0, 80, 0);
+      linear.addColorStop(0, "red");
+      linear.addColorStop(0.5, "rgba(0, 128, 255, 0.6)");
+      linear.addColorStop(1, "#fc0");
+      ctx.fillStyle = linear;
+      ctx.translate(20, 20);
+      ctx.rotate(0.3);
+      // The gradient is placed by the transform at fill time, not at creation.
+      ctx.fillRect(0, 0, 80, 50);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const radial = ctx.createRadialGradient(140, 100, 5, 150, 110, 45);
+      radial.addColorStop(0, "white");
+      radial.addColorStop(1, "navy");
+      ctx.fillStyle = radial;
+      ctx.beginPath();
+      ctx.arc(150, 110, 45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = linear;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(10, 100, 80, 50);
+    },
+  },
+  {
+    name: "conic gradient",
+    draw: (ctx) => {
+      const g = ctx.createConicGradient(Math.PI / 4, 100, 80);
+      g.addColorStop(0, "#f00");
+      g.addColorStop(0.33, "#0f0");
+      g.addColorStop(0.66, "#00f");
+      g.addColorStop(1, "#f00");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(100, 80, 90, 70, 0, 0, Math.PI * 2);
+      ctx.fill();
+    },
+  },
+  {
+    name: "nested clips with save and restore",
+    draw: (ctx) => {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(20, 20, 140, 110);
+      ctx.clip();
+      ctx.fillStyle = "#cde";
+      ctx.fillRect(0, 0, 200, 160);
+      ctx.save();
+      ctx.translate(100, 80);
+      ctx.rotate(0.4);
+      ctx.beginPath();
+      ctx.arc(0, 0, 60, 0, Math.PI * 2);
+      ctx.arc(0, 0, 30, 0, Math.PI * 2);
+      ctx.clip("evenodd");
+      ctx.fillStyle = "#a33";
+      ctx.fillRect(-100, -100, 200, 200);
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = "#333";
+      ctx.beginPath();
+      ctx.moveTo(-90, -10);
+      ctx.lineTo(90, 10);
+      ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = "rgba(0, 120, 0, 0.5)";
+      ctx.fillRect(120, 0, 80, 160);
+      ctx.restore();
+      ctx.fillStyle = "#246";
+      ctx.fillRect(170, 130, 30, 30);
+    },
+  },
+  {
+    name: "clipped clearRect",
+    draw: (ctx) => {
+      ctx.fillStyle = "#58a";
+      ctx.fillRect(0, 0, 200, 160);
+      ctx.beginPath();
+      ctx.moveTo(100, 10);
+      ctx.lineTo(190, 150);
+      ctx.lineTo(10, 150);
+      ctx.closePath();
+      ctx.clip();
+      ctx.clearRect(40, 40, 120, 120);
+    },
+  },
+  {
+    name: "roundRect",
+    draw: (ctx) => {
+      ctx.beginPath();
+      ctx.roundRect(10, 10, 80, 60, 12);
+      ctx.roundRect(110, 10, 80, 60, [4, 30]);
+      ctx.roundRect(90, 140, -80, -50, [20, 5, 30, 0]);
+      ctx.fillStyle = "#6a4";
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#222";
+      ctx.beginPath();
+      ctx.roundRect(110, 90, 80, 60, [{ x: 30, y: 10 }, 200]);
+      ctx.stroke();
+    },
+  },
+  {
+    name: "Path2D and SVG path data",
+    draw: (ctx, { Path2D }) => {
+      const heart = new Path2D("M100 40 c-10-30-60-30-60 10 c0 30 40 50 60 70 c20-20 60-40 60-70 c0-40-50-40-60-10 z");
+      const ring = new Path2D("M30 120 a20 20 0 1 0 40 0 a20 20 0 1 0 -40 0 Z M40 120 A10 10 0 0 1 60 120 A10 10 0 0 1 40 120Z");
+      const both = new Path2D();
+      both.addPath(ring, { a: 1, b: 0, c: 0, d: 1, e: 110, f: 0 });
+      both.addPath(ring);
+      ctx.fillStyle = "#c36";
+      ctx.fill(heart);
+      ctx.fillStyle = "#36c";
+      ctx.fill(both, "evenodd");
+      ctx.translate(5, 5);
+      ctx.lineWidth = 2;
+      ctx.stroke(heart);
+      ctx.beginPath();
+      ctx.rect(0, 0, 10, 10);
+      // Drawing a Path2D leaves the current path alone.
+      ctx.fill();
+    },
+  },
+  {
+    name: "clip to a Path2D",
+    draw: (ctx, { Path2D }) => {
+      ctx.clip(new Path2D("M20 20 L180 20 L100 150 Z M60 40 H140 V80 H60 Z"), "evenodd");
+      ctx.fillStyle = "#e93";
+      ctx.fillRect(0, 0, 200, 160);
+    },
+  },
+  {
+    name: "drawImage in all three forms",
+    draw: (ctx, { image }) => {
+      ctx.drawImage(image, 5, 5);
+      ctx.drawImage(image, 30, 5, 64, 48);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(image, 4, 2, 8, 8, 100, 5, 40, 40);
+      // Mirrored by a negative size, and a source rect that runs past the image.
+      ctx.drawImage(image, 8, 0, 16, 12, 190, 60, -60, 40);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.translate(60, 110);
+      ctx.rotate(-0.5);
+      ctx.globalAlpha = 0.7;
+      ctx.drawImage(image, -24, -18, 48, 36);
+    },
+  },
+  {
+    name: "patterns",
+    draw: (ctx, { image }) => {
+      const repeat = ctx.createPattern(image, "repeat")!;
+      ctx.fillStyle = repeat;
+      ctx.fillRect(0, 0, 90, 70);
+      const x = ctx.createPattern(image, "repeat-x")!;
+      x.setTransform({ a: 2, b: 0, c: 0, d: 2, e: 100, f: 10 });
+      ctx.fillStyle = x;
+      ctx.fillRect(100, 0, 100, 70);
+      const once = ctx.createPattern(image, "no-repeat")!;
+      ctx.translate(30, 90);
+      ctx.scale(3, 3);
+      ctx.fillStyle = once;
+      ctx.fillRect(0, 0, 20, 20);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.strokeStyle = repeat;
+      ctx.lineWidth = 10;
+      ctx.strokeRect(120, 95, 60, 45);
+    },
+  },
+  {
+    name: "fillText and strokeText",
+    draw: (ctx) => {
+      ctx.font = "bold 20px sans-serif";
+      ctx.fillStyle = "#234";
+      ctx.fillText("Canvas IR", 10, 30);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "italic 16px serif";
+      ctx.fillText("centered, squeezed", 100, 60, 90);
+      ctx.textAlign = "right";
+      ctx.textBaseline = "bottom";
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "#a20";
+      ctx.font = "28px monospace";
+      ctx.strokeText("stroke", 190, 110);
+      ctx.save();
+      ctx.translate(30, 150);
+      ctx.rotate(-0.2);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      ctx.font = "14px sans-serif";
+      ctx.letterSpacing = "2px";
+      ctx.fillText("rotated text", 0, 0);
+      ctx.restore();
     },
   },
   {

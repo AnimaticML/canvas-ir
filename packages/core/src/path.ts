@@ -166,6 +166,58 @@ export class PathBuilder {
     this.addArc(ctm, { kind: "arc", m: 0, center, radius, startAngle, endAngle, counterclockwise });
   }
 
+  /**
+   * `roundRect`, lowered to lines and elliptical quarter arcs. `radii` are the
+   * corners' already-validated radii, top-left, top-right, bottom-right,
+   * bottom-left; they are scaled down together when adjacent ones overlap.
+   */
+  roundRect(ctm: Matrix2D, x: number, y: number, w: number, h: number, radii: readonly Point[]): void {
+    let [ul, ur, lr, ll] = radii as [Point, Point, Point, Point];
+    const width = Math.abs(w);
+    const height = Math.abs(h);
+    const top = ul.x + ur.x;
+    const right = ur.y + lr.y;
+    const bottom = lr.x + ll.x;
+    const left = ul.y + ll.y;
+    const scale = Math.min(width / top, height / left, width / bottom, height / right);
+    if (scale < 1) {
+      const k = (p: Point): Point => ({ x: p.x * scale, y: p.y * scale });
+      [ul, ur, lr, ll] = [k(ul), k(ur), k(lr), k(ll)];
+    }
+    // A negative width or height mirrors the rectangle, so the corners swap and the direction reverses.
+    if (w < 0) [ul, ur, ll, lr] = [ur, ul, lr, ll];
+    if (h < 0) [ul, ll, ur, lr] = [ll, ul, lr, ur];
+    const x0 = Math.min(x, x + w);
+    const y0 = Math.min(y, y + h);
+    const x1 = x0 + width;
+    const y1 = y0 + height;
+    // Clockwise from the top edge, as the spec draws it; reversed below when mirrored once.
+    const clockwise = (w < 0) === (h < 0);
+    if (clockwise) {
+      this.moveTo(ctm, x0 + ul.x, y0);
+      this.lineTo(ctm, x1 - ur.x, y0);
+      if (ur.x && ur.y) this.ellipse(ctm, x1 - ur.x, y0 + ur.y, ur.x, ur.y, 0, -Math.PI / 2, 0, false);
+      this.lineTo(ctm, x1, y1 - lr.y);
+      if (lr.x && lr.y) this.ellipse(ctm, x1 - lr.x, y1 - lr.y, lr.x, lr.y, 0, 0, Math.PI / 2, false);
+      this.lineTo(ctm, x0 + ll.x, y1);
+      if (ll.x && ll.y) this.ellipse(ctm, x0 + ll.x, y1 - ll.y, ll.x, ll.y, 0, Math.PI / 2, Math.PI, false);
+      this.lineTo(ctm, x0, y0 + ul.y);
+      if (ul.x && ul.y) this.ellipse(ctm, x0 + ul.x, y0 + ul.y, ul.x, ul.y, 0, Math.PI, (3 * Math.PI) / 2, false);
+    } else {
+      this.moveTo(ctm, x1 - ur.x, y0);
+      this.lineTo(ctm, x0 + ul.x, y0);
+      if (ul.x && ul.y) this.ellipse(ctm, x0 + ul.x, y0 + ul.y, ul.x, ul.y, 0, (3 * Math.PI) / 2, Math.PI, true);
+      this.lineTo(ctm, x0, y1 - ll.y);
+      if (ll.x && ll.y) this.ellipse(ctm, x0 + ll.x, y1 - ll.y, ll.x, ll.y, 0, Math.PI, Math.PI / 2, true);
+      this.lineTo(ctm, x1 - lr.x, y1);
+      if (lr.x && lr.y) this.ellipse(ctm, x1 - lr.x, y1 - lr.y, lr.x, lr.y, 0, Math.PI / 2, 0, true);
+      this.lineTo(ctm, x1, y0 + ur.y);
+      if (ur.x && ur.y) this.ellipse(ctm, x1 - ur.x, y0 + ur.y, ur.x, ur.y, 0, 0, -Math.PI / 2, true);
+    }
+    this.closePath();
+    this.moveTo(ctm, x, y);
+  }
+
   rect(ctm: Matrix2D, x: number, y: number, w: number, h: number): void {
     if (!allFinite(x, y, w, h)) return;
     this.moveTo(ctm, x, y);

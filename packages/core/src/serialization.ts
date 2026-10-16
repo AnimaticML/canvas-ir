@@ -72,9 +72,40 @@ const compositing = z
   })
   .strict();
 
+const rect = z.object({ x: finite, y: finite, width: finite, height: finite }).strict();
+const sizedRect = z.object({ x: finite, y: finite, width: finite.positive(), height: finite.positive() }).strict();
+const stops = z.array(z.object({ offset: finite.min(0).max(1), color: z.string() }).strict());
+const imageRef = z.object({ src: z.string(), width: finite.positive(), height: finite.positive() }).strict();
+
+const paint = z.union([
+  z.string(),
+  z.object({ kind: z.literal("linear"), x0: finite, y0: finite, x1: finite, y1: finite, stops }).strict(),
+  z
+    .object({
+      kind: z.literal("radial"),
+      x0: finite,
+      y0: finite,
+      r0: finite.nonnegative(),
+      x1: finite,
+      y1: finite,
+      r1: finite.nonnegative(),
+      stops,
+    })
+    .strict(),
+  z.object({ kind: z.literal("conic"), startAngle: finite, x: finite, y: finite, stops }).strict(),
+  z
+    .object({
+      kind: z.literal("pattern"),
+      image: imageRef,
+      repetition: z.enum(["repeat", "repeat-x", "repeat-y", "no-repeat"]),
+      transform: matrix,
+    })
+    .strict(),
+]);
+
 const strokeStyle = z
   .object({
-    paint: z.string(),
+    paint,
     lineWidth: finite.positive(),
     lineCap: z.enum(["butt", "round", "square"]),
     lineJoin: z.enum(["miter", "round", "bevel"]),
@@ -84,34 +115,66 @@ const strokeStyle = z
   })
   .strict();
 
+const fillRule = z.enum(["nonzero", "evenodd"]);
+const clip = z.array(z.object({ fillRule, transform: matrix, path: pathGeometry }).strict()).min(1).optional();
+
+/** Fields every painting op has, in the order ops are built, so parsed documents serialize to the same JSON. */
+const base = { id: z.string(), transform: matrix, compositing, clip };
+
+const textStyle = z
+  .object({
+    font: z.string(),
+    textAlign: z.enum(["start", "end", "left", "right", "center"]),
+    textBaseline: z.enum(["top", "hanging", "middle", "alphabetic", "ideographic", "bottom"]),
+    direction: z.enum(["ltr", "rtl", "inherit"]),
+    letterSpacing: z.string(),
+    wordSpacing: z.string(),
+    fontKerning: z.string(),
+    fontStretch: z.string(),
+    fontVariantCaps: z.string(),
+    textRendering: z.string(),
+  })
+  .strict();
+
+const textMeasure = z
+  .object({
+    width: finite,
+    actualBoundingBoxLeft: finite,
+    actualBoundingBoxRight: finite,
+    actualBoundingBoxAscent: finite,
+    actualBoundingBoxDescent: finite,
+    fontBoundingBoxAscent: finite,
+    fontBoundingBoxDescent: finite,
+  })
+  .strict();
+
 const op = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("fill"), ...base, fillRule, paint, path: pathGeometry }).strict(),
+  z.object({ kind: z.literal("stroke"), ...base, stroke: strokeStyle, path: pathGeometry }).strict(),
+  z.object({ kind: z.literal("clear"), id: z.string(), transform: matrix, rect, clip }).strict(),
   z
     .object({
-      kind: z.literal("fill"),
-      id: z.string(),
-      transform: matrix,
-      compositing,
-      fillRule: z.enum(["nonzero", "evenodd"]),
-      paint: z.string(),
-      path: pathGeometry,
+      kind: z.literal("image"),
+      ...base,
+      image: imageRef,
+      source: sizedRect,
+      dest: sizedRect,
+      smoothing: z.object({ enabled: z.boolean(), quality: z.enum(["low", "medium", "high"]) }).strict(),
     })
     .strict(),
   z
     .object({
-      kind: z.literal("stroke"),
-      id: z.string(),
-      transform: matrix,
-      compositing,
-      stroke: strokeStyle,
-      path: pathGeometry,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("clear"),
-      id: z.string(),
-      transform: matrix,
-      rect: z.object({ x: finite, y: finite, width: finite, height: finite }).strict(),
+      kind: z.literal("text"),
+      ...base,
+      mode: z.enum(["fill", "stroke"]),
+      text: z.string(),
+      x: finite,
+      y: finite,
+      maxWidth: finite.positive().optional(),
+      style: textStyle,
+      paint,
+      stroke: strokeStyle.optional(),
+      metrics: textMeasure,
     })
     .strict(),
 ]);
@@ -122,6 +185,9 @@ export const irDocumentSchema = z
   .superRefine((doc, ctx) => {
     const seen = new Set<string>();
     doc.ops.forEach((entry, i) => {
+      if (entry.kind === "text" && (entry.mode === "stroke") !== (entry.stroke !== undefined)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["ops", i, "stroke"], message: "stroked text, and only that, has a stroke" });
+      }
       if (seen.has(entry.id)) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["ops", i, "id"], message: `duplicate op id ${entry.id}` });
       }

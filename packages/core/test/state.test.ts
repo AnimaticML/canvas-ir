@@ -20,7 +20,7 @@ describe("save and restore", () => {
     const ctx = new RecordingContext();
     ctx.fillStyle = "blue";
     ctx.restore();
-    expect(ctx.fillStyle).toBe("blue");
+    expect(ctx.fillStyle).toBe("#0000ff");
   });
 
   test("the path is not part of the saved state", () => {
@@ -135,7 +135,7 @@ describe("snapshots", () => {
     expect(op.kind).toBe("stroke");
     if (op.kind !== "stroke") return;
     expect(op.stroke).toEqual({
-      paint: "green",
+      paint: "#008000",
       lineWidth: 3,
       lineCap: "round",
       lineJoin: "miter",
@@ -172,15 +172,12 @@ describe("snapshots", () => {
 });
 
 describe("unsupported calls", () => {
-  test.each(["clip", "fillText", "measureText", "drawImage", "getImageData", "createLinearGradient", "roundRect"])(
-    "%s throws UnsupportedCanvasCallError",
-    (method) => {
-      const ctx = new RecordingContext() as unknown as Record<string, () => unknown>;
-      expect(() => ctx[method]!()).toThrow(UnsupportedCanvasCallError);
-    },
-  );
+  test.each(["getImageData", "putImageData", "createImageData"])("%s throws UnsupportedCanvasCallError", (method) => {
+    const ctx = new RecordingContext() as unknown as Record<string, () => unknown>;
+    expect(() => ctx[method]!()).toThrow(UnsupportedCanvasCallError);
+  });
 
-  test("a gradient fillStyle throws", () => {
+  test("a gradient from another context throws", () => {
     const ctx = new RecordingContext();
     expect(() => {
       (ctx as unknown as Record<string, unknown>).fillStyle = {};

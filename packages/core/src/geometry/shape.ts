@@ -1,5 +1,5 @@
 import { IDENTITY, applyToPoint, invert } from "../math";
-import type { Op, Point } from "../types";
+import type { ClipPath, FillRule, ImageOp, Matrix2D, Op, Point, TextOp } from "../types";
 import { type Box, EMPTY_BOX, boxOfPoints, isEmptyBox, pathBounds, unionBox } from "./bounds";
 import { type Polyline, flattenPath, maxScale } from "./flatten";
 import {
@@ -29,6 +29,14 @@ export interface Shape {
   readonly pieceBoxes: readonly Box[];
   /** The path's centerline in world space, for closest-point queries. */
   readonly centerline: readonly Polyline[];
+  /** The clip region: a point must be inside every one of these. */
+  readonly clips: readonly ClipShape[];
+}
+
+export interface ClipShape {
+  readonly rings: readonly (readonly Point[])[];
+  readonly fillRule: FillRule;
+  readonly box: Box;
 }
 
 const emptyShape = (op: Op): Shape => ({
@@ -39,10 +47,73 @@ const emptyShape = (op: Op): Shape => ({
   pieces: [],
   pieceBoxes: [],
   centerline: [],
+  clips: [],
 });
 
-/** Builds an op's shape; `tolerance` bounds the flattening error in world units. */
+const intersectBoxes = (a: Box, b: Box): Box => ({
+  minX: Math.max(a.minX, b.minX),
+  minY: Math.max(a.minY, b.minY),
+  maxX: Math.min(a.maxX, b.maxX),
+  maxY: Math.min(a.maxY, b.maxY),
+});
+
+const clipCache = new WeakMap<ClipPath, ClipShape>();
+
+const clipShape = (clip: ClipPath, tolerance: number): ClipShape => {
+  let shape = clipCache.get(clip);
+  if (!shape) {
+    const rings = flattenPath(clip.path, IDENTITY, tolerance).map((l) => l.points);
+    shape = { rings, fillRule: clip.fillRule, box: pathBounds(clip.path, IDENTITY) };
+    clipCache.set(clip, shape);
+  }
+  return shape;
+};
+
+/** A local-space rectangle mapped to world space, as a ring. */
+const quad = (m: Matrix2D, x0: number, y0: number, x1: number, y1: number): Point[] => [
+  applyToPoint(m, x0, y0),
+  applyToPoint(m, x1, y0),
+  applyToPoint(m, x1, y1),
+  applyToPoint(m, x0, y1),
+];
+
+/** The world-space box of what an image op paints: the destination, cut down where the source leaves the image. */
+const imageRing = (op: ImageOp): Point[] | null => {
+  const { source: s, dest: d, image } = op;
+  const sx0 = Math.max(s.x, 0);
+  const sy0 = Math.max(s.y, 0);
+  const sx1 = Math.min(s.x + s.width, image.width);
+  const sy1 = Math.min(s.y + s.height, image.height);
+  if (sx1 <= sx0 || sy1 <= sy0) return null;
+  const kx = d.width / s.width;
+  const ky = d.height / s.height;
+  return quad(op.transform, d.x + (sx0 - s.x) * kx, d.y + (sy0 - s.y) * ky, d.x + (sx1 - s.x) * kx, d.y + (sy1 - s.y) * ky);
+};
+
+/** The world-space box of a text op: its ink box from the recorded metrics, squeezed to maxWidth, widened by a stroke. */
+const textRing = (op: TextOp): Point[] | null => {
+  const m = op.metrics;
+  const squeeze = op.maxWidth !== undefined && m.width > op.maxWidth ? op.maxWidth / m.width : 1;
+  const pad = op.mode === "stroke" && op.stroke ? op.stroke.lineWidth / 2 : 0;
+  const x0 = op.x - m.actualBoundingBoxLeft * squeeze - pad;
+  const x1 = op.x + m.actualBoundingBoxRight * squeeze + pad;
+  const y0 = op.y - m.actualBoundingBoxAscent - pad;
+  const y1 = op.y + m.actualBoundingBoxDescent + pad;
+  if (!(x1 > x0 && y1 > y0)) return null;
+  return quad(op.transform, x0, y0, x1, y1);
+};
+
+/** Builds an op's shape, clipped; `tolerance` bounds the flattening error in world units. */
 export const buildShape = (op: Op, tolerance: number): Shape => {
+  const shape = buildUnclipped(op, tolerance);
+  if (!op.clip || isEmptyBox(shape.paintBox)) return shape;
+  const clips = op.clip.map((c) => clipShape(c, tolerance));
+  const paintBox = clips.reduce((box, c) => intersectBoxes(box, c.box), shape.paintBox);
+  return { ...shape, clips, paintBox: isEmptyBox(paintBox) ? EMPTY_BOX : paintBox };
+};
+
+/** The shape before clipping. */
+export const buildUnclipped = (op: Op, tolerance: number): Shape => {
   // Canvas paints nothing while the current transform is not invertible.
   const inverse = invert(op.transform);
   if (inverse === null) return emptyShape(op);
@@ -72,27 +143,46 @@ export const buildShape = (op: Op, tolerance: number): Shape => {
       const pieceBoxes = pieces.map(boxOfPoints);
       const paintBox = pieceBoxes.reduce(unionBox, EMPTY_BOX);
       return {
-        op,
+        ...emptyShape(op),
         geometryBox: pathBounds(op.path, IDENTITY),
         paintBox,
-        rings: [],
         pieces,
         pieceBoxes,
         centerline: flattenPath(op.path, IDENTITY, tolerance),
       };
     }
+    case "image":
+    case "text": {
+      const ring = op.kind === "image" ? imageRing(op) : textRing(op);
+      if (!ring) return emptyShape(op);
+      const box = boxOfPoints(ring);
+      const outline: Polyline = {
+        points: ring,
+        smooth: ring.map(() => false),
+        tangentIn: ring.map(() => null),
+        tangentOut: ring.map(() => null),
+        closed: true,
+      };
+      return { ...emptyShape(op), geometryBox: box, paintBox: box, rings: [ring], centerline: [outline] };
+    }
   }
 };
+
+const insideClips = (shape: Shape, p: Point): boolean =>
+  shape.clips.every((c) => insideFill(p, c.rings, c.fillRule));
 
 /** Whether `p` is in the painted area, or within `tolerance` of it. */
 export const shapeContains = (shape: Shape, p: Point, tolerance: number): boolean => {
   if (isEmptyBox(shape.paintBox)) return false;
+  if (shape.clips.length > 0 && !insideClips(shape, p)) return false;
   const { paintBox: b } = shape;
   if (p.x < b.minX - tolerance || p.x > b.maxX + tolerance || p.y < b.minY - tolerance || p.y > b.maxY + tolerance) {
     return false;
   }
   switch (shape.op.kind) {
     case "clear":
+    case "image":
+    case "text":
       return inConvex(p, shape.rings[0]!) || (tolerance > 0 && distanceToRing(p, shape.rings[0]!) <= tolerance);
     case "fill":
       if (insideFill(p, shape.rings, shape.op.fillRule)) return true;
@@ -111,7 +201,10 @@ export const shapeContains = (shape: Shape, p: Point, tolerance: number): boolea
 };
 
 /** Whether the painted area touches the box. */
-export const shapeIntersectsBox = (shape: Shape, box: Box): boolean => {
+export const shapeIntersectsBox = (shape: Shape, query: Box): boolean => {
+  // With a clip, only the part of the box inside the clip's bounds can touch paint (an approximation for non-rectangular clips).
+  const box = shape.clips.reduce((q, c) => intersectBoxes(q, c.box), query);
+  if (isEmptyBox(box)) return false;
   const { paintBox: b } = shape;
   if (isEmptyBox(b) || b.minX > box.maxX || b.maxX < box.minX || b.minY > box.maxY || b.maxY < box.minY) return false;
   // Painted area wholly inside the box.

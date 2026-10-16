@@ -98,8 +98,65 @@ export type FillRule = "nonzero" | "evenodd";
 export type LineCap = "butt" | "round" | "square";
 export type LineJoin = "miter" | "round" | "bevel";
 
-/** Paints are CSS color strings in this phase; gradients and patterns come later. */
-export type Paint = string;
+export interface ColorStop {
+  readonly offset: number;
+  readonly color: string;
+}
+
+/** Gradient coordinates are in the space of the op's `transform`, as Canvas interprets them at paint time. */
+export interface LinearGradientPaint {
+  readonly kind: "linear";
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+  /** In the order they were added; the spec sorts equal offsets by that order. */
+  readonly stops: readonly ColorStop[];
+}
+
+export interface RadialGradientPaint {
+  readonly kind: "radial";
+  readonly x0: number;
+  readonly y0: number;
+  readonly r0: number;
+  readonly x1: number;
+  readonly y1: number;
+  readonly r1: number;
+  readonly stops: readonly ColorStop[];
+}
+
+export interface ConicGradientPaint {
+  readonly kind: "conic";
+  readonly startAngle: number;
+  readonly x: number;
+  readonly y: number;
+  readonly stops: readonly ColorStop[];
+}
+
+export type GradientPaint = LinearGradientPaint | RadialGradientPaint | ConicGradientPaint;
+
+/**
+ * An image as the IR stores it: a reference the host can resolve back to pixels
+ * (a URL, an asset id), and the intrinsic size it had when it was drawn.
+ */
+export interface ImageRef {
+  readonly src: string;
+  readonly width: number;
+  readonly height: number;
+}
+
+export type PatternRepetition = "repeat" | "repeat-x" | "repeat-y" | "no-repeat";
+
+export interface PatternPaint {
+  readonly kind: "pattern";
+  readonly image: ImageRef;
+  readonly repetition: PatternRepetition;
+  /** The pattern's own `setTransform`, applied inside the op's transform. */
+  readonly transform: Matrix2D;
+}
+
+/** A CSS color (normalized as browsers serialize it), or a gradient or pattern snapshotted when the op was drawn. */
+export type Paint = string | GradientPaint | PatternPaint;
 
 export interface Compositing {
   readonly globalAlpha: number;
@@ -121,11 +178,20 @@ export interface StrokeStyle {
   readonly lineDashOffset: number;
 }
 
+/** One `clip()` call: the path and fill rule it intersected the clip region with, and the transform then. */
+export interface ClipPath {
+  readonly fillRule: FillRule;
+  readonly transform: Matrix2D;
+  readonly path: PathGeometry;
+}
+
 interface OpBase {
   readonly id: string;
   /** The current transform when the op was drawn. Stroke widths and paints live in this space. */
   readonly transform: Matrix2D;
   readonly compositing: Compositing;
+  /** The clip region in effect: the intersection of these paths, outermost first. Absent when unclipped. */
+  readonly clip?: readonly ClipPath[];
 }
 
 export interface FillOp extends OpBase {
@@ -141,15 +207,74 @@ export interface StrokeOp extends OpBase {
   readonly path: PathGeometry;
 }
 
-/** `clearRect`: clears pixels in `rect`, in `transform` space. Compositing does not apply to it. */
+/** `clearRect`: clears pixels in `rect`, in `transform` space, inside the clip. Compositing does not apply to it. */
 export interface ClearOp {
   readonly kind: "clear";
   readonly id: string;
   readonly transform: Matrix2D;
   readonly rect: Rect;
+  readonly clip?: readonly ClipPath[];
 }
 
-export type Op = FillOp | StrokeOp | ClearOp;
+export type ImageSmoothingQuality = "low" | "medium" | "high";
+
+/** `drawImage`, normalized to its nine-argument form: `source` within the image, drawn into `dest`. */
+export interface ImageOp extends OpBase {
+  readonly kind: "image";
+  readonly image: ImageRef;
+  readonly source: Rect;
+  readonly dest: Rect;
+  readonly smoothing: { readonly enabled: boolean; readonly quality: ImageSmoothingQuality };
+}
+
+export type TextAlign = "start" | "end" | "left" | "right" | "center";
+export type TextBaseline = "top" | "hanging" | "middle" | "alphabetic" | "ideographic" | "bottom";
+export type TextDirection = "ltr" | "rtl" | "inherit";
+
+/** The text properties of the drawing state. */
+export interface TextStyle {
+  readonly font: string;
+  readonly textAlign: TextAlign;
+  readonly textBaseline: TextBaseline;
+  readonly direction: TextDirection;
+  readonly letterSpacing: string;
+  readonly wordSpacing: string;
+  readonly fontKerning: string;
+  readonly fontStretch: string;
+  readonly fontVariantCaps: string;
+  readonly textRendering: string;
+}
+
+/**
+ * `measureText` of the op's text, taken while recording. Bounding-box values
+ * are relative to the anchor (x, y), with `textAlign` and `textBaseline` applied,
+ * as `TextMetrics` reports them. Nothing measures again after recording.
+ */
+export interface TextMeasure {
+  readonly width: number;
+  readonly actualBoundingBoxLeft: number;
+  readonly actualBoundingBoxRight: number;
+  readonly actualBoundingBoxAscent: number;
+  readonly actualBoundingBoxDescent: number;
+  readonly fontBoundingBoxAscent: number;
+  readonly fontBoundingBoxDescent: number;
+}
+
+/** `fillText` or `strokeText`. A stroked op carries its line style; both carry the paint. */
+export interface TextOp extends OpBase {
+  readonly kind: "text";
+  readonly mode: "fill" | "stroke";
+  readonly text: string;
+  readonly x: number;
+  readonly y: number;
+  readonly maxWidth?: number;
+  readonly style: TextStyle;
+  readonly paint: Paint;
+  readonly stroke?: StrokeStyle;
+  readonly metrics: TextMeasure;
+}
+
+export type Op = FillOp | StrokeOp | ClearOp | ImageOp | TextOp;
 
 export interface IRDocument {
   readonly version: 1;

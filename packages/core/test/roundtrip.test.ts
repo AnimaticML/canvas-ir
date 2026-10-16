@@ -118,7 +118,7 @@ describe("replay", () => {
     ]);
     expect(calls[0]).toBe("save()");
     expect(calls.at(-1)).toBe("restore()");
-    expect(calls).toContain("fillStyle=red");
+    expect(calls).toContain("fillStyle=#ff0000");
   });
 
   const callLog = (): { target: ReplayTarget; calls: string[] } => {

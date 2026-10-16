@@ -4,6 +4,9 @@ import {
   type Matrix2D,
   type Op,
   RecordingContext,
+  type RecordingContextOptions,
+  RecordingPath2D,
+  type ReplayOptions,
   Scene,
   deserializeDocument,
   multiply,
@@ -11,7 +14,37 @@ import {
   replayOp,
   serializeDocument,
 } from "canvas-ir";
-import { HEIGHT, WIDTH, fixtures } from "./fixtures";
+import { type FixtureEnv, HEIGHT, WIDTH, fixtures } from "./fixtures";
+
+/** The fixtures' image: an opaque 16 by 12 checkerboard with a gradient, so smoothing and mirroring show. */
+const makeImage = (): OffscreenCanvas => {
+  const canvas = new OffscreenCanvas(16, 12);
+  const ctx = canvas.getContext("2d")!;
+  for (let y = 0; y < 12; y += 4) {
+    for (let x = 0; x < 16; x += 4) {
+      ctx.fillStyle = `rgb(${x * 16}, ${y * 20}, ${(x + y) % 8 === 0 ? 220 : 60})`;
+      ctx.fillRect(x, y, 4, 4);
+    }
+  }
+  return canvas;
+};
+
+const image = makeImage();
+const IMAGE_SRC = "fixture-image";
+const directEnv: FixtureEnv = { Path2D, image };
+const recorderEnv: FixtureEnv = { Path2D: RecordingPath2D as unknown as FixtureEnv["Path2D"], image };
+const recorderOptions: RecordingContextOptions = {
+  width: WIDTH,
+  height: HEIGHT,
+  describeImage: (img) => (img === image ? { src: IMAGE_SRC, width: image.width, height: image.height } : null),
+};
+const replayOptions: ReplayOptions = { images: (src) => (src === IMAGE_SRC ? image : undefined) };
+
+const record = (draw: (typeof fixtures)[number]["draw"]) => {
+  const recorder = new RecordingContext(recorderOptions);
+  draw(recorder as unknown as CanvasRenderingContext2D, recorderEnv);
+  return recorder.getDocument();
+};
 
 export interface Comparison {
   /** Pixels with any channel different. */
@@ -123,16 +156,14 @@ const compare = (reference: CanvasRenderingContext2D, actual: CanvasRenderingCon
 const run = (): FixtureResult[] =>
   fixtures.map(({ name, draw, engineDeviation }) => {
     try {
-      const recorder = new RecordingContext({ width: WIDTH, height: HEIGHT });
-      draw(recorder as unknown as CanvasRenderingContext2D);
-      const document = deserializeDocument(serializeDocument(recorder.getDocument()));
+      const document = deserializeDocument(serializeDocument(record(draw)));
       const replayed = context();
-      replayDocument(replayed, document);
+      replayDocument(replayed, document, replayOptions);
 
       const direct = context();
-      draw(direct);
+      draw(direct, directEnv);
       const composed = context();
-      draw(withComposedTransforms(composed));
+      draw(withComposedTransforms(composed), directEnv);
 
       const result = { name, exact: compare(composed, replayed), direct: compare(direct, replayed) };
       return engineDeviation ? { ...result, engineDeviation } : result;
@@ -166,39 +197,80 @@ const preparedContext = (op: Op): CanvasRenderingContext2D => {
     },
     set: (t, key, value) => Reflect.set(t, key, value, t),
   });
-  replayOp(prepared, op);
+  replayOp(prepared, op, replayOptions);
   return ctx;
+};
+
+/** Chromium's answer to "is this point painted by the op", for a fill or a stroke: its path test and, since isPointInPath ignores the clip, a path test per clip region. */
+const pathOracle = (op: Op & { kind: "fill" | "stroke" }): ((x: number, y: number) => boolean) => {
+  const ctx = preparedContext(op);
+  const clips = (op.clip ?? []).map((region) => {
+    const { clip: _, ...rest } = op;
+    const asFill = { ...rest, kind: "fill", transform: region.transform, path: region.path, fillRule: region.fillRule, paint: "#000" };
+    const clipCtx = preparedContext(asFill as unknown as Op);
+    return (x: number, y: number) => clipCtx.isPointInPath(x, y, region.fillRule);
+  });
+  const inPath = (x: number, y: number): boolean =>
+    op.kind === "fill" ? ctx.isPointInPath(x, y, op.fillRule) : ctx.isPointInStroke(x, y);
+  return (x, y) => inPath(x, y) && clips.every((inClip) => inClip(x, y));
+};
+
+/**
+ * For images and text, which Chromium can't hit-test: the op painted alone,
+ * read back per pixel. Returns true for fully covered pixels, false for
+ * untouched ones and null for partly covered ones.
+ */
+const coverageOracle = (op: Op): ((x: number, y: number) => boolean | null) => {
+  const ctx = context();
+  // Paint text opaque so coverage shows in alpha.
+  replayOp(ctx, op.kind === "text" ? { ...op, compositing: { ...op.compositing, globalAlpha: 1 } } : op, replayOptions);
+  const data = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
+  return (x, y) => {
+    const px = Math.floor(x);
+    const py = Math.floor(y);
+    if (px < 0 || py < 0 || px >= WIDTH || py >= HEIGHT) return false;
+    const alpha = data[(py * WIDTH + px) * 4 + 3]!;
+    return alpha === 255 ? true : alpha === 0 ? false : null;
+  };
 };
 
 const STEP = 0.73;
 const EDGE = 0.35;
+const NEIGHBOURS = [
+  [EDGE, 0],
+  [-EDGE, 0],
+  [0, EDGE],
+  [0, -EDGE],
+] as const;
 
 const runGeometry = (): GeometryResult[] =>
   fixtures.map(({ name, draw, engineDeviation }) => {
-    const recorder = new RecordingContext({ width: WIDTH, height: HEIGHT });
-    draw(recorder as unknown as CanvasRenderingContext2D);
     let compared = 0;
     let mismatchCount = 0;
     const mismatches: string[] = [];
-    for (const op of recorder.getDocument().ops) {
+    for (const op of record(draw).ops) {
       if (op.kind === "clear") continue;
       const scene = new Scene({ version: 1, ops: [op] }, { tolerance: 0.01 });
-      const ctx = preparedContext(op);
-      const chromium = (x: number, y: number): boolean =>
-        op.kind === "fill" ? ctx.isPointInPath(x, y, op.fillRule) : ctx.isPointInStroke(x, y);
-      for (let y = 0.5; y < HEIGHT; y += STEP) {
-        for (let x = 0.5; x < WIDTH; x += STEP) {
-          const expected = chromium(x, y);
-          const nearEdge = [
-            [EDGE, 0],
-            [-EDGE, 0],
-            [0, EDGE],
-            [0, -EDGE],
-          ].some(([dx, dy]) => chromium(x + dx!, y + dy!) !== expected);
-          if (nearEdge) continue;
+      const pixels = op.kind === "fill" || op.kind === "stroke" ? null : coverageOracle(op);
+      // Pixel coverage is only known on whole pixels, so sample their centres and step a pixel to find edges.
+      const oracle = pixels ?? pathOracle(op as Op & { kind: "fill" | "stroke" });
+      const step = pixels ? 1 : STEP;
+      const neighbours = pixels ? NEIGHBOURS.map(([dx, dy]) => [dx / EDGE, dy / EDGE] as const) : NEIGHBOURS;
+      for (let y = 0.5; y < HEIGHT; y += step) {
+        for (let x = 0.5; x < WIDTH; x += step) {
+          const expected = oracle(x, y);
+          if (op.kind === "text") {
+            // Text is hit-tested by its ink box, which holds the glyphs but also the gaps between them,
+            // so check only that every pixel the text touches is within a pixel of the box.
+            if (expected === false) continue;
+          } else {
+            if (expected === null) continue;
+            if (neighbours.some(([dx, dy]) => oracle(x + dx, y + dy) !== expected)) continue;
+          }
           compared++;
-          const actual = scene.hitTest({ x, y }, { includeInvisible: true }).length > 0;
-          if (actual === expected) continue;
+          const tolerance = op.kind === "text" ? 1 : 0;
+          const actual = scene.hitTest({ x, y }, { includeInvisible: true, tolerance }).length > 0;
+          if (actual === (expected ?? true)) continue;
           mismatchCount++;
           if (mismatches.length < 5) {
             mismatches.push(`${op.id} at (${x.toFixed(2)}, ${y.toFixed(2)}): scene ${actual}, Chromium ${expected}`);

@@ -215,6 +215,12 @@ export const strokePieces = (
         const v = vertices[i]!;
         const join = v.smooth ? "bevel" : style.lineJoin;
         emit(joinPiece(v.p, v.tin ?? chordIn, v.tout ?? chordOut, hw, join, style.miterLimit, tolerance));
+        fillTangentWedges(v, chordIn, chordOut);
+      };
+      // Where an exact curve tangent differs from the chord, the chord's quad leaves a sliver on the outside.
+      const fillTangentWedges = (v: Vertex, chordIn: Point | null, chordOut: Point | null): void => {
+        if (v.tin && chordIn) emit(joinPiece(v.p, chordIn, v.tin, hw, "bevel", style.miterLimit, tolerance));
+        if (v.tout && chordOut) emit(joinPiece(v.p, v.tout, chordOut, hw, "bevel", style.miterLimit, tolerance));
       };
       for (let i = 1; i < count; i++) joinAt(i, dirs[i - 1]!, dirs[i]!);
       if (closed) {
@@ -224,6 +230,8 @@ export const strokePieces = (
         const last = vertices[vertices.length - 1]!;
         emit(capPiece(first.p, first.tout ?? dirs[0]!, hw, style.lineCap, tolerance));
         emit(capPiece(last.p, scale(last.tin ?? dirs[count - 1]!, -1), hw, style.lineCap, tolerance));
+        fillTangentWedges(first, null, dirs[0]!);
+        fillTangentWedges(last, dirs[count - 1]!, null);
       }
     }
   }

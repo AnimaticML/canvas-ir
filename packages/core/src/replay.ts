@@ -1,5 +1,25 @@
 import { IDENTITY, multiply, sameMatrix } from "./math";
-import type { Compositing, FillRule, IRDocument, Matrix2D, Op, PathGeometry, Segment } from "./types";
+import type {
+  ClipPath,
+  Compositing,
+  FillRule,
+  IRDocument,
+  Matrix2D,
+  Op,
+  Paint,
+  PathGeometry,
+  Segment,
+  StrokeStyle,
+  TextStyle,
+} from "./types";
+
+interface GradientLike {
+  addColorStop(offset: number, color: string): void;
+}
+
+interface PatternLike {
+  setTransform(transform?: { a: number; b: number; c: number; d: number; e: number; f: number }): void;
+}
 
 /**
  * The Canvas calls replay makes. A browser `CanvasRenderingContext2D` or
@@ -44,12 +64,32 @@ export interface ReplayTarget {
   closePath(): void;
   fill(fillRule?: FillRule): void;
   stroke(): void;
+  clip(fillRule?: FillRule): void;
   clearRect(x: number, y: number, w: number, h: number): void;
+  createLinearGradient(x0: number, y0: number, x1: number, y1: number): GradientLike;
+  createRadialGradient(x0: number, y0: number, r0: number, x1: number, y1: number, r1: number): GradientLike;
+  createConicGradient(startAngle: number, x: number, y: number): GradientLike;
+  // The image types differ between a browser context and RecordingContext, so they stay loose here.
+  createPattern(image: never, repetition: string | null): PatternLike | null;
+  drawImage(image: never, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number): void;
+  imageSmoothingEnabled: boolean;
+  imageSmoothingQuality: string;
+  fillText(text: string, x: number, y: number, maxWidth?: number): void;
+  strokeText(text: string, x: number, y: number, maxWidth?: number): void;
+  font: string;
+  textAlign: string;
+  textBaseline: string;
+  direction: string;
 }
 
 export interface ReplayOptions {
   /** Applied on top of every recorded transform, e.g. a viewport's pan and zoom. */
   readonly view?: Matrix2D;
+  /**
+   * Resolves an image reference (`ImageRef.src`) to something the target can
+   * draw. Image ops and pattern paints whose image doesn't resolve are skipped.
+   */
+  readonly images?: (src: string) => unknown;
 }
 
 const setMatrix = (target: ReplayTarget, m: Matrix2D): void => {
@@ -139,34 +179,106 @@ const replayPath = (target: ReplayTarget, path: PathGeometry, paintMatrix: Matri
   use(paintMatrix);
 };
 
+/** The target's paint for a recorded paint, or null when its image can't be resolved. */
+const toPaint = (target: ReplayTarget, paint: Paint, options: ReplayOptions): unknown => {
+  if (typeof paint === "string") return paint;
+  if (paint.kind === "pattern") {
+    const image = options.images?.(paint.image.src);
+    if (image === undefined || image === null) return null;
+    const pattern = target.createPattern(image as never, paint.repetition);
+    if (pattern === null) return null;
+    pattern.setTransform({ ...paint.transform });
+    return pattern;
+  }
+  const gradient =
+    paint.kind === "linear"
+      ? target.createLinearGradient(paint.x0, paint.y0, paint.x1, paint.y1)
+      : paint.kind === "radial"
+        ? target.createRadialGradient(paint.x0, paint.y0, paint.r0, paint.x1, paint.y1, paint.r1)
+        : target.createConicGradient(paint.startAngle, paint.x, paint.y);
+  for (const stop of paint.stops) gradient.addColorStop(stop.offset, stop.color);
+  return gradient;
+};
+
+const applyStroke = (target: ReplayTarget, stroke: StrokeStyle): void => {
+  target.lineWidth = stroke.lineWidth;
+  target.lineCap = stroke.lineCap;
+  target.lineJoin = stroke.lineJoin;
+  target.miterLimit = stroke.miterLimit;
+  target.setLineDash([...stroke.lineDash]);
+  target.lineDashOffset = stroke.lineDashOffset;
+};
+
+/** Sets only the text properties that differ, and only those the target has. */
+const applyText = (target: ReplayTarget, style: TextStyle): void => {
+  const t = target as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(style)) {
+    if (key in t && t[key] !== value) t[key] = value;
+  }
+};
+
+const applyClip = (target: ReplayTarget, clip: readonly ClipPath[] | undefined, view: Matrix2D): void => {
+  for (const region of clip ?? []) {
+    replayPath(target, region.path, multiply(view, region.transform), view);
+    target.clip(region.fillRule);
+  }
+};
+
 export const replayOp = (target: ReplayTarget, op: Op, options: ReplayOptions = {}): void => {
   const view = options.view ?? IDENTITY;
+  const transform = multiply(view, op.transform);
+  // Resolve image-backed paints first, so an op that can't be drawn changes nothing.
+  let paint: unknown = null;
+  if (op.kind === "fill" || op.kind === "text") paint = toPaint(target, op.paint, options);
+  if (op.kind === "stroke") paint = toPaint(target, op.stroke.paint, options);
+  if (op.kind !== "clear" && op.kind !== "image" && paint === null) return;
+  const image = op.kind === "image" ? options.images?.(op.image.src) : undefined;
+  if (op.kind === "image" && (image === undefined || image === null)) return;
+
   target.save();
+  applyClip(target, op.clip, view);
   switch (op.kind) {
     case "clear":
-      setMatrix(target, multiply(view, op.transform));
+      setMatrix(target, transform);
       target.clearRect(op.rect.x, op.rect.y, op.rect.width, op.rect.height);
       break;
     case "fill":
       applyCompositing(target, op.compositing);
-      target.fillStyle = op.paint;
-      replayPath(target, op.path, multiply(view, op.transform), view);
+      target.fillStyle = paint;
+      replayPath(target, op.path, transform, view);
       target.fill(op.fillRule);
       break;
-    case "stroke": {
+    case "stroke":
       applyCompositing(target, op.compositing);
-      const stroke = op.stroke;
-      target.strokeStyle = stroke.paint;
-      target.lineWidth = stroke.lineWidth;
-      target.lineCap = stroke.lineCap;
-      target.lineJoin = stroke.lineJoin;
-      target.miterLimit = stroke.miterLimit;
-      target.setLineDash([...stroke.lineDash]);
-      target.lineDashOffset = stroke.lineDashOffset;
-      replayPath(target, op.path, multiply(view, op.transform), view);
+      target.strokeStyle = paint;
+      applyStroke(target, op.stroke);
+      replayPath(target, op.path, transform, view);
       target.stroke();
       break;
+    case "image": {
+      applyCompositing(target, op.compositing);
+      target.imageSmoothingEnabled = op.smoothing.enabled;
+      target.imageSmoothingQuality = op.smoothing.quality;
+      setMatrix(target, transform);
+      const { source: s, dest: d } = op;
+      target.drawImage(image as never, s.x, s.y, s.width, s.height, d.x, d.y, d.width, d.height);
+      break;
     }
+    case "text":
+      applyCompositing(target, op.compositing);
+      applyText(target, op.style);
+      setMatrix(target, transform);
+      if (op.mode === "fill") {
+        target.fillStyle = paint;
+        if (op.maxWidth === undefined) target.fillText(op.text, op.x, op.y);
+        else target.fillText(op.text, op.x, op.y, op.maxWidth);
+      } else {
+        target.strokeStyle = paint;
+        applyStroke(target, op.stroke!);
+        if (op.maxWidth === undefined) target.strokeText(op.text, op.x, op.y);
+        else target.strokeText(op.text, op.x, op.y, op.maxWidth);
+      }
+      break;
   }
   target.restore();
 };

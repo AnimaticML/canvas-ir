@@ -1,5 +1,5 @@
 import { IDENTITY, multiply } from "../math";
-import type { IRDocument, Matrix2D, Op, Point, Rect } from "../types";
+import type { IRDocument, Matrix2D, Op, PathGeometry, Point, Rect } from "../types";
 import { type Box, boxToRect, expandBox, isEmptyBox, pathBounds, rectToBox } from "./bounds";
 import { maxScale } from "./flatten";
 import { Grid } from "./grid";
@@ -7,6 +7,7 @@ import {
   type ClosestPoint,
   type Shape,
   buildShape,
+  buildUnclipped,
   shapeClosestPoint,
   shapeContains,
   shapeEnclosedBy,
@@ -51,36 +52,34 @@ interface Entry {
  * happened under `matrix` times its transforms. Nothing is re-recorded.
  */
 export const transformOp = (op: Op, matrix: Matrix2D): Op => {
+  const moveGeometry = (path: PathGeometry): PathGeometry => ({
+    ...path,
+    matrices: path.matrices.map((m) => multiply(matrix, m)),
+  });
   const transform = multiply(matrix, op.transform);
-  if (op.kind === "clear") return { ...op, transform };
-  return { ...op, transform, path: { ...op.path, matrices: op.path.matrices.map((m) => multiply(matrix, m)) } };
+  const clip = op.clip?.map((c) => ({ ...c, transform: multiply(matrix, c.transform), path: moveGeometry(c.path) }));
+  const moved = { ...op, transform, ...(clip ? { clip } : {}) };
+  return moved.kind === "fill" || moved.kind === "stroke" ? { ...moved, path: moveGeometry(moved.path) } : moved;
 };
 
 /** Geometry bounds grown by the farthest a stroke can reach past its path: joins, caps and width. */
 const coarseBox = (op: Op): Box => {
-  if (op.kind === "clear") {
-    const { x, y, width, height } = op.rect;
-    const corners = [
-      [x, y],
-      [x + width, y],
-      [x, y + height],
-      [x + width, y + height],
-    ].map(([px, py]) => ({
-      x: op.transform.a * px! + op.transform.c * py! + op.transform.e,
-      y: op.transform.b * px! + op.transform.d * py! + op.transform.f,
-    }));
-    return {
-      minX: Math.min(...corners.map((c) => c.x)),
-      minY: Math.min(...corners.map((c) => c.y)),
-      maxX: Math.max(...corners.map((c) => c.x)),
-      maxY: Math.max(...corners.map((c) => c.y)),
-    };
+  let box: Box;
+  if (op.kind === "fill") {
+    box = pathBounds(op.path, IDENTITY);
+  } else if (op.kind === "stroke") {
+    const { lineWidth, lineJoin, lineCap, miterLimit } = op.stroke;
+    const reach = Math.max(1, lineJoin === "miter" ? miterLimit : 1, lineCap === "square" ? Math.SQRT2 : 1);
+    box = expandBox(pathBounds(op.path, IDENTITY), (lineWidth / 2) * reach * maxScale(op.transform));
+  } else {
+    // Clears, images and text are boxes; their unclipped shape is as cheap as a bound.
+    box = buildUnclipped(op, 1).paintBox;
   }
-  const geometry = pathBounds(op.path, IDENTITY);
-  if (op.kind === "fill") return geometry;
-  const { lineWidth, lineJoin, lineCap, miterLimit } = op.stroke;
-  const reach = Math.max(1, lineJoin === "miter" ? miterLimit : 1, lineCap === "square" ? Math.SQRT2 : 1);
-  return expandBox(geometry, (lineWidth / 2) * reach * maxScale(op.transform));
+  for (const c of op.clip ?? []) {
+    const b = pathBounds(c.path, IDENTITY);
+    box = { minX: Math.max(box.minX, b.minX), minY: Math.max(box.minY, b.minY), maxX: Math.min(box.maxX, b.maxX), maxY: Math.min(box.maxY, b.maxY) };
+  }
+  return box;
 };
 
 const boxDistance = (b: Box, p: Point): number => {
