@@ -98,6 +98,8 @@ The context must pass as a `CanvasRenderingContext2D` for the renderers we care 
 
 The acceptance test is a corpus: an SVG-to-canvas renderer drawing a set of SVG files, plus our own fixtures, replayed onto a real canvas in a browser job and compared pixel-for-pixel with direct rendering. The fast Bun tests are the everyday loop.
 
+The corpus renderer is canvg. It draws with paths, arcs, transforms, gradients, patterns of its own offscreen canvases, `clip`, `drawImage`, `fillText`/`strokeText` and `measureText`, and never uses `Path2D`. Two of its features are out of reach by design: `gradientTransform` paints with a pattern made by another context, which a recorder cannot see into, and masks and filters read pixels back. The corpus leaves those out and says so in its README.
+
 "Pixel-for-pixel" is checked against direct drawing in which every transform call is applied as one `setTransform` with the same matrix. Chromium composes `translate`/`rotate`/`scale` in single precision, so plain direct drawing can differ from any replay in anti-aliased edge pixels; against plain direct drawing only edge pixels may differ. Replay also avoids calls that change rasterization without changing geometry: it sets the paint transform only when it differs from the last path matrix, omits the `moveTo` for a path an `arc` or `ellipse` began, and assigns `filter` only when it changes.
 
 ## Geometry queries
@@ -167,7 +169,6 @@ The order puts Canvas fidelity and correct geometry first, because everything el
 
 ## Open questions
 
-- Which SVG-to-canvas renderer anchors the corpus (canvg is the likely one), and which Canvas calls does it actually use?
 - Groups: explicit `beginGroup`/`endGroup` extension calls, or inferred from `save`/`restore` nesting with an id?
 - How much of the rich-text block layout (lists, headings, spacing) belongs in this project versus the editor integration?
 - Should `drawImage` ops carry intrinsic size only, or an optional alpha mask so transparent image pixels don't register hits?

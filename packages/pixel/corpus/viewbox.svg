@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="160" viewBox="0 0 100 50" preserveAspectRatio="xMidYMid meet">
+  <rect width="100" height="50" fill="#eef"/>
+  <circle cx="25" cy="25" r="20" fill="#36c" stroke="#123" stroke-width="1"/>
+  <svg x="55" y="5" width="40" height="40" viewBox="0 0 10 20" preserveAspectRatio="xMaxYMin slice">
+    <rect width="10" height="20" fill="#fc6"/>
+    <circle cx="5" cy="5" r="6" fill="#c33"/>
+  </svg>
+</svg>

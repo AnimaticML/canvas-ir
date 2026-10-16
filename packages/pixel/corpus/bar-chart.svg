@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="160">
+  <style>
+    .axis { stroke: #333; stroke-width: 1; }
+    .grid { stroke: #ccc; stroke-dasharray: 2 2; }
+    .bar { fill: #4a8; }
+    .bar.hi { fill: #d63; }
+    text { font-family: sans-serif; font-size: 9px; fill: #333; }
+  </style>
+  <line class="grid" x1="30" y1="40" x2="190" y2="40"/>
+  <line class="grid" x1="30" y1="80" x2="190" y2="80"/>
+  <line class="grid" x1="30" y1="120" x2="190" y2="120"/>
+  <rect class="bar" x="40" y="70" width="20" height="70"/>
+  <rect class="bar hi" x="70" y="30" width="20" height="110"/>
+  <rect class="bar" x="100" y="90" width="20" height="50"/>
+  <rect class="bar" x="130" y="55" width="20" height="85"/>
+  <rect class="bar" style="fill: #48d; opacity: 0.8" x="160" y="100" width="20" height="40"/>
+  <line class="axis" x1="30" y1="140" x2="190" y2="140"/>
+  <line class="axis" x1="30" y1="20" x2="30" y2="140"/>
+  <text x="25" y="43" text-anchor="end">30</text>
+  <text x="25" y="83" text-anchor="end">20</text>
+  <text x="25" y="123" text-anchor="end">10</text>
+  <text x="50" y="152" text-anchor="middle">A</text>
+  <text x="80" y="152" text-anchor="middle">B</text>
+  <text x="110" y="152" text-anchor="middle">C</text>
+  <text x="140" y="152" text-anchor="middle">D</text>
+  <text x="170" y="152" text-anchor="middle">E</text>
+  <text x="110" y="14" text-anchor="middle" style="font-size: 11px; font-weight: bold">Quarterly</text>
+</svg>

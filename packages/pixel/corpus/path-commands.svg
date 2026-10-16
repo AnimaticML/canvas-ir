@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="160">
+  <path d="M10 20 L40 10 H70 V40 h-20 v10 l-30 0 Z" fill="#7b5" stroke="#252" stroke-width="2"/>
+  <path d="M90 50 C90 10 130 10 130 30 S170 50 170 20 Q185 5 195 30 T190 55" fill="none" stroke="#a40" stroke-width="2.5"/>
+  <path d="M20 80 a30 20 0 1 0 60 0 a30 20 0 1 0 -60 0z M35 80 A15 10 30 0 1 65 80" fill="#58c" fill-rule="evenodd"/>
+  <path d="m100 70 l20 0 0 20 -20 0 z m30 0 l20 0 0 20 -20 0 z" fill="#c85"/>
+  <path d="M110 110 A40 25 -20 1 1 190 140 A10 10 0 0 0 110 110" fill="none" stroke="#333" stroke-width="2"/>
+  <path d="M10 150q10-30 20 0t20 0 20 0 20 0" fill="none" stroke="#06c" stroke-width="2"/>
+  <path d="M5 115l5-5 5 5-5 5zm12 0l5-5 5 5-5 5z" fill="#900"/>
+</svg>

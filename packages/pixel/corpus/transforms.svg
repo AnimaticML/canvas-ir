@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="160">
+  <g transform="translate(100 80)">
+    <rect x="-20" y="-20" width="40" height="40" fill="#ddd"/>
+    <g transform="rotate(30)">
+      <rect x="-15" y="-15" width="30" height="30" fill="none" stroke="#c00" stroke-width="2"/>
+      <g transform="scale(1.5 0.7) skewX(20)">
+        <circle r="12" fill="#06c" fill-opacity="0.5"/>
+      </g>
+    </g>
+  </g>
+  <g transform="matrix(0.8 0.3 -0.2 0.9 20 20)">
+    <rect width="50" height="30" fill="#e90"/>
+    <text x="5" y="20" font-size="12" font-family="sans-serif">matrix</text>
+  </g>
+  <rect x="140" y="100" width="40" height="30" fill="#593" transform="rotate(-15 160 115) skewY(10)"/>
+  <ellipse cx="40" cy="130" rx="25" ry="10" fill="#93c" transform="rotate(45, 40, 130)"/>
+</svg>

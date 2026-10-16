@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="160">
+  <defs>
+    <symbol id="arrow" viewBox="0 0 10 10">
+      <path d="M0 4 H6 V1 L10 5 L6 9 V6 H0 Z"/>
+    </symbol>
+    <g id="badge">
+      <circle r="12" fill="#fc3" stroke="#a70" stroke-width="2"/>
+      <path d="M-5 0 L-1 4 L6 -4" fill="none" stroke="#a70" stroke-width="2.5"/>
+    </g>
+  </defs>
+  <use xlink:href="#arrow" x="10" y="10" width="40" height="40" fill="#36c"/>
+  <use xlink:href="#arrow" x="60" y="10" width="40" height="20" fill="#c36"/>
+  <use xlink:href="#arrow" transform="rotate(90 150 30)" x="130" y="10" width="40" height="40" fill="#3a6"/>
+  <use xlink:href="#badge" x="30" y="100"/>
+  <use xlink:href="#badge" x="80" y="110" transform="scale(1.2)"/>
+  <use xlink:href="#badge" x="160" y="120" opacity="0.5"/>
+</svg>

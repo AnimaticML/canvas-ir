@@ -1,6 +1,8 @@
 // Bundled and loaded into the browser page by run.ts.
+import { Canvg } from "canvg";
 import {
   IDENTITY,
+  type IRDocument,
   type Matrix2D,
   type Op,
   RecordingContext,
@@ -30,15 +32,30 @@ const makeImage = (): OffscreenCanvas => {
 };
 
 const image = makeImage();
-const IMAGE_SRC = "fixture-image";
 const directEnv: FixtureEnv = { Path2D, image };
 const recorderEnv: FixtureEnv = { Path2D: RecordingPath2D as unknown as FixtureEnv["Path2D"], image };
+
+/** Images seen while recording, by the id the IR refers to them by, so replay can find the same object. */
+const imageIds = new Map<unknown, string>();
+const imagesById = new Map<string, unknown>();
 const recorderOptions: RecordingContextOptions = {
   width: WIDTH,
   height: HEIGHT,
-  describeImage: (img) => (img === image ? { src: IMAGE_SRC, width: image.width, height: image.height } : null),
+  describeImage: (img) => {
+    const source = img as { width?: number; height?: number; naturalWidth?: number; naturalHeight?: number };
+    const width = source.naturalWidth ?? source.width ?? 0;
+    const height = source.naturalHeight ?? source.height ?? 0;
+    if (!(width > 0 && height > 0)) return null;
+    let src = imageIds.get(img);
+    if (src === undefined) {
+      src = `image-${imageIds.size}`;
+      imageIds.set(img, src);
+      imagesById.set(src, img);
+    }
+    return { src, width, height };
+  },
 };
-const replayOptions: ReplayOptions = { images: (src) => (src === IMAGE_SRC ? image : undefined) };
+const replayOptions: ReplayOptions = { images: (src) => imagesById.get(src) };
 
 const record = (draw: (typeof fixtures)[number]["draw"]) => {
   const recorder = new RecordingContext(recorderOptions);
@@ -82,6 +99,10 @@ const withComposedTransforms = (target: CanvasRenderingContext2D): CanvasRenderi
   const stack: Matrix2D[] = [];
   const set = (m: Matrix2D): void => {
     if (!Object.values(m).every(Number.isFinite)) return;
+    // Chromium re-maps the current path on every transform change, even to the same matrix, so skip those as replay does.
+    if (m.a === current.a && m.b === current.b && m.c === current.c && m.d === current.d && m.e === current.e && m.f === current.f) {
+      return;
+    }
     current = m;
     target.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
   };
@@ -110,14 +131,36 @@ const withComposedTransforms = (target: CanvasRenderingContext2D): CanvasRenderi
     },
     resetTransform: () => set(IDENTITY),
   };
-  return new Proxy(target, {
+  const proxy: CanvasRenderingContext2D = new Proxy(target, {
     get: (t, key) => {
       if (typeof key === "string" && key in overrides) return overrides[key];
       const value = Reflect.get(t, key, t);
-      return typeof value === "function" ? value.bind(t) : value;
+      return typeof value === "function" ? unwrapThis(value, proxy, t) : value;
     },
     set: (t, key, value) => Reflect.set(t, key, value, t),
   });
+  return proxy;
+};
+
+const wrappers = new WeakMap<object, Map<Function, Function>>();
+
+/**
+ * A method that runs on `target` when called on `proxy` and on its own `this`
+ * otherwise. Not a bound function: canvg saves a context's `beginPath` and later
+ * writes it back onto the prototype, so what we hand out must work for every
+ * context, not just this one.
+ */
+const unwrapThis = (fn: Function, proxy: object, target: object): Function => {
+  let cache = wrappers.get(proxy);
+  if (!cache) wrappers.set(proxy, (cache = new Map()));
+  let wrapper = cache.get(fn);
+  if (!wrapper) {
+    wrapper = function (this: unknown, ...args: unknown[]) {
+      return fn.apply(this === proxy ? target : this, args);
+    };
+    cache.set(fn, wrapper);
+  }
+  return wrapper;
 };
 
 const compare = (reference: CanvasRenderingContext2D, actual: CanvasRenderingContext2D): Comparison => {
@@ -244,43 +287,107 @@ const NEIGHBOURS = [
 ] as const;
 
 const runGeometry = (): GeometryResult[] =>
-  fixtures.map(({ name, draw, engineDeviation }) => {
-    let compared = 0;
-    let mismatchCount = 0;
-    const mismatches: string[] = [];
-    for (const op of record(draw).ops) {
-      if (op.kind === "clear") continue;
-      const scene = new Scene({ version: 1, ops: [op] }, { tolerance: 0.01 });
-      const pixels = op.kind === "fill" || op.kind === "stroke" ? null : coverageOracle(op);
-      // Pixel coverage is only known on whole pixels, so sample their centres and step a pixel to find edges.
-      const oracle = pixels ?? pathOracle(op as Op & { kind: "fill" | "stroke" });
-      const step = pixels ? 1 : STEP;
-      const neighbours = pixels ? NEIGHBOURS.map(([dx, dy]) => [dx / EDGE, dy / EDGE] as const) : NEIGHBOURS;
-      for (let y = 0.5; y < HEIGHT; y += step) {
-        for (let x = 0.5; x < WIDTH; x += step) {
-          const expected = oracle(x, y);
-          if (op.kind === "text") {
-            // Text is hit-tested by its ink box, which holds the glyphs but also the gaps between them,
-            // so check only that every pixel the text touches is within a pixel of the box.
-            if (expected === false) continue;
-          } else {
-            if (expected === null) continue;
-            if (neighbours.some(([dx, dy]) => oracle(x + dx, y + dy) !== expected)) continue;
-          }
-          compared++;
-          const tolerance = op.kind === "text" ? 1 : 0;
-          const actual = scene.hitTest({ x, y }, { includeInvisible: true, tolerance }).length > 0;
-          if (actual === (expected ?? true)) continue;
-          mismatchCount++;
-          if (mismatches.length < 5) {
-            mismatches.push(`${op.id} at (${x.toFixed(2)}, ${y.toFixed(2)}): scene ${actual}, Chromium ${expected}`);
-          }
+  fixtures.map(({ name, draw, engineDeviation }) => checkGeometry(name, record(draw), engineDeviation));
+
+const checkGeometry = (name: string, document: IRDocument, engineDeviation?: string): GeometryResult => {
+  let compared = 0;
+  let mismatchCount = 0;
+  const mismatches: string[] = [];
+  for (const op of document.ops) {
+    if (op.kind === "clear") continue;
+    const scene = new Scene({ version: 1, ops: [op] }, { tolerance: 0.01 });
+    const pixels = op.kind === "fill" || op.kind === "stroke" ? null : coverageOracle(op);
+    // Pixel coverage is only known on whole pixels, so sample their centres and step a pixel to find edges.
+    const oracle = pixels ?? pathOracle(op as Op & { kind: "fill" | "stroke" });
+    const step = pixels ? 1 : STEP;
+    const neighbours = pixels ? NEIGHBOURS.map(([dx, dy]) => [dx / EDGE, dy / EDGE] as const) : NEIGHBOURS;
+    for (let y = 0.5; y < HEIGHT; y += step) {
+      for (let x = 0.5; x < WIDTH; x += step) {
+        const expected = oracle(x, y);
+        if (op.kind === "text") {
+          // Text is hit-tested by its ink box, which holds the glyphs but also the gaps between them,
+          // so check only that every pixel the text touches is within a pixel of the box.
+          if (expected === false) continue;
+        } else {
+          if (expected === null) continue;
+          if (neighbours.some(([dx, dy]) => oracle(x + dx, y + dy) !== expected)) continue;
+        }
+        compared++;
+        const tolerance = op.kind === "text" ? 1 : 0;
+        const actual = scene.hitTest({ x, y }, { includeInvisible: true, tolerance }).length > 0;
+        if (actual === (expected ?? true)) continue;
+        mismatchCount++;
+        if (mismatches.length < 5) {
+          mismatches.push(`${op.id} at (${x.toFixed(2)}, ${y.toFixed(2)}): scene ${actual}, Chromium ${expected}`);
         }
       }
     }
-    const result = { name, compared, mismatchCount, mismatches };
-    return engineDeviation ? { ...result, engineDeviation } : result;
+  }
+  const result = { name, compared, mismatchCount, mismatches };
+  return engineDeviation ? { ...result, engineDeviation } : result;
+};
+
+export interface CorpusResult {
+  readonly fixture: FixtureResult;
+  readonly geometry?: GeometryResult;
+  /** Ops by kind in the recorded document. */
+  readonly ops?: Record<string, number>;
+}
+
+/** Renders an SVG with canvg, the way an app using it would. */
+const renderSvg = async (ctx: CanvasRenderingContext2D, svg: string): Promise<void> => {
+  // canvg's clipPath swaps beginPath and closePath on the context's prototype; put the originals back afterwards.
+  const proto = OffscreenCanvasRenderingContext2D.prototype;
+  const { beginPath, closePath } = proto;
+  try {
+    await draw(ctx, svg);
+  } finally {
+    Object.assign(proto, { beginPath, closePath });
+  }
+};
+
+const draw = async (ctx: CanvasRenderingContext2D, svg: string): Promise<void> => {
+  const canvg = Canvg.fromString(ctx, svg, {
+    ignoreDimensions: true,
+    ignoreClear: true,
+    ignoreMouse: true,
+    ignoreAnimation: true,
   });
+  await canvg.render();
+};
+
+/** The corpus: each SVG drawn by canvg directly, and recorded, serialized and replayed; then hit-tested. */
+const runCorpus = async (
+  files: readonly { name: string; svg: string; engineDeviation?: string }[],
+): Promise<CorpusResult[]> => {
+  const results: CorpusResult[] = [];
+  for (const { name, svg, engineDeviation } of files) {
+    try {
+      const recorder = new RecordingContext(recorderOptions);
+      await renderSvg(recorder as unknown as CanvasRenderingContext2D, svg);
+      const recorded = recorder.getDocument();
+      const document = deserializeDocument(serializeDocument(recorded));
+      const replayed = context();
+      replayDocument(replayed, document, replayOptions);
+      const direct = context();
+      await renderSvg(direct, svg);
+      const composed = context();
+      await renderSvg(withComposedTransforms(composed), svg);
+      const ops: Record<string, number> = {};
+      for (const op of recorded.ops) ops[op.kind] = (ops[op.kind] ?? 0) + 1;
+      const fixture = { name, exact: compare(composed, replayed), direct: compare(direct, replayed) };
+      results.push({
+        fixture: engineDeviation ? { ...fixture, engineDeviation } : fixture,
+        geometry: checkGeometry(name, recorded, engineDeviation),
+        ops,
+      });
+    } catch (error) {
+      results.push({ fixture: { name, error: String(error) } });
+    }
+  }
+  return results;
+};
 
 (globalThis as { runFixtures?: () => FixtureResult[] }).runFixtures = run;
 (globalThis as { runGeometry?: () => GeometryResult[] }).runGeometry = runGeometry;
+(globalThis as { runCorpus?: typeof runCorpus }).runCorpus = runCorpus;

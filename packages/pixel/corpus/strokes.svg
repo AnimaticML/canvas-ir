@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="160">
+  <!-- engine-deviation: Skia measures dash lengths along its own curve approximation,
+       so its dashes on curves drift from the exact arc length by about 0.2%. -->
+  <g fill="none" stroke="#234" stroke-width="10">
+    <path d="M15 20 H60" stroke-linecap="butt"/>
+    <path d="M15 40 H60" stroke-linecap="round"/>
+    <path d="M15 60 H60" stroke-linecap="square"/>
+    <path d="M80 30 l20 -20 l20 20" stroke-linejoin="miter"/>
+    <path d="M80 60 l20 -20 l20 20" stroke-linejoin="round"/>
+    <path d="M80 90 l20 -20 l20 20" stroke-linejoin="bevel"/>
+    <path d="M140 60 l10 -50 l10 50" stroke-linejoin="miter" stroke-miterlimit="2"/>
+  </g>
+  <g fill="none" stroke="#c30" stroke-width="3">
+    <path d="M15 100 H190" stroke-dasharray="10 5"/>
+    <path d="M15 115 H190" stroke-dasharray="15,5,3,5" stroke-dashoffset="7"/>
+    <circle cx="40" cy="140" r="15" stroke-dasharray="6 3"/>
+    <rect x="70" y="125" width="50" height="30" rx="8" stroke-dasharray="20 4 2 4"/>
+    <path d="M140 150 C150 120 170 160 190 125" stroke-dasharray="5" stroke-linecap="round"/>
+  </g>
+</svg>

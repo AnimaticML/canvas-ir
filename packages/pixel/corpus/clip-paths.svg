@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="160">
+  <defs>
+    <clipPath id="circle"><circle cx="50" cy="45" r="35"/></clipPath>
+    <clipPath id="bbox" clipPathUnits="objectBoundingBox"><path d="M0.5 0 L1 1 L0 1 Z"/></clipPath>
+    <clipPath id="two"><rect x="110" y="90" width="30" height="60"/><rect x="150" y="90" width="30" height="60" transform="rotate(10 165 120)"/></clipPath>
+    <clipPath id="star"><path d="M50 90 L70 150 L20 110 H80 L30 150 Z" clip-rule="evenodd"/></clipPath>
+  </defs>
+  <g clip-path="url(#circle)">
+    <rect width="100" height="80" fill="#69c"/>
+    <path d="M0 0 L100 80" stroke="#fff" stroke-width="10"/>
+  </g>
+  <rect x="110" y="10" width="80" height="60" fill="#c96" clip-path="url(#bbox)"/>
+  <rect x="100" y="85" width="100" height="75" fill="#396" clip-path="url(#two)"/>
+  <rect x="0" y="85" width="100" height="75" fill="#c33" clip-path="url(#star)"/>
+</svg>

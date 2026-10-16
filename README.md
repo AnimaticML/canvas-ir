@@ -6,20 +6,21 @@ Design: [docs/design.md](docs/design.md).
 
 ## Status
 
-Phases 1 and 2 of 5: recording, the IR, serialization and replay; geometry queries.
+Phases 1 to 3 of 5: recording, the IR, serialization and replay; geometry queries; the full Canvas 2D drawing API.
 
 | Works now | Not yet |
 | --- | --- |
-| Paths with the spec's construction rules: `moveTo`, `lineTo`, `quadraticCurveTo`, `bezierCurveTo`, `arc`, `arcTo`, `ellipse`, `rect`, `closePath` | `roundRect`, `Path2D` |
-| `fill`, `stroke`, `fillRect`, `strokeRect`, `clearRect` | `clip`, `isPointInPath`, `isPointInStroke` |
-| All transform calls, `save`/`restore`/`reset`, line styles and dashes, alpha, compositing, shadows, filter | Gradients and patterns |
-| Replay onto any real 2D context | Text, images, pixel access |
-| Validated JSON round trip | Intersections between ops, anchors |
-| Geometry: exact bounds, hit tests, rect queries, closest point, moving ops | Groups and events (phase 5) |
+| Paths with the spec's construction rules, including `arc`, `arcTo`, `ellipse`, `roundRect`, and `Path2D` with SVG path data | Pixel access: `getImageData`, `putImageData`, `createImageData` |
+| `fill`, `stroke`, `clip`, the rect helpers, `isPointInPath`, `isPointInStroke` | Patterns or gradients made by another context |
+| Colors (normalized like browsers), gradients and patterns | Text layout beyond single runs (phase 4) |
+| `drawImage`, `fillText`, `strokeText`, `measureText` | Intersections between ops, anchors |
+| All transform calls, `save`/`restore`/`reset`, line styles and dashes, alpha, compositing, shadows, filter, image smoothing | Groups and events (phase 5) |
+| Replay onto any real 2D context; validated JSON round trip | |
+| Geometry: exact bounds, hit tests, rect queries, closest point, moving ops | |
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
-Both are checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts) is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same fixtures must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
+All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
 
 ## Use
 
@@ -32,12 +33,14 @@ ctx.beginPath();
 ctx.arc(0, 0, 20, 0, Math.PI * 2);
 ctx.fillStyle = "#0ea5e9";
 ctx.fill();
+ctx.drawImage(img, 0, 0);    // stored by reference: { src, width, height }
+ctx.fillText("Hi", 10, 80);  // measured when drawn, so geometry needs no fonts
 
 const doc = ctx.getDocument();
 const json = serializeDocument(doc);
 
-// Later, in a browser:
-replayDocument(canvas.getContext("2d")!, doc);
+// Later, in a browser; images are looked up by the src they were recorded with:
+replayDocument(canvas.getContext("2d")!, doc, { images: (src) => imageCache.get(src) });
 
 // Anywhere, no browser needed:
 const scene = new Scene(doc);
@@ -49,7 +52,9 @@ scene.transform("o0", { a: 1, b: 0, c: 0, d: 1, e: 10, f: 0 });
 
 ## How the IR stores drawing
 
-- Each op (`fill`, `stroke`, `clear`) keeps the transform and drawing state in effect when it was painted.
+- Each op (`fill`, `stroke`, `clear`, `image`, `text`) keeps the transform, drawing state and clip in effect when it was painted. A clip is stored on each op it applies to as a list of paths, so every op stands alone.
+- Paints are plain data: a color string, or a gradient or pattern with its stops, geometry and transform as they were when the op was drawn.
+- Images are references (`src`, width, height); `describeImage` decides what a reference is, and replay resolves it with `images`. Text keeps its string, font state and the measurement taken when it was drawn; measurement can be injected with `measureText`.
 - Path coordinates are stored as the caller passed them. Each subpath start and segment points at the matrix that was current when it was added, so a path built across transform changes stays exact, and `arc`/`ellipse` stay true curves under any transform.
 - `arc` and `ellipse` are kept as separate segment kinds, and a path an `arc` or `ellipse` began records that it had no `moveTo`, because browsers rasterize those cases differently.
 - Calls follow the Canvas 2D spec: `lineTo` with no subpath acts as `moveTo`, `arc` adds a line to its start point, `closePath` starts a new subpath at the old start, and calls with `NaN` or `Infinity` are ignored.
@@ -60,6 +65,7 @@ scene.transform("o0", { a: 1, b: 0, c: 0, d: 1, e: 10, f: 0 });
 - Bounds are exact: curve and arc extrema are solved analytically. Hit tests and rect queries are exact for lines and within the flattening tolerance (default 0.1 world units) for curves.
 - A uniform grid narrows each query to nearby ops. Moving or replacing an op recomputes only that op.
 - A `clearRect` hides whatever it covers from hit tests. Ops drawn with `globalAlpha` 0 are skipped unless asked for.
+- A point must be inside every clip path of an op to hit it. Images hit-test as the part of their destination the source covers, text as its ink box from the recorded measurement.
 
 ## Develop
 

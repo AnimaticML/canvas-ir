@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="160">
+  <defs>
+    <path id="curve" d="M15 120 C50 30 150 30 185 120"/>
+  </defs>
+  <use xlink:href="#curve" fill="none" stroke="#ccc"/>
+  <text font-family="sans-serif" font-size="16" fill="#246">
+    <textPath xlink:href="#curve">Text along a curve</textPath>
+  </text>
+</svg>

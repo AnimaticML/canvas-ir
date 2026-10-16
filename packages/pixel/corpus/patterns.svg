@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="160">
+  <defs>
+    <pattern id="dots" width="10" height="10" patternUnits="userSpaceOnUse">
+      <rect width="10" height="10" fill="#eef"/>
+      <circle cx="5" cy="5" r="3" fill="#36c"/>
+    </pattern>
+    <pattern id="stripes" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="4" height="8" fill="#c63"/>
+      <rect x="4" width="4" height="8" fill="#fc9"/>
+    </pattern>
+  </defs>
+  <rect x="10" y="10" width="80" height="60" fill="url(#dots)"/>
+  <circle cx="145" cy="40" r="30" fill="url(#stripes)" stroke="#333"/>
+  <path d="M10 90 h180 v60 h-180z M40 105 h120 v30 h-120z" fill="url(#stripes)" fill-rule="evenodd"/>
+</svg>
