@@ -155,9 +155,9 @@ describe("replay", () => {
     expect((doc.ops[0] as FillOp).path.subpaths[0]!.startImplied).toBeUndefined();
     const { target, calls } = callLog();
     replayDocument(target, doc);
-    expect(calls.filter((c) => /^(moveTo|ellipse)\(/.test(c))).toEqual([
+    expect(calls.filter((c) => /^(moveTo|arc)\(/.test(c))).toEqual([
       "moveTo(15,10)",
-      `ellipse(10,10,5,5,0,0,${Math.PI},false)`,
+      `arc(10,10,5,0,${Math.PI},false)`,
     ]);
   });
 

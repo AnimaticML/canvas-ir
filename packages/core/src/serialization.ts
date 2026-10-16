@@ -12,6 +12,17 @@ const segment = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("cubic"), m: matrixIndex, cp1: point, cp2: point, to: point }).strict(),
   z
     .object({
+      kind: z.literal("arc"),
+      m: matrixIndex,
+      center: point,
+      radius: finite.nonnegative(),
+      startAngle: finite,
+      endAngle: finite,
+      counterclockwise: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("ellipse"),
       m: matrixIndex,
       center: point,
@@ -29,11 +40,12 @@ const subpath = z
   .object({
     m: matrixIndex,
     start: point,
-    segments: z.array(segment).min(1),
+    segments: z.array(segment),
     closed: z.boolean(),
     startImplied: z.literal(true).optional(),
   })
-  .strict();
+  .strict()
+  .refine((sub) => sub.segments.length > 0 || sub.closed, "an open subpath needs a segment");
 
 const pathGeometry = z
   .object({ matrices: z.array(matrix).min(1), subpaths: z.array(subpath).min(1) })

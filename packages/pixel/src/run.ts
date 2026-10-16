@@ -3,7 +3,7 @@
 // applied as `setTransform` with the same matrix, and may differ from plain direct
 // drawing only in anti-aliased edge pixels (see withComposedTransforms in page.ts).
 import { chromium } from "playwright-core";
-import type { Comparison, FixtureResult } from "./page";
+import type { Comparison, FixtureResult, GeometryResult } from "./page";
 
 const describe = (c: Comparison): string =>
   c.differentPixels === 0
@@ -36,9 +36,26 @@ try {
       r.error ??
       `exact: ${describe(r.exact!)}; direct drawing: ${describe(r.direct!)}`;
     console.log(`${ok ? "pass" : "FAIL"}  ${r.name}  (${detail})`);
-    if (r.engineDeviation) console.log(`      known deviation: ${r.engineDeviation}`);
+    if (r.engineDeviation && r.exact?.differentPixels) console.log(`      known deviation: ${r.engineDeviation}`);
   }
-  console.log(`\n${results.length - failed} of ${results.length} fixtures replay pixel-equal`);
+  console.log(`\n${results.length - failed} of ${results.length} fixtures replay pixel-equal\n`);
+
+  // Hit tests must agree with Chromium's isPointInPath / isPointInStroke away from edges.
+  const geometry = await page.evaluate(() =>
+    (globalThis as unknown as { runGeometry: () => GeometryResult[] }).runGeometry(),
+  );
+  let geometryFailed = 0;
+  for (const r of geometry) {
+    // A known engine deviation may disagree on up to 1% of points.
+    const ok = r.engineDeviation ? r.mismatchCount <= r.compared * 0.01 : r.mismatchCount === 0;
+    if (!ok) geometryFailed++;
+    const detail = r.mismatchCount > 0 ? `, ${r.mismatchCount} disagree` : "";
+    console.log(`${ok ? "pass" : "FAIL"}  hit test: ${r.name}  (${r.compared} points${detail})`);
+    if (!ok) for (const m of r.mismatches) console.log(`      ${m}`);
+    if (r.engineDeviation && r.mismatchCount > 0) console.log(`      known deviation: ${r.engineDeviation}`);
+  }
+  console.log(`\n${geometry.length - geometryFailed} of ${geometry.length} fixtures hit-test like Chromium`);
+  failed += geometryFailed;
   if (failed > 0) process.exitCode = 1;
 } finally {
   await browser.close();

@@ -29,7 +29,7 @@ describe("arc and ellipse", () => {
   test("with no subpath, the path starts at the arc's start point and adds no line", () => {
     const path = pathOf((ctx) => ctx.arc(0, 0, 10, 0, Math.PI));
     expect(path.subpaths[0]!.start).toEqual({ x: 10, y: 0 });
-    expect(path.subpaths[0]!.segments.map((s) => s.kind)).toEqual(["ellipse"]);
+    expect(path.subpaths[0]!.segments.map((s) => s.kind)).toEqual(["arc"]);
   });
 
   test("after a point elsewhere, a line connects it to the arc's start", () => {
@@ -38,7 +38,7 @@ describe("arc and ellipse", () => {
       ctx.arc(0, 0, 10, 0, Math.PI);
     });
     const segments = path.subpaths[0]!.segments;
-    expect(segments.map((s) => s.kind)).toEqual(["line", "ellipse"]);
+    expect(segments.map((s) => s.kind)).toEqual(["line", "arc"]);
     expect(segments[0]).toEqual({ kind: "line", m: 0, to: { x: 10, y: 0 } });
   });
 
@@ -47,7 +47,7 @@ describe("arc and ellipse", () => {
       ctx.moveTo(10, 0);
       ctx.arc(0, 0, 10, 0, Math.PI);
     });
-    expect(path.subpaths[0]!.segments.map((s) => s.kind)).toEqual(["ellipse"]);
+    expect(path.subpaths[0]!.segments.map((s) => s.kind)).toEqual(["arc"]);
   });
 
   test("a sweep past a full turn ends where it started", () => {
@@ -56,18 +56,16 @@ describe("arc and ellipse", () => {
       ctx.arc(0, 0, 10, 0, 3 * Math.PI);
       ctx.arc(0, 0, 10, 0, Math.PI / 2);
     });
-    expect(path.subpaths[0]!.segments.map((s) => s.kind)).toEqual(["ellipse", "ellipse"]);
+    expect(path.subpaths[0]!.segments.map((s) => s.kind)).toEqual(["arc", "arc"]);
   });
 
-  test("is stored as called, with rx === ry", () => {
+  test("is stored as called", () => {
     const path = pathOf((ctx) => ctx.arc(1, 2, 3, 0.5, 1.5, true));
     expect(path.subpaths[0]!.segments[0]).toEqual({
-      kind: "ellipse",
+      kind: "arc",
       m: 0,
       center: { x: 1, y: 2 },
-      rx: 3,
-      ry: 3,
-      rotation: 0,
+      radius: 3,
       startAngle: 0.5,
       endAngle: 1.5,
       counterclockwise: true,
@@ -90,10 +88,10 @@ describe("arcTo", () => {
     });
     const [line, arc] = path.subpaths[0]!.segments;
     expect(line).toEqual({ kind: "line", m: 0, to: { x: 8, y: 0 } });
-    if (arc?.kind !== "ellipse") throw new Error("expected an ellipse segment");
+    if (arc?.kind !== "arc") throw new Error("expected an arc segment");
     expect(arc.center.x).toBeCloseTo(8);
     expect(arc.center.y).toBeCloseTo(2);
-    expect(arc.rx).toBe(2);
+    expect(arc.radius).toBe(2);
     expect(arc.startAngle).toBeCloseTo(-Math.PI / 2);
     expect(arc.endAngle).toBeCloseTo(0);
     expect(arc.counterclockwise).toBe(false);
@@ -105,7 +103,7 @@ describe("arcTo", () => {
       ctx.arcTo(10, 0, 10, -10, 2);
     });
     const arc = path.subpaths[0]!.segments[1]!;
-    expect(arc.kind === "ellipse" && arc.counterclockwise).toBe(true);
+    expect(arc.kind === "arc" && arc.counterclockwise).toBe(true);
   });
 
   test.each([
@@ -230,7 +228,7 @@ describe("transforms inside a path", () => {
       ctx.resetTransform();
       ctx.arc(0, 0, 10, 0, 1);
     });
-    expect(path.subpaths[0]!.segments.map((s) => s.kind)).toEqual(["ellipse"]);
+    expect(path.subpaths[0]!.segments.map((s) => s.kind)).toEqual(["arc"]);
   });
 });
 

@@ -6,7 +6,7 @@ Design: [docs/design.md](docs/design.md).
 
 ## Status
 
-Phase 1 of 5: recording, the IR, serialization and replay.
+Phases 1 and 2 of 5: recording, the IR, serialization and replay; geometry queries.
 
 | Works now | Not yet |
 | --- | --- |
@@ -14,16 +14,17 @@ Phase 1 of 5: recording, the IR, serialization and replay.
 | `fill`, `stroke`, `fillRect`, `strokeRect`, `clearRect` | `clip`, `isPointInPath`, `isPointInStroke` |
 | All transform calls, `save`/`restore`/`reset`, line styles and dashes, alpha, compositing, shadows, filter | Gradients and patterns |
 | Replay onto any real 2D context | Text, images, pixel access |
-| Validated JSON round trip | Geometry queries (phase 2) |
+| Validated JSON round trip | Intersections between ops, anchors |
+| Geometry: exact bounds, hit tests, rect queries, closest point, moving ops | Groups and events (phase 5) |
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
-Replay is checked in headless Chromium: every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts) is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel.
+Both are checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts) is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same fixtures must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
 
 ## Use
 
 ```ts
-import { RecordingContext, replayDocument, serializeDocument } from "canvas-ir";
+import { RecordingContext, Scene, replayDocument, serializeDocument } from "canvas-ir";
 
 const ctx = new RecordingContext();
 ctx.translate(50, 50);
@@ -37,13 +38,28 @@ const json = serializeDocument(doc);
 
 // Later, in a browser:
 replayDocument(canvas.getContext("2d")!, doc);
+
+// Anywhere, no browser needed:
+const scene = new Scene(doc);
+scene.hitTest({ x: 55, y: 50 });                           // [{ id: "o0", op }], topmost first
+scene.bounds("o0");                                        // { x: 30, y: 30, width: 40, height: 40 }
+scene.queryRect({ x: 0, y: 0, width: 100, height: 100 }); // ["o0"]
+scene.transform("o0", { a: 1, b: 0, c: 0, d: 1, e: 10, f: 0 });
 ```
 
 ## How the IR stores drawing
 
 - Each op (`fill`, `stroke`, `clear`) keeps the transform and drawing state in effect when it was painted.
 - Path coordinates are stored as the caller passed them. Each subpath start and segment points at the matrix that was current when it was added, so a path built across transform changes stays exact, and `arc`/`ellipse` stay true curves under any transform.
+- `arc` and `ellipse` are kept as separate segment kinds, and a path an `arc` or `ellipse` began records that it had no `moveTo`, because browsers rasterize those cases differently.
 - Calls follow the Canvas 2D spec: `lineTo` with no subpath acts as `moveTo`, `arc` adds a line to its start point, `closePath` starts a new subpath at the old start, and calls with `NaN` or `Infinity` are ignored.
+
+## How geometry works
+
+- `Scene` derives a shape per op on first use and caches it: the path flattened in world space for fills, and for strokes a union of convex pieces (a quad per segment, plus joins and caps) built in the stroke's own space, so width, dashes and joins stay right under non-uniform scale and skew.
+- Bounds are exact: curve and arc extrema are solved analytically. Hit tests and rect queries are exact for lines and within the flattening tolerance (default 0.1 world units) for curves.
+- A uniform grid narrows each query to nearby ops. Moving or replacing an op recomputes only that op.
+- A `clearRect` hides whatever it covers from hit tests. Ops drawn with `globalAlpha` 0 are skipped unless asked for.
 
 ## Develop
 
@@ -51,7 +67,8 @@ replayDocument(canvas.getContext("2d")!, doc);
 bun install
 bun test
 bun run typecheck
+bun run bench
 bun run test:pixel   # needs Chromium; set CHROMIUM_PATH if Playwright can't find one
 ```
 
-`packages/core` is the library and `packages/pixel` is the browser replay test. Tooling such as the playground will live in its own packages and depend on the core, never the reverse.
+`packages/core` is the library and `packages/pixel` holds the browser checks. Tooling such as the playground will live in its own packages and depend on the core, never the reverse.

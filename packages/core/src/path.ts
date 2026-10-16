@@ -1,5 +1,5 @@
 import { allFinite, applyToPoint, ellipsePoint, invert, sameMatrix } from "./math";
-import type { Matrix2D, PathGeometry, Point, Segment, Subpath } from "./types";
+import type { ArcSegment, EllipseSegment, Matrix2D, PathGeometry, Point, Segment, Subpath } from "./types";
 
 const TWO_PI = Math.PI * 2;
 
@@ -91,7 +91,7 @@ export class PathBuilder {
   arc(ctm: Matrix2D, x: number, y: number, radius: number, startAngle: number, endAngle: number, counterclockwise: boolean): void {
     if (!allFinite(x, y, radius, startAngle, endAngle)) return;
     if (radius < 0) throw indexSizeError(`The radius provided (${radius}) is negative.`);
-    this.addEllipse(ctm, x, y, radius, radius, 0, startAngle, endAngle, counterclockwise);
+    this.addArc(ctm, { kind: "arc", m: 0, center: { x, y }, radius, startAngle, endAngle, counterclockwise });
   }
 
   ellipse(
@@ -108,7 +108,17 @@ export class PathBuilder {
     if (!allFinite(x, y, radiusX, radiusY, rotation, startAngle, endAngle)) return;
     if (radiusX < 0) throw indexSizeError(`The major-axis radius provided (${radiusX}) is negative.`);
     if (radiusY < 0) throw indexSizeError(`The minor-axis radius provided (${radiusY}) is negative.`);
-    this.addEllipse(ctm, x, y, radiusX, radiusY, rotation, startAngle, endAngle, counterclockwise);
+    this.addArc(ctm, {
+      kind: "ellipse",
+      m: 0,
+      center: { x, y },
+      rx: radiusX,
+      ry: radiusY,
+      rotation,
+      startAngle,
+      endAngle,
+      counterclockwise,
+    });
   }
 
   /** `arcTo`, lowered as the spec describes it: a line to the first tangent point, then a circular arc. */
@@ -153,7 +163,7 @@ export class PathBuilder {
     const endAngle = Math.atan2(t2.y - center.y, t2.x - center.x);
     // Going P0 -> P1 -> P2 turns one way; the arc bends the same way.
     const counterclockwise = cross > 0;
-    this.addEllipse(ctm, center.x, center.y, radius, radius, 0, startAngle, endAngle, counterclockwise);
+    this.addArc(ctm, { kind: "arc", m: 0, center, radius, startAngle, endAngle, counterclockwise });
   }
 
   rect(ctm: Matrix2D, x: number, y: number, w: number, h: number): void {
@@ -182,7 +192,7 @@ export class PathBuilder {
   }
 
   /**
-   * An immutable copy for an op. Subpaths with no segments draw nothing and are
+   * An immutable copy for an op. Open subpaths with no segments draw nothing and are
    * left out; matrices are renumbered in order of first use, so equal paths
    * snapshot to equal data however they were built.
    */
@@ -200,7 +210,8 @@ export class PathBuilder {
     };
     const subpaths: Subpath[] = [];
     for (const subpath of this.subpaths) {
-      if (subpath.segments.length === 0) continue;
+      // A lone point counts only once closed: a stroke draws its caps, as browsers do.
+      if (subpath.segments.length === 0 && !subpath.closed) continue;
       const m = use(subpath.m);
       const segments = subpath.segments.map((segment) => ({ ...segment, m: use(segment.m) }));
       subpaths.push(
@@ -212,18 +223,11 @@ export class PathBuilder {
     return { matrices, subpaths };
   }
 
-  private addEllipse(
-    ctm: Matrix2D,
-    x: number,
-    y: number,
-    rx: number,
-    ry: number,
-    rotation: number,
-    startAngle: number,
-    endAngle: number,
-    counterclockwise: boolean,
-  ): void {
-    const start = ellipsePoint(x, y, rx, ry, rotation, startAngle);
+  /** Adds an `arc` or `ellipse` segment (its `m` is filled in here) with the spec's connecting line. */
+  private addArc(ctm: Matrix2D, segment: ArcSegment | EllipseSegment): void {
+    const { center, startAngle, endAngle, counterclockwise } = segment;
+    const [rx, ry, rotation] = segment.kind === "arc" ? [segment.radius, segment.radius, 0] : [segment.rx, segment.ry, segment.rotation];
+    const start = ellipsePoint(center.x, center.y, rx, ry, rotation, startAngle);
     const startWorld = applyToPoint(ctm, start.x, start.y);
     if (this.current === null) {
       this.moveTo(ctm, start.x, start.y);
@@ -231,18 +235,8 @@ export class PathBuilder {
     } else if (!this.isLastWorld(startWorld)) {
       this.push({ kind: "line", m: this.matrixIndex(ctm), to: start });
     }
-    this.push({
-      kind: "ellipse",
-      m: this.matrixIndex(ctm),
-      center: { x, y },
-      rx,
-      ry,
-      rotation,
-      startAngle,
-      endAngle,
-      counterclockwise,
-    });
-    const end = ellipsePoint(x, y, rx, ry, rotation, effectiveEndAngle(startAngle, endAngle, counterclockwise));
+    this.push({ ...segment, m: this.matrixIndex(ctm) });
+    const end = ellipsePoint(center.x, center.y, rx, ry, rotation, effectiveEndAngle(startAngle, endAngle, counterclockwise));
     this.setLast(ctm, end.x, end.y);
   }
 

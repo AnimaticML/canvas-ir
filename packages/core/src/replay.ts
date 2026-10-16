@@ -30,6 +30,7 @@ export interface ReplayTarget {
   lineTo(x: number, y: number): void;
   quadraticCurveTo(cpx: number, cpy: number, x: number, y: number): void;
   bezierCurveTo(cp1x: number, cp1y: number, cp2x: number, cp2y: number, x: number, y: number): void;
+  arc(x: number, y: number, radius: number, startAngle: number, endAngle: number, counterclockwise?: boolean): void;
   ellipse(
     x: number,
     y: number,
@@ -77,6 +78,16 @@ const replaySegment = (target: ReplayTarget, segment: Segment): void => {
     case "cubic":
       target.bezierCurveTo(segment.cp1.x, segment.cp1.y, segment.cp2.x, segment.cp2.y, segment.to.x, segment.to.y);
       return;
+    case "arc":
+      target.arc(
+        segment.center.x,
+        segment.center.y,
+        segment.radius,
+        segment.startAngle,
+        segment.endAngle,
+        segment.counterclockwise,
+      );
+      return;
     case "ellipse":
       target.ellipse(
         segment.center.x,
@@ -114,7 +125,8 @@ const replayPath = (target: ReplayTarget, path: PathGeometry, paintMatrix: Matri
   use(world[path.subpaths[0]!.m]!);
   target.beginPath();
   for (const subpath of path.subpaths) {
-    if (!(subpath.startImplied && subpath.segments[0]?.kind === "ellipse")) {
+    const first = subpath.segments[0]?.kind;
+    if (!(subpath.startImplied && (first === "arc" || first === "ellipse"))) {
       use(world[subpath.m]!);
       target.moveTo(subpath.start.x, subpath.start.y);
     }

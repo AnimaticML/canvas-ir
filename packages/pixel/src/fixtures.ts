@@ -8,7 +8,8 @@ export interface Fixture {
   readonly draw: (ctx: CanvasRenderingContext2D) => void;
   /**
    * Set where Chromium departs from the spec and the IR follows the spec. Such a
-   * fixture may differ from direct drawing in anti-aliased edge pixels only.
+   * fixture may differ from direct drawing in anti-aliased edge pixels only, and
+   * its hit tests may disagree with Chromium's on a small share of points.
    */
   readonly engineDeviation?: string;
 }
@@ -254,6 +255,97 @@ export const fixtures: readonly Fixture[] = [
       ctx.lineTo(180, 140);
       ctx.translate(Number.NaN, 0);
       ctx.lineTo(20, 140);
+      ctx.stroke();
+    },
+  },
+  {
+    name: "arc sweep edge cases",
+    draw: (ctx) => {
+      ctx.beginPath();
+      ctx.arc(40, 40, 25, 0, Math.PI * 2, true);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(110, 40, 25, Math.PI * 2, 0);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(40, 115, 25, 1, 0.5, true);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(110, 115, 25, 4, 1);
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(170, 80, 20, -7, 3, true);
+      ctx.stroke();
+    },
+  },
+  {
+    name: "joins and caps on curves",
+    draw: (ctx) => {
+      ctx.lineWidth = 9;
+      const shape = (y: number) => {
+        ctx.beginPath();
+        ctx.moveTo(10, y + 30);
+        ctx.quadraticCurveTo(40, y - 20, 60, y + 30);
+        ctx.bezierCurveTo(70, y - 10, 100, y - 10, 110, y + 25);
+        ctx.arc(140, y + 25, 30, Math.PI, 1.2, false);
+        ctx.lineTo(190, y + 5);
+      };
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      shape(10);
+      ctx.stroke();
+      ctx.lineJoin = "bevel";
+      ctx.lineCap = "square";
+      shape(60);
+      ctx.stroke();
+      ctx.lineJoin = "miter";
+      ctx.lineCap = "butt";
+      ctx.miterLimit = 4;
+      shape(110);
+      ctx.stroke();
+    },
+  },
+  {
+    name: "dashed ellipse",
+    engineDeviation:
+      "Skia measures dash lengths along its own curve approximation, so its dashes drift from the exact arc length by about 0.2%.",
+    draw: (ctx) => {
+      ctx.lineWidth = 6;
+      ctx.setLineDash([14, 7]);
+      ctx.lineDashOffset = 3;
+      ctx.beginPath();
+      ctx.ellipse(100, 80, 80, 50, 0.4, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.stroke();
+    },
+  },
+  {
+    name: "dashed closed rect and zero-length subpaths",
+    draw: (ctx) => {
+      ctx.lineWidth = 6;
+      ctx.setLineDash([14, 7]);
+      ctx.lineDashOffset = 3;
+      ctx.beginPath();
+      ctx.rect(120, 20, 60, 40);
+      ctx.moveTo(20, 20);
+      ctx.lineTo(100, 30);
+      ctx.lineTo(60, 90);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.lineWidth = 10;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(130, 110);
+      ctx.lineTo(130, 110);
+      ctx.stroke();
+      ctx.lineCap = "square";
+      ctx.beginPath();
+      ctx.moveTo(165, 110);
+      ctx.closePath();
+      ctx.moveTo(165, 140);
+      ctx.lineTo(165, 140);
       ctx.stroke();
     },
   },

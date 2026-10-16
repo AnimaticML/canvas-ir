@@ -26,7 +26,7 @@ export interface Rect {
  * current transform when it was added, so a path built across transform changes
  * stays exact. A segment starts where the previous one ended, in world space.
  */
-export type Segment = LineSegment | QuadSegment | CubicSegment | EllipseSegment;
+export type Segment = LineSegment | QuadSegment | CubicSegment | ArcSegment | EllipseSegment;
 
 export interface LineSegment {
   readonly kind: "line";
@@ -49,7 +49,21 @@ export interface CubicSegment {
   readonly to: Point;
 }
 
-/** An `arc` or `ellipse` call as made. `arc` is stored with `rx === ry` and `rotation === 0`. */
+/**
+ * An `arc` call as made (also what `arcTo` lowers to). Kept apart from
+ * `ellipse` because browsers rasterize the two calls slightly differently.
+ */
+export interface ArcSegment {
+  readonly kind: "arc";
+  readonly m: number;
+  readonly center: Point;
+  readonly radius: number;
+  readonly startAngle: number;
+  readonly endAngle: number;
+  readonly counterclockwise: boolean;
+}
+
+/** An `ellipse` call as made. */
 export interface EllipseSegment {
   readonly kind: "ellipse";
   readonly m: number;

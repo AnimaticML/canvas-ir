@@ -107,7 +107,8 @@ The engine answers queries in world space from cached, per-op derived shapes, be
 - **Derived shapes per op:** world-space segments, flattened polylines keyed by tolerance, fill outline and stroke outline (width, caps, joins, dash). Text and image ops derive a box (or line boxes) through their matrix.
 - **Paint-aware results.** A hit on a stroke uses the stroke outline, not a distance threshold. Clips cut both fill and stroke. Fully transparent paint can be excluded by option.
 - **Queries:** `bounds` (geometry and paint), `hitTest(point, tolerance)` in z-order with the group chain, `queryRect` (intersects, contains, enclosed), `intersections(a, b)`, `closestPoint` with tangent and normal, `anchors` (vertices, extremes, midpoints, text baselines and box corners), `isPointInPath` / `isPointInStroke`.
-- **Performance:** a spatial index (R-tree or uniform grid) over op bounds as the broad phase. Caches are invalidated by op version, so moving one object recomputes only that object. Target: a hit test on 10,000 ops well under a frame, measured by a benchmark in CI.
+- **Stroke outlines** are a union of convex pieces (a quad per flattened segment, plus join and cap pieces) built in the stroke's own space and mapped to world space. Joins and caps use the curve's exact end tangents, since a sharp miter magnifies any error in direction. This is checked against Chromium's `isPointInStroke`.
+- **Performance:** a uniform grid over op bounds as the broad phase; ops spanning many cells are kept aside as always-candidates. Caches are invalidated by op version, so moving one object recomputes only that object. Target: a hit test on 10,000 ops well under a frame, measured by a benchmark in CI.
 - **Precision:** line and arc queries are analytic. Bézier queries use flattening with an explicit tolerance in world units, plus Newton refinement for closest point.
 
 Transforms are applied to ops by composing onto their stored matrices. Nothing is re-recorded, and caches for that op are dropped.
@@ -168,8 +169,6 @@ The order puts Canvas fidelity and correct geometry first, because everything el
 
 - Which SVG-to-canvas renderer anchors the corpus (canvg is the likely one), and which Canvas calls does it actually use?
 - Groups: explicit `beginGroup`/`endGroup` extension calls, or inferred from `save`/`restore` nesting with an id?
-- Stroke outlines: compute exact offset curves, or flatten-and-offset polylines with a tolerance?
 - How much of the rich-text block layout (lists, headings, spacing) belongs in this project versus the editor integration?
 - Should `drawImage` ops carry intrinsic size only, or an optional alpha mask so transparent image pixels don't register hits?
-- Spatial index: R-tree or uniform grid for typical board densities?
 - Should interaction move ahead of text layout, right after geometry?
