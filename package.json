@@ -1,0 +1,14 @@
+{
+  "name": "canvas-ir-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc -p packages/core"
+  },
+  "devDependencies": {
+    "@types/bun": "1.2.17",
+    "typescript": "5.8.3"
+  }
+}

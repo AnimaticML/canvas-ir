@@ -1,0 +1,13 @@
+{
+  "name": "canvas-ir",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Record Canvas 2D drawing into a typed, JSON-safe IR for geometry, transforms, rendering and events",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "zod": "3.25.76"
+  }
+}
