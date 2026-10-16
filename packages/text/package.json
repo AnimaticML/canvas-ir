@@ -1,0 +1,15 @@
+{
+  "name": "@canvas-ir/text",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Rich text layout for CanvasIR: blocks, Pretext line breaking, path containers and bidi, drawn as fillText calls",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@chenglou/pretext": "1.0.0",
+    "bidi-js": "1.1.0",
+    "canvas-ir": "workspace:*"
+  }
+}

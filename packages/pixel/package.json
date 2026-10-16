@@ -4,13 +4,16 @@
   "type": "module",
   "scripts": {
     "test": "bun run src/run.ts",
-    "install-browser": "playwright-core install --with-deps chromium"
+    "install-browser": "playwright-core install --with-deps chromium",
+    "capture-text": "bun run src/capture-text.ts"
   },
   "dependencies": {
-    "canvas-ir": "workspace:*"
+    "canvas-ir": "workspace:*",
+    "@canvas-ir/text": "workspace:*"
   },
   "devDependencies": {
     "canvg": "4.0.3",
-    "playwright-core": "1.56.1"
+    "playwright-core": "1.56.1",
+    "@chenglou/pretext": "1.0.0"
   }
 }

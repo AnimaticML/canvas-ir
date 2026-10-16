@@ -49,4 +49,5 @@ export type {
   TextStyle,
 } from "./types";
 export { Scene, transformOp } from "./geometry/scene";
+export { pathRings } from "./geometry/flatten";
 export type { ClosestPointResult, Hit, HitTestOptions, RectQueryMode, SceneOptions } from "./geometry/scene";

@@ -7,7 +7,7 @@
     "test": "bun test",
     "test:pixel": "bun run --cwd packages/pixel test",
     "bench": "bun run packages/core/bench/geometry.ts",
-    "typecheck": "tsc -p packages/core && tsc -p packages/pixel"
+    "typecheck": "tsc -p packages/core && tsc -p packages/text && tsc -p packages/pixel"
   },
   "devDependencies": {
     "@types/bun": "1.2.17",

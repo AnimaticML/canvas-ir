@@ -17,6 +17,7 @@ import {
   serializeDocument,
 } from "canvas-ir";
 import { type FixtureEnv, HEIGHT, WIDTH, fixtures } from "./fixtures";
+import "./text-page";
 
 /** The fixtures' image: an opaque 16 by 12 checkerboard with a gradient, so smoothing and mirroring show. */
 const makeImage = (): OffscreenCanvas => {

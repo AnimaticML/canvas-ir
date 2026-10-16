@@ -1,4 +1,4 @@
-import { applyToPoint, multiply } from "../math";
+import { IDENTITY, applyToPoint, multiply } from "../math";
 import type { ArcSegment, EllipseSegment, Matrix2D, PathGeometry, Point } from "../types";
 
 /**
@@ -191,3 +191,7 @@ export const flattenPath = (path: PathGeometry, space: Matrix2D, tolerance: numb
   }
   return result;
 };
+
+/** A path's outline as closed rings in world space, each within `tolerance` of the true curve. */
+export const pathRings = (path: PathGeometry, tolerance = 0.1): Point[][] =>
+  flattenPath(path, IDENTITY, tolerance).map((line) => [...line.points]);

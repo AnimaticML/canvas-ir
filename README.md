@@ -6,21 +6,22 @@ Design: [docs/design.md](docs/design.md).
 
 ## Status
 
-Phases 1 to 3 of 5: recording, the IR, serialization and replay; geometry queries; the full Canvas 2D drawing API.
+Phases 1 to 4 of 5: recording, the IR, serialization and replay; geometry queries; the full Canvas 2D drawing API; rich text layout.
 
 | Works now | Not yet |
 | --- | --- |
 | Paths with the spec's construction rules, including `arc`, `arcTo`, `ellipse`, `roundRect`, and `Path2D` with SVG path data | Pixel access: `getImageData`, `putImageData`, `createImageData` |
 | `fill`, `stroke`, `clip`, the rect helpers, `isPointInPath`, `isPointInStroke` | Patterns or gradients made by another context |
-| Colors (normalized like browsers), gradients and patterns | Text layout beyond single runs (phase 4) |
+| Colors (normalized like browsers), gradients and patterns | Caret and selection helpers for editors |
 | `drawImage`, `fillText`, `strokeText`, `measureText` | Intersections between ops, anchors |
 | All transform calls, `save`/`restore`/`reset`, line styles and dashes, alpha, compositing, shadows, filter, image smoothing | Groups and events (phase 5) |
 | Replay onto any real 2D context; validated JSON round trip | |
+| Rich text layout: paragraphs, headings, lists, mixed fonts, any-shaped containers, obstacles, bidi | |
 | Geometry: exact bounds, hit tests, rect queries, closest point, moving ops | |
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
-All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
+All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
 
 ## Use
 
@@ -50,6 +51,33 @@ scene.queryRect({ x: 0, y: 0, width: 100, height: 100 }); // ["o0"]
 scene.transform("o0", { a: 1, b: 0, c: 0, d: 1, e: 10, f: 0 });
 ```
 
+## Text layout
+
+`@canvas-ir/text` lays out rich text with [Pretext](https://github.com/chenglou/pretext), so lines break where a browser would break them, and draws it as `fillText` calls into any context, a `RecordingContext` included.
+
+```ts
+import { drawTextLayout, layoutText } from "@canvas-ir/text";
+import { pathRings } from "canvas-ir";
+
+const layout = layoutText(
+  {
+    blocks: [
+      { type: "heading", level: 2, content: ["Release notes"] },
+      { type: "paragraph", content: ["Text can be ", { text: "bold", bold: true }, " or ", { text: "code", code: true }, "."] },
+      { type: "list", items: [[{ type: "paragraph", content: ["Lists nest and number."] }]] },
+    ],
+  },
+  {
+    container: { x: 0, y: 0, width: 320 },     // or { rings: pathRings(path) } for any shape
+    obstacles: [{ rings: pathRings(imagePath) }], // text flows around these
+    theme: { fontFamily: '"Inter", sans-serif', fontSize: 16 },
+  },
+);
+drawTextLayout(ctx, layout); // one fillText per run; layout.lines has every line's box and baseline
+```
+
+The layout records the Pretext version, the line-breaking engine and every font it measured in `layout.fingerprint`, so a host can tell when a stored layout came from another environment.
+
 ## How the IR stores drawing
 
 - Each op (`fill`, `stroke`, `clear`, `image`, `text`) keeps the transform, drawing state and clip in effect when it was painted. A clip is stored on each op it applies to as a list of paths, so every op stands alone.
@@ -77,4 +105,4 @@ bun run bench
 bun run test:pixel   # needs Chromium; set CHROMIUM_PATH if Playwright can't find one
 ```
 
-`packages/core` is the library and `packages/pixel` holds the browser checks. Tooling such as the playground will live in its own packages and depend on the core, never the reverse.
+`packages/core` is the library, `packages/text` the text layout layer on top of it, and `packages/pixel` holds the browser checks. After changing a text fixture, run `bun run --cwd packages/pixel capture-text` to capture its measurements and layout from Chromium for the Bun tests. Tooling such as the playground will live in its own packages and depend on the core, never the reverse.

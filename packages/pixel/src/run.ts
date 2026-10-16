@@ -6,6 +6,7 @@
 import { chromium } from "playwright-core";
 import { readdir } from "node:fs/promises";
 import type { Comparison, CorpusResult, FixtureResult, GeometryResult } from "./page";
+import type { TextResult } from "./text-page";
 
 const describe = (c: Comparison): string =>
   c.differentPixels === 0
@@ -90,7 +91,32 @@ try {
   }
   failed += geometryFailed;
   const corpusFailed = failed - failedBefore;
-  console.log(`\n${corpus.length} corpus files, ${corpusFailed === 0 ? "all replay pixel-equal and hit-test like Chromium" : `${corpusFailed} checks failed`}`);
+  console.log(`\n${corpus.length} corpus files, ${corpusFailed === 0 ? "all replay pixel-equal and hit-test like Chromium" : `${corpusFailed} checks failed`}\n`);
+
+  // Text layout: lines must break where the browser's DOM layout breaks them, at the same heights.
+  const texts = await page.evaluate(() =>
+    (globalThis as unknown as { runTextLayouts: () => Promise<TextResult[]> }).runTextLayouts(),
+  );
+  let textFailed = 0;
+  for (const r of texts) {
+    const wrapsDiffer = r.lines.filter((l) => l.ours !== l.dom);
+    const offset = r.lines.filter((l) => !(Math.abs(l.oursTop - l.domTop) <= 1));
+    const shifted = r.lines.filter((l) => !(Math.abs(l.oursLeft - l.domLeft) <= 1 && Math.abs(l.oursRight - l.domRight) <= 1));
+    const heightOff = Math.abs(r.height - r.domHeight) > 1;
+    const ok = !r.error && r.lines.length > 0 && wrapsDiffer.length === 0 && offset.length === 0 && shifted.length === 0 && !heightOff;
+    if (!ok) textFailed++;
+    const detail = r.error ?? `${r.lines.length} lines, height ${r.height.toFixed(2)} vs DOM ${r.domHeight.toFixed(2)}`;
+    console.log(`${ok ? "pass" : "FAIL"}  text: ${r.name}  (${detail})`);
+    for (const l of wrapsDiffer.slice(0, 4)) console.log(`      wraps differ: ours "${l.ours}"\n                    DOM  "${l.dom}"`);
+    for (const l of offset.slice(0, 3)) console.log(`      line top ${l.oursTop.toFixed(2)}, DOM ${l.domTop.toFixed(2)}: "${l.dom.slice(0, 30)}"`);
+    for (const l of shifted.slice(0, 3)) {
+      const span = (a: number, b: number): string => `${a.toFixed(2)}..${b.toFixed(2)}`;
+      console.log(`      line spans ${span(l.oursLeft, l.oursRight)}, DOM ${span(l.domLeft, l.domRight)}: "${l.dom.slice(0, 30)}"`);
+    }
+  }
+  console.log(`\n${texts.length - textFailed} of ${texts.length} text layouts match the DOM`);
+  failed += textFailed;
+
   if (failed > 0) process.exitCode = 1;
 } finally {
   await browser.close();
