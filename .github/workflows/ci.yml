@@ -17,5 +17,6 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run bench
+      - run: bun run --cwd packages/playground build
       - run: bun run --cwd packages/pixel install-browser
       - run: bun run test:pixel

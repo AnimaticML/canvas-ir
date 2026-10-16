@@ -265,7 +265,9 @@ export class RecordingContext {
    * no `meta`, adds to that group again.
    */
   beginGroup(options: { id?: string; meta?: { [key: string]: JsonValue } } = {}): string {
-    const id = options.id ?? `g${this.nextGroupId++}`;
+    let id = options.id;
+    // Automatic ids skip ones already taken, such as groups replayed into this context.
+    while (id === undefined || (options.id === undefined && this.groups.some((g) => g.id === id))) id = `g${this.nextGroupId++}`;
     const parent = this.groupStack[this.groupStack.length - 1];
     const existing = this.groups.find((g) => g.id === id);
     // Opening a closed group again, in the same parent, adds to it: a group's ops needn't be consecutive.

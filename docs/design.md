@@ -21,7 +21,7 @@ Each principle below is a constraint we commit to. The reason is the failure it 
 | --- | --- |
 | **Exact Canvas geometry, not pixel fidelity.** Exact: path construction as the spec defines it (current point after `closePath`, implicit `moveTo` in `bezierCurveTo`, `arc` connecting lines), transforms, the `save`/`restore` state model, method signatures, ignoring non-finite arguments. Stored for replay but not modelled in geometry: shadows, filters, compositing. Out of scope: rasterization and pixel reads. | A partial or "Canvas-like" API breaks the first third-party renderer that draws into it. The value of the project is that unmodified code works. |
 | **Record what was called, not what it means.** Ops store the call's arguments plus the transform and state in effect. Derived data (world-space outlines, bounds) is computed and cached, never the stored truth. | Baking transforms into points loses information: arcs under rotation or scale come out wrong, and text and images can't be represented at all. |
-| **Every op is typed.** Ops are a discriminated union (`fill`, `stroke`, `clear`, later `text`, `image`, `clip`, `group`), versioned from the first release. | An IR that can only hold one kind of op has to be broken to add a second. |
+| **Every op is typed.** Ops are a discriminated union (`fill`, `stroke`, `clear`, `text`, `image`), versioned from the first release. | An IR that can only hold one kind of op has to be broken to add a second. |
 | **Pure core, injected environment.** The core never touches the DOM. Anything environment-dependent (text measurement, image sizes, fonts) is an injected service, called only while recording. | Tests, codecs and servers must run identically in Bun, Node and every browser. |
 | **Measured once, stored.** Whatever was measured while recording (text advance widths, image sizes) is written into the op. | After recording, no query, transform or export ever needs a measurer, so the IR is portable. |
 | **Exact where cheap, flattened where not.** Lines and arcs are queried analytically; Béziers flatten with an explicit tolerance. Results are cached per op and invalidated by version. | Repeated flattening of every op on every query does not scale to a board of thousands of objects. |
@@ -51,7 +51,7 @@ The text layout layer also reads container outlines from the geometry engine, an
 A document is an ordered list of typed ops. Each op keeps the Canvas state it was drawn with, including its own transform, so geometry and replay are both exact. The phase 1 types live in [`packages/core/src/types.ts`](../packages/core/src/types.ts); the target shape is:
 
 ```ts
-type Op = FillOp | StrokeOp | ClearOp | TextOp | ImageOp | ClipOp | GroupOp;
+type Op = FillOp | StrokeOp | ClearOp | TextOp | ImageOp;
 
 interface OpBase {
   id: string;              // stable, assigned at record time
@@ -75,7 +75,7 @@ interface TextOp extends OpBase {
 
 - **Local space plus a matrix.** Path geometry stays in the coordinates the caller used; each subpath start and segment names the matrix it was added under. World-space outlines are derived and cached. Arcs and ellipses stay exact under any affine transform.
 - **Paths keep their source primitives.** `arc`, `ellipse` and curves are stored as themselves, so SVG export and editing tools see what was drawn. They are lowered to Béziers only inside geometry.
-- **Groups are optional structure.** A caller (or a `save`/`restore` convention) can open a group that carries an id and `meta`. Hit tests report the op and its group chain, so "the SVG asset" or "the text block" is selectable as one object.
+- **Groups are optional structure.** A caller opens a group with the `beginGroup`/`endGroup` extension calls; it carries an id and `meta`, and nests in whatever group was open. Each op stores its innermost group, and the document lists groups with their parents. Hit tests report the op and its group chain, so "the SVG asset" or "the text block" is selectable as one object. Groups are explicit rather than inferred from `save`/`restore`, because renderers use `save`/`restore` for state, not for objects.
 - **Paints are full Canvas paints.** Colors, linear, radial and conic gradients, and patterns referencing an image op by id.
 - **Versioned schema.** `version` on the document from v1, Zod schemas per version, and explicit migrations.
 
@@ -120,14 +120,14 @@ Transforms are applied to ops by composing onto their stored matrices. Nothing i
 Replay is the inverse of recording: each op sets its saved state and makes the same Canvas calls, so the replay target can be any real `CanvasRenderingContext2D` or `OffscreenCanvasRenderingContext2D` with no adapter.
 
 - **Canvas replay** of a whole document, a subset of op ids, or a viewport (through the spatial index), with an optional extra view matrix for pan and zoom.
-- **SVG export:** paths with their source primitives, `<text>` with stored positions and transforms, `<image>`, gradients, clip paths.
+- **SVG export:** paths with their source primitives, `<text>` with stored positions and transforms, `<image>`, gradients, patterns, clip paths, shadows and blend modes; groups as `<g data-group>`. Where SVG has no equal (conic gradients, `clearRect`) it uses the nearest construct. The browser job renders every drawing's export in Chromium and requires it to match the canvas replay away from anti-aliased edges.
 - **Other backends** through a small interface that consumes ops, not Canvas calls, so a WebGL or PDF backend doesn't have to emulate Canvas.
 
 ## Interaction
 
 The core turns pointer positions into targets. It does not own DOM listeners.
 
-- **Event router:** the host feeds `pointerdown`/`move`/`up`, wheel and keyboard events with a view matrix. The router hit-tests in world space and emits `enter`, `leave`, `down`, `up`, `click`, `dragstart`, `drag`, `dragend` with the target op, its group chain and the local-space point.
+- **Event router:** the host feeds `pointerdown`/`move`/`up`, wheel and keyboard events with a view matrix. The router hit-tests in world space and emits `enter`, `leave`, `down`, `up`, `click`, `dragstart`, `drag`, `dragend`, `wheel`, `keydown`, `keyup` with the target op, its group chain and the local-space point.
 - **Capture and bubbling** along the group chain, so a handler on a group (an SVG asset, a text block) sees events from its parts.
 - **Hover and selection state** live outside the IR, keyed by op or group id, so the document stays a pure description of what was drawn.
 - **Text targets** report the line hit. Mapping a point to a caret offset is a text-layer concern (below).
@@ -140,7 +140,7 @@ Text enters the IR the same way everything else does, as `fillText` and `strokeT
 
 - **Why Pretext.** The canvas rendering must wrap exactly where the HTML editor wrapped. Pretext reproduces each browser's line-break rules and width corrections (space kerning, emoji, ligatures, CJK and Southeast Asian scripts), and re-layout after `prepare()` is pure arithmetic, so container resizes are cheap.
 - **What the layout layer owns.** `@canvas-ir/text` takes a small block model (paragraphs, headings, nested bulleted and numbered lists, runs with bold, italic, code, color, size and family) and a theme for fonts, spacing and indents. It flattens blocks into paragraphs and lays each out as one Pretext rich-inline paragraph. Mapping an editor's document (ProseMirror or HTML) onto the block model is the integration's job. Line boxes follow CSS 2.1 inline layout: each run's font contributes its rounded ascent and descent plus half the leading of a unitless line height, and the block's own font sets the minimum (the strut).
-- **Text block as a group.** The layout layer opens a group with the source document reference, container and layout fingerprint in `meta`, then draws its runs. Until groups exist (phase 5), `layoutText` returns the layout with its fingerprint and `drawTextLayout` draws it. Hit testing returns the run and the block. Editing re-opens the HTML editor over the block and re-runs layout on commit.
+- **Text block as a group.** `drawTextLayout` opens a group whose `meta` holds the layout fingerprint and whatever the caller passes (such as the source document reference), and a group per line inside it, then draws its runs. Hit testing returns the run, its line and the block. Editing re-opens the HTML editor over the block and re-runs layout on commit.
 - **Containers are paths, not just rectangles.** Layout walks line bands top to bottom with `layoutNextLineRange` / `layoutNextRichInlineLineRange`. For each band it intersects the band with the container's world outline (from the geometry engine), keeps the x-intervals that are inside for the whole band height, and fills them left to right. A rectangle gives one interval per band, a concave shape several. Text around obstacles is the same with their outlines subtracted. With mixed font sizes, a line that turns out taller than the paragraph's line height is laid out again with the taller band.
 - **Bidi.** Pretext breaks right-to-left text correctly but gives no visual order. A line that is all left-to-right in a left-to-right paragraph is drawn as Pretext measured it. Any other line is split by UAX #9 ([bidi-js](https://github.com/lojjic/bidi-js)) into directional runs, ordered visually (rule L2), measured, and drawn one run at a time with `direction` set from its level.
 - **Caret and selection** come from the stored runs: line from the hit, offset by measuring prefixes of that run's text at edit time. They are only needed in the editor.
@@ -166,10 +166,9 @@ The order puts Canvas fidelity and correct geometry first, because everything el
 | 2. Geometry | Cached world shapes, stroke outlines, spatial index; bounds, hit test, rect query, closest point | Fast on 10k ops |
 | 3. Full Canvas | Paints, clip, `drawImage`, `fillText`, `isPointInPath`; SVG renderer corpus recorded and replayed | Corpus passes |
 | 4. Text layout | Block layout + Pretext, measurement fixtures; path containers, bidi runs, layout fingerprint | Matches DOM wraps |
-| 5. Interaction | Event router, groups, SVG export; playground as a separate package | |
+| 5. Interaction | Event router, groups, SVG export; playground as a separate package | SVG export renders like replay |
 
 ## Open questions
 
-- Groups: explicit `beginGroup`/`endGroup` extension calls, or inferred from `save`/`restore` nesting with an id?
 - Should `drawImage` ops carry intrinsic size only, or an optional alpha mask so transparent image pixels don't register hits?
 - Should interaction move ahead of text layout, right after geometry?

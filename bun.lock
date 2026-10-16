@@ -28,6 +28,14 @@
         "playwright-core": "1.56.1",
       },
     },
+    "packages/playground": {
+      "name": "@canvas-ir/playground",
+      "dependencies": {
+        "@canvas-ir/text": "workspace:*",
+        "canvas-ir": "workspace:*",
+        "canvg": "4.0.3",
+      },
+    },
     "packages/text": {
       "name": "@canvas-ir/text",
       "version": "0.0.0",
@@ -40,6 +48,8 @@
   },
   "packages": {
     "@canvas-ir/pixel": ["@canvas-ir/pixel@workspace:packages/pixel"],
+
+    "@canvas-ir/playground": ["@canvas-ir/playground@workspace:packages/playground"],
 
     "@canvas-ir/text": ["@canvas-ir/text@workspace:packages/text"],
 

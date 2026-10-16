@@ -6,7 +6,7 @@ Design: [docs/design.md](docs/design.md).
 
 ## Status
 
-Phases 1 to 4 of 5: recording, the IR, serialization and replay; geometry queries; the full Canvas 2D drawing API; rich text layout.
+All five phases: recording, the IR, serialization and replay; geometry queries; the full Canvas 2D drawing API; rich text layout; groups, events and SVG export, with a playground.
 
 | Works now | Not yet |
 | --- | --- |
@@ -14,14 +14,15 @@ Phases 1 to 4 of 5: recording, the IR, serialization and replay; geometry querie
 | `fill`, `stroke`, `clip`, the rect helpers, `isPointInPath`, `isPointInStroke` | Patterns or gradients made by another context |
 | Colors (normalized like browsers), gradients and patterns | Caret and selection helpers for editors |
 | `drawImage`, `fillText`, `strokeText`, `measureText` | Intersections between ops, anchors |
-| All transform calls, `save`/`restore`/`reset`, line styles and dashes, alpha, compositing, shadows, filter, image smoothing | Groups and events (phase 5) |
+| All transform calls, `save`/`restore`/`reset`, line styles and dashes, alpha, compositing, shadows, filter, image smoothing | Canvas composite operations other than source-over and the blend modes, in SVG export |
 | Replay onto any real 2D context; validated JSON round trip | |
+| Groups, an event router with capture and bubbling, SVG export | |
 | Rich text layout: paragraphs, headings, lists, mixed fonts, any-shaped containers, obstacles, bidi | |
 | Geometry: exact bounds, hit tests, rect queries, closest point, moving ops | |
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
-All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
+All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Each drawing's SVG export, rendered by Chromium, must match its replay everywhere away from anti-aliased edges. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
 
 ## Use
 
@@ -50,6 +51,32 @@ scene.bounds("o0");                                        // { x: 30, y: 30, wi
 scene.queryRect({ x: 0, y: 0, width: 100, height: 100 }); // ["o0"]
 scene.transform("o0", { a: 1, b: 0, c: 0, d: 1, e: 10, f: 0 });
 ```
+
+## Groups, events and SVG
+
+`beginGroup` and `endGroup` are extension calls on the recording context. Ops drawn between them belong to the group, groups nest, and a group can carry JSON `meta`. Hits report the op and its group chain, and the scene can bound, move and remove a group as one object. Groups are separate from `save`/`restore`.
+
+```ts
+import { EventRouter, toSVG } from "canvas-ir";
+
+ctx.beginGroup({ id: "badge", meta: { source: "badge.svg" } });
+// ...draw...
+ctx.endGroup();
+
+const router = new EventRouter(scene, { view }); // view: world to host pixels
+router.on("badge", "drag", (e) => scene.transform("badge", { a: 1, b: 0, c: 0, d: 1, e: e.delta!.x, f: e.delta!.y }));
+router.on("*", "click", (e) => console.log(e.target, e.path)); // op id, then its groups
+canvas.addEventListener("pointerdown", (e) => router.pointerDown({ x: e.offsetX, y: e.offsetY }));
+// ...and pointerMove, pointerUp, pointerLeave, wheel, keyDown, keyUp
+
+const svg = toSVG(scene.document, { width: 800, height: 600 });
+```
+
+The router dispatches `down`, `up`, `click`, `dragstart`, `drag`, `dragend`, `wheel`, `keydown` and `keyup` like the DOM: capture from `"*"` and the outermost group down to the op, then bubbling back up, with `stopPropagation`. `enter` and `leave` go to each op and group the pointer crosses and don't bubble. Hover and selection state stay with the host.
+
+SVG export keeps arcs and ellipses as elliptical arcs under any transform, and writes groups as `<g data-group>` with their meta. Where SVG has no equal it draws the nearest thing: a conic gradient is a CSS `conic-gradient`, `clearRect` masks out what came before it, and shadows are filters drawn under the shape. Images are referenced by `src`, or by whatever `images` maps it to; an SVG shown with `<img>` needs data URLs.
+
+`packages/playground` puts this together: sample SVGs drawn through canvg, rich text, and canvas shapes on one board, with hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
 
 ## Text layout
 
@@ -105,4 +132,4 @@ bun run bench
 bun run test:pixel   # needs Chromium; set CHROMIUM_PATH if Playwright can't find one
 ```
 
-`packages/core` is the library, `packages/text` the text layout layer on top of it, and `packages/pixel` holds the browser checks. After changing a text fixture, run `bun run --cwd packages/pixel capture-text` to capture its measurements and layout from Chromium for the Bun tests. Tooling such as the playground will live in its own packages and depend on the core, never the reverse.
+`packages/core` is the library, `packages/text` the text layout layer on top of it, `packages/pixel` holds the browser checks, and `packages/playground` is a demo app that depends on both libraries. After changing a text fixture, run `bun run --cwd packages/pixel capture-text` to capture its measurements and layout from Chromium for the Bun tests. Tooling depends on the libraries, never the reverse. `SVG_DEBUG=<drawing name>` on the pixel run writes that drawing's SVG export and both renderings to `SVG_DEBUG_DIR`.

@@ -63,6 +63,16 @@ describe("groups", () => {
     expect(again.getDocument()).toEqual(doc);
   });
 
+  test("automatic ids skip groups replayed into the context", () => {
+    const ctx = new RecordingContext();
+    ctx.beginGroup();
+    ctx.fillRect(0, 0, 1, 1);
+    ctx.endGroup();
+    const again = new RecordingContext();
+    replayDocument(again, ctx.getDocument());
+    expect(again.beginGroup()).toBe("g1");
+  });
+
   test("groups round-trip through JSON and replay", () => {
     const doc = drawing();
     const json = serializeDocument(doc);
