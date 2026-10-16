@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "bun run src/run.ts"
+    "test": "bun run src/run.ts",
+    "install-browser": "playwright-core install --with-deps chromium"
   },
   "dependencies": {
     "canvas-ir": "workspace:*"
