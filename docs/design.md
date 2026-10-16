@@ -96,7 +96,9 @@ The context must pass as a `CanvasRenderingContext2D` for the renderers we care 
 | Hit APIs | `isPointInPath`, `isPointInStroke` | Answered by the geometry engine, so renderers that test points still work. |
 | Pixels | `getImageData`, `putImageData`, `createImageData` | Out of scope. Calls throw a clear "unsupported" error. |
 
-The acceptance test is a corpus: an SVG-to-canvas renderer drawing a set of SVG files, plus our own fixtures, replayed onto a real canvas in a browser job and compared pixel-for-pixel with direct rendering. That job runs nightly or before a release; the fast Bun tests are the everyday loop.
+The acceptance test is a corpus: an SVG-to-canvas renderer drawing a set of SVG files, plus our own fixtures, replayed onto a real canvas in a browser job and compared pixel-for-pixel with direct rendering. The fast Bun tests are the everyday loop.
+
+"Pixel-for-pixel" is checked against direct drawing in which every transform call is applied as one `setTransform` with the same matrix. Chromium composes `translate`/`rotate`/`scale` in single precision, so plain direct drawing can differ from any replay in anti-aliased edge pixels; against plain direct drawing only edge pixels may differ. Replay also avoids calls that change rasterization without changing geometry: it sets the paint transform only when it differs from the last path matrix, omits the `moveTo` for a path an `arc` or `ellipse` began, and assigns `filter` only when it changes.
 
 ## Geometry queries
 

@@ -1,4 +1,4 @@
-import { IDENTITY, multiply } from "./math";
+import { IDENTITY, multiply, sameMatrix } from "./math";
 import type { Compositing, FillRule, IRDocument, Matrix2D, Op, PathGeometry, Segment } from "./types";
 
 /**
@@ -58,7 +58,8 @@ const setMatrix = (target: ReplayTarget, m: Matrix2D): void => {
 const applyCompositing = (target: ReplayTarget, compositing: Compositing): void => {
   target.globalAlpha = compositing.globalAlpha;
   target.globalCompositeOperation = compositing.globalCompositeOperation;
-  target.filter = compositing.filter;
+  // Chromium composites differently once `filter` has been assigned, even "none".
+  if (target.filter !== compositing.filter) target.filter = compositing.filter;
   target.shadowColor = compositing.shadowColor;
   target.shadowBlur = compositing.shadowBlur;
   target.shadowOffsetX = compositing.shadowOffsetX;
@@ -91,25 +92,39 @@ const replaySegment = (target: ReplayTarget, segment: Segment): void => {
   }
 };
 
-/** Rebuilds the path, switching the transform only where the recorded matrix changes. */
-const replayPath = (target: ReplayTarget, path: PathGeometry, view: Matrix2D): void => {
+/**
+ * Rebuilds the path, switching the transform only where the recorded matrix
+ * changes, then sets the paint transform. Returns nothing; the target is left
+ * with `paintMatrix` as its transform.
+ *
+ * The paint transform is set only if it differs from the last path matrix:
+ * Chromium rasterizes a path differently once the transform has changed after
+ * the path was built, even back to an equal matrix, so a redundant
+ * `setTransform` would break pixel equality with direct drawing.
+ */
+const replayPath = (target: ReplayTarget, path: PathGeometry, paintMatrix: Matrix2D, view: Matrix2D): void => {
   const world = path.matrices.map((m) => multiply(view, m));
-  let active = -1;
-  const use = (m: number): void => {
-    if (m === active) return;
-    setMatrix(target, world[m]!);
+  let active: Matrix2D | null = null;
+  const use = (m: Matrix2D): void => {
+    if (active !== null && sameMatrix(active, m)) return;
+    setMatrix(target, m);
     active = m;
   };
+  // Set the first matrix before beginPath, as direct drawing usually does.
+  use(world[path.subpaths[0]!.m]!);
   target.beginPath();
   for (const subpath of path.subpaths) {
-    use(subpath.m);
-    target.moveTo(subpath.start.x, subpath.start.y);
+    if (!(subpath.startImplied && subpath.segments[0]?.kind === "ellipse")) {
+      use(world[subpath.m]!);
+      target.moveTo(subpath.start.x, subpath.start.y);
+    }
     for (const segment of subpath.segments) {
-      use(segment.m);
+      use(world[segment.m]!);
       replaySegment(target, segment);
     }
     if (subpath.closed) target.closePath();
   }
+  use(paintMatrix);
 };
 
 export const replayOp = (target: ReplayTarget, op: Op, options: ReplayOptions = {}): void => {
@@ -123,8 +138,7 @@ export const replayOp = (target: ReplayTarget, op: Op, options: ReplayOptions = 
     case "fill":
       applyCompositing(target, op.compositing);
       target.fillStyle = op.paint;
-      replayPath(target, op.path, view);
-      setMatrix(target, multiply(view, op.transform));
+      replayPath(target, op.path, multiply(view, op.transform), view);
       target.fill(op.fillRule);
       break;
     case "stroke": {
@@ -137,8 +151,7 @@ export const replayOp = (target: ReplayTarget, op: Op, options: ReplayOptions = 
       target.miterLimit = stroke.miterLimit;
       target.setLineDash([...stroke.lineDash]);
       target.lineDashOffset = stroke.lineDashOffset;
-      replayPath(target, op.path, view);
-      setMatrix(target, multiply(view, op.transform));
+      replayPath(target, op.path, multiply(view, op.transform), view);
       target.stroke();
       break;
     }

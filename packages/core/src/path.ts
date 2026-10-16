@@ -11,6 +11,7 @@ interface MutableSubpath {
   start: Point;
   segments: Segment[];
   closed: boolean;
+  startImplied: boolean;
 }
 
 export const indexSizeError = (message: string): Error =>
@@ -45,7 +46,13 @@ export class PathBuilder {
 
   moveTo(ctm: Matrix2D, x: number, y: number): void {
     if (!allFinite(x, y)) return;
-    const subpath: MutableSubpath = { m: this.matrixIndex(ctm), start: { x, y }, segments: [], closed: false };
+    const subpath: MutableSubpath = {
+      m: this.matrixIndex(ctm),
+      start: { x, y },
+      segments: [],
+      closed: false,
+      startImplied: false,
+    };
     this.subpaths.push(subpath);
     this.current = subpath;
     this.setLast(ctm, x, y);
@@ -163,7 +170,7 @@ export class PathBuilder {
     if (current === null) return;
     current.closed = true;
     // The spec starts a new subpath at the closed subpath's first point.
-    const next: MutableSubpath = { m: current.m, start: current.start, segments: [], closed: false };
+    const next: MutableSubpath = { m: current.m, start: current.start, segments: [], closed: false, startImplied: false };
     this.subpaths.push(next);
     this.current = next;
     const matrix = this.matrices[current.m]!;
@@ -196,7 +203,11 @@ export class PathBuilder {
       if (subpath.segments.length === 0) continue;
       const m = use(subpath.m);
       const segments = subpath.segments.map((segment) => ({ ...segment, m: use(segment.m) }));
-      subpaths.push({ m, start: subpath.start, segments, closed: subpath.closed });
+      subpaths.push(
+        subpath.startImplied
+          ? { m, start: subpath.start, segments, closed: subpath.closed, startImplied: true }
+          : { m, start: subpath.start, segments, closed: subpath.closed },
+      );
     }
     return { matrices, subpaths };
   }
@@ -216,6 +227,7 @@ export class PathBuilder {
     const startWorld = applyToPoint(ctm, start.x, start.y);
     if (this.current === null) {
       this.moveTo(ctm, start.x, start.y);
+      this.current!.startImplied = true;
     } else if (!this.isLastWorld(startWorld)) {
       this.push({ kind: "line", m: this.matrixIndex(ctm), to: start });
     }

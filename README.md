@@ -18,6 +18,8 @@ Phase 1 of 5: recording, the IR, serialization and replay.
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
+Replay is checked in headless Chromium: every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts) is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel.
+
 ## Use
 
 ```ts
@@ -49,6 +51,7 @@ replayDocument(canvas.getContext("2d")!, doc);
 bun install
 bun test
 bun run typecheck
+bun run test:pixel   # needs Chromium; set CHROMIUM_PATH if Playwright can't find one
 ```
 
-`packages/core` is the library. Tooling such as the playground will live in its own packages and depend on the core, never the reverse.
+`packages/core` is the library and `packages/pixel` is the browser replay test. Tooling such as the playground will live in its own packages and depend on the core, never the reverse.

@@ -26,7 +26,13 @@ const segment = z.discriminatedUnion("kind", [
 ]);
 
 const subpath = z
-  .object({ m: matrixIndex, start: point, segments: z.array(segment).min(1), closed: z.boolean() })
+  .object({
+    m: matrixIndex,
+    start: point,
+    segments: z.array(segment).min(1),
+    closed: z.boolean(),
+    startImplied: z.literal(true).optional(),
+  })
   .strict();
 
 const pathGeometry = z
@@ -117,4 +123,5 @@ export const serializeDocument = (document: IRDocument): string => JSON.stringif
 /** Parses and validates a document; throws a `ZodError` that names the bad field. */
 export const deserializeDocument = (json: string): IRDocument => parseDocument(JSON.parse(json));
 
-export const parseDocument = (value: unknown): IRDocument => irDocumentSchema.parse(value);
+// The cast only narrows optional fields Zod types as `T | undefined`; the schema has checked everything else.
+export const parseDocument = (value: unknown): IRDocument => irDocumentSchema.parse(value) as IRDocument;

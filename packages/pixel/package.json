@@ -1,0 +1,14 @@
+{
+  "name": "@canvas-ir/pixel",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun run src/run.ts"
+  },
+  "dependencies": {
+    "canvas-ir": "workspace:*"
+  },
+  "devDependencies": {
+    "playwright-core": "1.56.1"
+  }
+}

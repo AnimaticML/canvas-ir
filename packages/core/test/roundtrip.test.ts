@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { RecordingContext } from "../src/context";
 import { replayDocument, type ReplayTarget } from "../src/replay";
 import { deserializeDocument, parseDocument, serializeDocument } from "../src/serialization";
-import type { IRDocument } from "../src/types";
+import type { FillOp, IRDocument } from "../src/types";
 import { record } from "./helpers";
 
 /** A scene that touches every op kind, segment kind and a mid-path transform change. */
@@ -103,20 +103,76 @@ describe("replay", () => {
       ctx.fill();
     });
     replayDocument(target, doc);
-    const pathCalls = calls.filter((c) => /^(setTransform|moveTo|lineTo|fill)\(/.test(c));
+    const pathCalls = calls.filter((c) => /^(setTransform|beginPath|moveTo|lineTo|fill)\(/.test(c));
+    // The paint transform equals the last path matrix, so it is not set again:
+    // Chromium rasterizes differently after any transform change, even to an equal matrix.
     expect(pathCalls).toEqual([
       "setTransform(1,0,0,1,0,0)",
+      "beginPath()",
       "moveTo(0,0)",
       "lineTo(1,0)",
       "setTransform(1,0,0,1,5,0)",
       "lineTo(1,1)",
       "lineTo(0,1)",
-      "setTransform(1,0,0,1,5,0)",
       "fill(nonzero)",
     ]);
     expect(calls[0]).toBe("save()");
     expect(calls.at(-1)).toBe("restore()");
     expect(calls).toContain("fillStyle=red");
+  });
+
+  const callLog = (): { target: ReplayTarget; calls: string[] } => {
+    const calls: string[] = [];
+    const values: Record<string | symbol, unknown> = { filter: "none" };
+    const target = new Proxy(values, {
+      get: (t, name) => (name in t ? t[name] : (...args: unknown[]) => calls.push(`${String(name)}(${args.join(",")})`)),
+      set: (t, name, value) => {
+        t[name] = value;
+        calls.push(`${String(name)}=${String(value)}`);
+        return true;
+      },
+    }) as unknown as ReplayTarget;
+    return { target, calls };
+  };
+
+  test("a path started by arc or ellipse is replayed without a moveTo", () => {
+    const doc = record((ctx) => {
+      ctx.ellipse(10, 10, 5, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    expect((doc.ops[0] as FillOp).path.subpaths[0]!.startImplied).toBe(true);
+    const { target, calls } = callLog();
+    replayDocument(target, doc);
+    expect(calls.filter((c) => /^(moveTo|ellipse)\(/.test(c))).toEqual([`ellipse(10,10,5,3,0,0,${Math.PI * 2},false)`]);
+  });
+
+  test("an explicit moveTo before an arc is kept", () => {
+    const doc = record((ctx) => {
+      ctx.moveTo(15, 10);
+      ctx.arc(10, 10, 5, 0, Math.PI);
+      ctx.fill();
+    });
+    expect((doc.ops[0] as FillOp).path.subpaths[0]!.startImplied).toBeUndefined();
+    const { target, calls } = callLog();
+    replayDocument(target, doc);
+    expect(calls.filter((c) => /^(moveTo|ellipse)\(/.test(c))).toEqual([
+      "moveTo(15,10)",
+      `ellipse(10,10,5,5,0,0,${Math.PI},false)`,
+    ]);
+  });
+
+  test("filter is assigned only when it differs from the target's", () => {
+    const { target, calls } = callLog();
+    replayDocument(target, record((ctx) => ctx.fillRect(0, 0, 1, 1)));
+    expect(calls.some((c) => c.startsWith("filter="))).toBe(false);
+    replayDocument(
+      target,
+      record((ctx) => {
+        ctx.filter = "blur(2px)";
+        ctx.fillRect(0, 0, 1, 1);
+      }),
+    );
+    expect(calls).toContain("filter=blur(2px)");
   });
 
   test("a view matrix is applied on top of every recorded transform", () => {

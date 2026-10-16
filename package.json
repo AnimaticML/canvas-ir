@@ -5,7 +5,8 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc -p packages/core"
+    "test:pixel": "bun run --cwd packages/pixel test",
+    "typecheck": "tsc -p packages/core && tsc -p packages/pixel"
   },
   "devDependencies": {
     "@types/bun": "1.2.17",

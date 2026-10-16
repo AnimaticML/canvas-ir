@@ -67,6 +67,12 @@ export interface Subpath {
   readonly start: Point;
   readonly segments: readonly Segment[];
   readonly closed: boolean;
+  /**
+   * Present when an `arc` or `ellipse` call began the subpath, with no `moveTo`;
+   * `start` is then the arc's start point. Replay leaves out the `moveTo` too,
+   * because browsers rasterize a path that is only an ellipse as an oval.
+   */
+  readonly startImplied?: true;
 }
 
 export interface PathGeometry {
