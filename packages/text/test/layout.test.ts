@@ -131,6 +131,32 @@ describe("containers and obstacles", () => {
     }
   });
 
+  test("obstacle margins keep text away from obstacles, and padding away from the outline", () => {
+    const fixture = textFixtures.find((f) => f.name === "rectangle around a circular obstacle")!;
+    const layout = layoutText(fixture.text, { ...fixtureOptions(fixture), obstacleMargin: 12, padding: 10 });
+    expect(layout.lines.length).toBeGreaterThan(5);
+    for (const line of layout.lines) {
+      expect(line.top).toBeGreaterThanOrEqual(10 - 1e-9);
+      expect(line.top + line.height).toBeLessThanOrEqual(390 + 1e-9);
+      for (const f of line.fragments) {
+        expect(f.x).toBeGreaterThanOrEqual(10 - 1e-6);
+        expect(f.x + f.width).toBeLessThanOrEqual(350 + 1e-6);
+        // The fragment's box stays 12 from the circle of radius 60 at (180, 120), within the band tolerance.
+        const dx = Math.max(f.x - 180, 0, 180 - (f.x + f.width));
+        const dy = Math.max(line.top - 120, 0, 120 - (line.top + line.height));
+        expect(Math.hypot(dx, dy)).toBeGreaterThanOrEqual(72 - 0.5);
+      }
+    }
+    // Without a margin, some line comes closer than that.
+    const plain = layoutText(fixture.text, fixtureOptions(fixture));
+    const closest = Math.min(
+      ...plain.lines.flatMap((line) =>
+        line.fragments.map((f) => Math.hypot(Math.max(f.x - 180, 0, 180 - (f.x + f.width)), Math.max(line.top - 120, 0, 120 - (line.top + line.height)))),
+      ),
+    );
+    expect(closest).toBeLessThan(72 - 0.5);
+  });
+
   test("text that doesn't fit is reported as overflow", () => {
     const fixture = textFixtures.find((f) => f.name === "triangle that runs out of room")!;
     expect(layoutText(fixture.text, fixtureOptions(fixture)).overflow).toBe(true);

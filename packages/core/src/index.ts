@@ -50,9 +50,22 @@ export type {
   TextOp,
   TextStyle,
 } from "./types";
-export { Scene, transformOp } from "./geometry/scene";
+export { SNAP_PRIORITY, Scene, transformOp } from "./geometry/scene";
 export { pathRings } from "./geometry/flatten";
-export type { ClosestPointResult, Hit, HitTestOptions, RectQueryMode, SceneOptions } from "./geometry/scene";
+export { normalizeRings, offsetRings, outlineBand } from "./geometry/offset";
+export { opIsInvisible, paintIsTransparent } from "./geometry/visibility";
+export type { Anchor, AnchorKind } from "./geometry/features";
+export type {
+  ClosestPointResult,
+  Hit,
+  HitTestOptions,
+  QueryOptions,
+  RectQueryMode,
+  SceneOptions,
+  Snap,
+  SnapKind,
+  SnapOptions,
+} from "./geometry/scene";
 export { EventRouter } from "./interaction";
 export type {
   EventRouterOptions,

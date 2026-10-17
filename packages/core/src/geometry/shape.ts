@@ -1,6 +1,7 @@
 import { IDENTITY, applyToPoint, invert } from "../math";
 import type { ClipPath, FillRule, ImageOp, Matrix2D, Op, Point, TextOp } from "../types";
 import { type Box, EMPTY_BOX, boxOfPoints, isEmptyBox, pathBounds, unionBox } from "./bounds";
+import { type Edge, edgeIntersections } from "./features";
 import { type Polyline, flattenPath, maxScale } from "./flatten";
 import {
   boxCorners,
@@ -263,4 +264,36 @@ export const shapeClosestPoint = (shape: Shape, p: Point): ClosestPoint | null =
     }
   }
   return best;
+};
+
+/** The closed outlines of the painted area: a fill's rings, a stroke's pieces, or a box. */
+const paintedOutlines = (shape: Shape): readonly (readonly Point[])[] =>
+  shape.op.kind === "stroke" ? shape.pieces : shape.rings;
+
+const ringEdges = (rings: readonly (readonly Point[])[]): Edge[] =>
+  rings.flatMap((ring) => ring.map((a, i) => ({ a, b: ring[(i + 1) % ring.length]! })));
+
+const crosses = (rings: readonly (readonly Point[])[], polygon: readonly Point[]): boolean =>
+  edgeIntersections(ringEdges(rings), ringEdges([polygon]), 0).length > 0;
+
+/**
+ * Whether the painted area touches a polygon (such as a lasso; nonzero fill).
+ * Like the rect query, a non-rectangular clip is approximated by its bounds.
+ */
+export const shapeTouchesPolygon = (shape: Shape, polygon: readonly Point[]): boolean => {
+  if (isEmptyBox(shape.paintBox) || polygon.length < 3) return false;
+  const pbox = boxOfPoints(polygon);
+  const b = shape.clips.reduce((box, c) => intersectBoxes(box, c.box), shape.paintBox);
+  if (isEmptyBox(b) || b.minX > pbox.maxX || b.maxX < pbox.minX || b.minY > pbox.maxY || b.maxY < pbox.minY) return false;
+  const outlines = paintedOutlines(shape);
+  if (outlines.some((ring) => ring.some((p) => insideFill(p, [polygon], "nonzero")))) return true;
+  if (polygon.some((p) => shapeContains(shape, p, 0))) return true;
+  return crosses(outlines, polygon);
+};
+
+/** Whether the painted area lies entirely inside a polygon. */
+export const shapeEnclosedByPolygon = (shape: Shape, polygon: readonly Point[]): boolean => {
+  if (isEmptyBox(shape.paintBox) || polygon.length < 3) return false;
+  const outlines = paintedOutlines(shape);
+  return outlines.every((ring) => ring.every((p) => insideFill(p, [polygon], "nonzero"))) && !crosses(outlines, polygon);
 };

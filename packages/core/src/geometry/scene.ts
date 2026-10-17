@@ -12,7 +12,12 @@ import {
   shapeContains,
   shapeEnclosedBy,
   shapeIntersectsBox,
+  shapeEnclosedByPolygon,
+  shapeTouchesPolygon,
 } from "./shape";
+import { type Anchor, type AnchorKind, type Edge, boxAnchors, edgeIntersections, opAnchors, outlineEdges } from "./features";
+import { segmentClosest } from "./predicates";
+import { opIsInvisible } from "./visibility";
 
 export interface SceneOptions {
   /** Maximum distance between a curve and its flattened outline, in world units. Default 0.1. */
@@ -24,7 +29,12 @@ export interface SceneOptions {
 export interface HitTestOptions {
   /** Also hit ops within this world distance of their painted area. Default 0. */
   readonly tolerance?: number;
-  /** Include ops drawn with `globalAlpha` 0. Default false. */
+  /** Include ops that paint nothing visible: `globalAlpha` 0, or a fully transparent paint. Default false. */
+  readonly includeInvisible?: boolean;
+}
+
+export interface QueryOptions {
+  /** Include ops that paint nothing visible, as hit tests can. Default false. */
   readonly includeInvisible?: boolean;
 }
 
@@ -37,6 +47,29 @@ export interface Hit {
 
 export type RectQueryMode = "intersects" | "enclosed";
 
+/** What a snap landed on: an anchor's kind, a crossing of two outlines, or the nearest point on an outline. */
+export type SnapKind = AnchorKind | "intersection" | "path";
+
+export interface SnapOptions {
+  /** How far, in world units, a candidate may be from the point. */
+  readonly radius: number;
+  /** Kinds to consider, in priority order: an earlier kind within the radius beats a nearer later one. Default `SNAP_PRIORITY`. */
+  readonly kinds?: readonly SnapKind[];
+  /** Op or group ids to ignore, such as what is being dragged. */
+  readonly exclude?: readonly string[];
+}
+
+export interface Snap {
+  readonly point: Point;
+  readonly kind: SnapKind;
+  /** The op the anchor or nearest point is on, or the two ops that cross. */
+  readonly ids: readonly string[];
+  readonly distance: number;
+}
+
+/** The default snap priority: vertices first, the nearest point on any outline last. */
+export const SNAP_PRIORITY: readonly SnapKind[] = ["vertex", "intersection", "center", "midpoint", "extreme", "baseline", "bounds", "path"];
+
 export interface ClosestPointResult extends ClosestPoint {
   readonly id: string;
 }
@@ -47,6 +80,8 @@ interface Entry {
   /** A cheap conservative box for the index, computed without building the shape. */
   coarse: Box;
   shape: Shape | null;
+  anchors: Anchor[] | null;
+  edges: Edge[] | null;
 }
 
 /**
@@ -89,6 +124,8 @@ const boxDistance = (b: Box, p: Point): number => {
   const dy = Math.max(b.minY - p.y, 0, p.y - b.maxY);
   return Math.hypot(dx, dy);
 };
+
+const segmentDistance = (p: Point, a: Point, b: Point): number => segmentClosest(p, a, b).distance;
 
 /**
  * Geometry queries over a document: bounds, hit tests, rect queries and closest
@@ -187,18 +224,19 @@ export class Scene {
         if (shapeContains(shape, point, 0)) break;
         continue;
       }
-      if (!options.includeInvisible && entry.op.compositing.globalAlpha === 0) continue;
+      if (!options.includeInvisible && opIsInvisible(entry.op)) continue;
       if (shapeContains(shape, point, tolerance)) hits.push({ id: entry.op.id, op: entry.op, groups: this.groupChain(entry.op.id) });
     }
     return hits;
   }
 
   /** Ids of ops whose painted area touches (`intersects`) or lies inside (`enclosed`) the rect, in drawing order. */
-  queryRect(rect: Rect, mode: RectQueryMode = "intersects"): string[] {
+  queryRect(rect: Rect, mode: RectQueryMode = "intersects", options: QueryOptions = {}): string[] {
     const box = rectToBox(rect);
     return [...this.grid.query(box)]
       .filter((entry) => {
         if (entry.op.kind === "clear") return false;
+        if (!options.includeInvisible && opIsInvisible(entry.op)) return false;
         const c = entry.coarse;
         if (c.minX > box.maxX || c.maxX < box.minX || c.minY > box.maxY || c.maxY < box.minY) return false;
         const shape = this.shape(entry);
@@ -228,6 +266,108 @@ export class Scene {
     return best;
   }
 
+  /** Ids of ops whose painted area touches or lies inside a polygon (a lasso), in drawing order. */
+  queryPolygon(polygon: readonly Point[], mode: RectQueryMode = "intersects", options: QueryOptions = {}): string[] {
+    if (polygon.length < 3) return [];
+    const box = polygon.reduce(
+      (b, p) => ({ minX: Math.min(b.minX, p.x), minY: Math.min(b.minY, p.y), maxX: Math.max(b.maxX, p.x), maxY: Math.max(b.maxY, p.y) }),
+      { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
+    );
+    return [...this.grid.query(box)]
+      .filter((entry) => {
+        if (entry.op.kind === "clear") return false;
+        if (!options.includeInvisible && opIsInvisible(entry.op)) return false;
+        const shape = this.shape(entry);
+        return mode === "intersects" ? shapeTouchesPolygon(shape, polygon) : shapeEnclosedByPolygon(shape, polygon);
+      })
+      .sort((a, b) => a.z - b.z)
+      .map((entry) => entry.op.id);
+  }
+
+  /**
+   * Snap points of an op, or of every op in a group plus the group's bounds:
+   * vertices, midpoints, centers, curve extremes, text baselines and bounding-box
+   * points, in world space. Curves are exact, not flattened.
+   */
+  anchors(id: string): Anchor[] {
+    const entry = this.byId.get(id);
+    if (entry) return this.anchorsOf(entry);
+    if (!this.groups.has(id)) return [];
+    const ops = this.groupOps(id).map((opId) => this.byId.get(opId)!).filter((e) => e.op.kind !== "clear");
+    const box = this.boxOf(id, "geometry");
+    return [...ops.flatMap((e) => this.anchorsOf(e)), ...(box ? boxAnchors(box) : [])];
+  }
+
+  /**
+   * Where the outlines of two ops cross: a fill's or stroke's path, or the box of
+   * text and images. Exact for straight edges, within the scene's tolerance for curves.
+   */
+  intersections(a: string, b: string): Point[] {
+    const ea = this.byId.get(a);
+    const eb = this.byId.get(b);
+    if (!ea || !eb) return [];
+    return edgeIntersections(this.edgesOf(ea), this.edgesOf(eb), this.tolerance / 100);
+  }
+
+  /**
+   * The best place near `point` to snap to: anchors, crossings of two outlines,
+   * and the nearest point on an outline, within `radius`. The kind earliest in
+   * `kinds` wins; among the same kind, the nearest.
+   */
+  snap(point: Point, options: SnapOptions): Snap | null {
+    const { radius } = options;
+    const kinds = options.kinds ?? SNAP_PRIORITY;
+    const rank = (kind: SnapKind): number => kinds.indexOf(kind);
+    const excluded = new Set<string>();
+    for (const id of options.exclude ?? []) {
+      if (this.groups.has(id)) for (const opId of this.groupOps(id)) excluded.add(opId);
+      else excluded.add(id);
+    }
+    const probe = expandBox({ minX: point.x, minY: point.y, maxX: point.x, maxY: point.y }, radius);
+    const pool = [...this.grid.query(probe)]
+      .filter((e) => e.op.kind !== "clear" && !excluded.has(e.op.id) && !opIsInvisible(e.op) && boxDistance(e.coarse, point) <= radius)
+      .sort((a, b) => b.z - a.z);
+    let best: Snap | null = null;
+    const offer = (candidate: Snap): void => {
+      const r = rank(candidate.kind);
+      if (r < 0 || candidate.distance > radius) return;
+      if (!best || r < rank(best.kind) || (r === rank(best.kind) && candidate.distance < best.distance)) best = candidate;
+    };
+    const near = (p: Point) => Math.hypot(p.x - point.x, p.y - point.y);
+    for (const e of pool) {
+      for (const a of this.anchorsOf(e)) offer({ point: a.point, kind: a.kind, ids: [e.op.id], distance: near(a.point) });
+    }
+    if (rank("intersection") >= 0) {
+      // Only edges near the point can cross near it.
+      const local = pool.map((e) => ({
+        id: e.op.id,
+        edges: this.edgesOf(e).filter((edge) => segmentDistance(point, edge.a, edge.b) <= radius),
+      }));
+      for (let i = 0; i < local.length; i++) {
+        for (let j = i + 1; j < local.length; j++) {
+          for (const p of edgeIntersections(local[i]!.edges, local[j]!.edges, this.tolerance / 100)) {
+            offer({ point: p, kind: "intersection", ids: [local[i]!.id, local[j]!.id], distance: near(p) });
+          }
+        }
+      }
+    }
+    if (rank("path") >= 0) {
+      const found = this.closestPoint(point, { maxDistance: radius, ids: pool.map((e) => e.op.id) });
+      if (found) offer({ point: found.point, kind: "path", ids: [found.id], distance: found.distance });
+    }
+    return best;
+  }
+
+  private anchorsOf(entry: Entry): Anchor[] {
+    entry.anchors ??= opAnchors(entry.op, this.shape(entry));
+    return entry.anchors;
+  }
+
+  private edgesOf(entry: Entry): Edge[] {
+    entry.edges ??= outlineEdges(this.shape(entry));
+    return entry.edges;
+  }
+
   /** Replaces the op with the same id. */
   replace(op: Op): void {
     const entry = this.byId.get(op.id);
@@ -235,6 +375,8 @@ export class Scene {
     this.byId.delete(entry.op.id);
     entry.op = op;
     entry.shape = null;
+    entry.anchors = null;
+    entry.edges = null;
     entry.coarse = coarseBox(op);
     this.byId.set(op.id, entry);
     this.grid.insert(entry, entry.coarse);
@@ -275,7 +417,7 @@ export class Scene {
 
   private place(op: Op, index: number): void {
     if (this.byId.has(op.id)) throw new Error(`duplicate op id ${op.id}`);
-    const entry: Entry = { op, z: index, coarse: coarseBox(op), shape: null };
+    const entry: Entry = { op, z: index, coarse: coarseBox(op), shape: null, anchors: null, edges: null };
     this.entries.splice(index, 0, entry);
     if (index < this.entries.length - 1) this.renumber(index);
     this.byId.set(op.id, entry);

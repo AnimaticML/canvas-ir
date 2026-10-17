@@ -13,12 +13,12 @@ All five phases: recording, the IR, serialization and replay; geometry queries; 
 | Paths with the spec's construction rules, including `arc`, `arcTo`, `ellipse`, `roundRect`, and `Path2D` with SVG path data | Pixel access: `getImageData`, `putImageData`, `createImageData` |
 | `fill`, `stroke`, `clip`, the rect helpers, `isPointInPath`, `isPointInStroke` | Patterns or gradients made by another context |
 | Colors (normalized like browsers), gradients and patterns | Caret and selection helpers for editors |
-| `drawImage`, `fillText`, `strokeText`, `measureText` | Intersections between ops, anchors |
+| `drawImage`, `fillText`, `strokeText`, `measureText` | Image hit tests by their opaque pixels (batch 8) |
 | All transform calls, `save`/`restore`/`reset`, line styles and dashes, alpha, compositing, shadows, filter, image smoothing | Canvas composite operations other than source-over and the blend modes, in SVG export |
 | Replay onto any real 2D context; validated JSON round trip | |
 | Groups, an event router with capture and bubbling, SVG export | |
 | Rich text layout: paragraphs, headings, lists, mixed fonts, any-shaped containers, obstacles, bidi | |
-| Geometry: exact bounds, hit tests, rect queries, closest point, moving ops | |
+| Geometry: exact bounds, hit tests, rect and lasso queries, closest point, intersections, anchors, snapping, outline offsetting, moving ops | |
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
@@ -50,6 +50,10 @@ scene.hitTest({ x: 55, y: 50 });                           // [{ id: "o0", op }]
 scene.bounds("o0");                                        // { x: 30, y: 30, width: 40, height: 40 }
 scene.queryRect({ x: 0, y: 0, width: 100, height: 100 }); // ["o0"]
 scene.transform("o0", { a: 1, b: 0, c: 0, d: 1, e: 10, f: 0 });
+scene.queryPolygon(lassoPoints);                          // ops a lasso touches ("enclosed" for inside only)
+scene.intersections("o0", "o1");                          // where two outlines cross
+scene.anchors("o0");                                      // vertices, midpoints, centers, extremes, box points
+scene.snap(pointer, { radius: 8, exclude: ["dragged"] }); // { point, kind, ids, distance } or null
 ```
 
 ## Groups, events and SVG
@@ -119,7 +123,9 @@ The layout records the Pretext version, the line-breaking engine and every font 
 - `Scene` derives a shape per op on first use and caches it: the path flattened in world space for fills, and for strokes a union of convex pieces (a quad per segment, plus joins and caps) built in the stroke's own space, so width, dashes and joins stay right under non-uniform scale and skew.
 - Bounds are exact: curve and arc extrema are solved analytically. Hit tests and rect queries are exact for lines and within the flattening tolerance (default 0.1 world units) for curves.
 - A uniform grid narrows each query to nearby ops. Moving or replacing an op recomputes only that op.
-- A `clearRect` hides whatever it covers from hit tests. Ops drawn with `globalAlpha` 0 are skipped unless asked for.
+- A `clearRect` hides whatever it covers from hit tests. Ops that paint nothing visible (`globalAlpha` 0, or a fully transparent color or gradient) are skipped unless asked for, so a click goes through them to what's underneath.
+- Snapping ranks candidates by kind (vertex, intersection, center, midpoint, extreme, baseline, bounds, then the nearest point on an outline), and the nearest within a kind. Anchors come from the recorded segments, so arc centers and curve extremes are exact; intersections are exact for straight edges and within the tolerance for curves.
+- `offsetRings` grows an outline with round corners, and `outlineBand` is the strip along it. Text layout uses them for `obstacleMargin` and `padding`.
 - A point must be inside every clip path of an op to hit it. Images hit-test as the part of their destination the source covers, text as its ink box from the recorded measurement.
 
 ## Develop

@@ -48,9 +48,15 @@ let scene = new Scene({ version: 1, ops: [] });
 let liveTexts: LiveText[] = [];
 let view: Matrix2D = IDENTITY;
 let router = new EventRouter(scene);
-let selected: string | null = null;
+/** Selected objects (outermost groups, or single ops picked with Alt), in the order picked. */
+let selected: string[] = [];
 let hovered: string | null = null;
-let moving: string | null = null;
+/** While dragging objects: what moves, their snap anchors where the drag began, and how far they've moved. */
+let drag: { ids: string[]; anchors: { x: number; y: number }[]; moved: { x: number; y: number } } | null = null;
+/** The snap target shown while dragging. */
+let snapMark: { x: number; y: number; kind: string } | null = null;
+/** While lassoing (Shift-drag on empty space): the outline so far, in world space. */
+let lasso: { x: number; y: number }[] | null = null;
 /** While panning empty space: the last pointer position, in host pixels. */
 let panFrom: { x: number; y: number } | null = null;
 
@@ -84,17 +90,6 @@ const describe = (id: string): string => {
   return lines.join("\n");
 };
 
-/** A ring pushed `margin` outward from its center: enough for the convex obstacles here. */
-const grow = (ring: readonly { x: number; y: number }[], margin: number) => {
-  if (margin === 0) return [...ring];
-  const cx = ring.reduce((a, p) => a + p.x, 0) / ring.length;
-  const cy = ring.reduce((a, p) => a + p.y, 0) / ring.length;
-  return ring.map((p) => {
-    const d = Math.hypot(p.x - cx, p.y - cy) || 1;
-    return { x: p.x + ((p.x - cx) / d) * margin, y: p.y + ((p.y - cy) / d) * margin };
-  });
-};
-
 /** Lays a live text out against where its obstacles are now, and swaps its ops in the scene. */
 const relayout = (live: LiveText): void => {
   const obstacles: Region[] = [];
@@ -102,10 +97,15 @@ const relayout = (live: LiveText): void => {
     if (!scene.getGroup(group)) continue;
     for (const id of scene.groupOps(group)) {
       const op = scene.get(id)!;
-      if (op.kind === "fill") obstacles.push({ rings: pathRings(op.path).map((r) => grow(r, live.margin)), fillRule: op.fillRule });
+      if (op.kind === "fill") obstacles.push({ rings: pathRings(op.path), fillRule: op.fillRule });
     }
   }
-  const layout = layoutText(live.text, { container: live.container, obstacles, ...(live.theme ? { theme: live.theme } : {}) });
+  const layout = layoutText(live.text, {
+    container: live.container,
+    obstacles,
+    obstacleMargin: live.margin,
+    ...(live.theme ? { theme: live.theme } : {}),
+  });
   const recorder = new RecordingContext();
   recorder.beginGroup({ id: live.parent });
   drawTextLayout(recorder, layout, { id: live.id, meta: { source: "live text" } });
@@ -162,15 +162,86 @@ const render = (): void => {
     ctx.strokeRect(Math.round(p.x) + 0.5, Math.round(p.y) + 0.5, Math.round(q.x - p.x), Math.round(q.y - p.y));
   };
   const style = getComputedStyle(document.documentElement);
-  if (hovered && hovered !== selected) outline(hovered, style.getPropertyValue("--hover").trim(), [4, 3]);
-  if (selected) outline(selected, style.getPropertyValue("--accent").trim(), []);
+  const accent = style.getPropertyValue("--accent").trim();
+  if (hovered && !selected.includes(hovered)) outline(hovered, style.getPropertyValue("--hover").trim(), [4, 3]);
+  for (const id of selected) outline(id, accent, []);
   ctx.setLineDash([]);
+  if (lasso && lasso.length > 1) {
+    ctx.beginPath();
+    for (const p of lasso) {
+      const q = applyToPoint(device, p.x, p.y);
+      ctx.lineTo(q.x, q.y);
+    }
+    ctx.closePath();
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = accent;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = dpr;
+    ctx.stroke();
+  }
+  if (snapMark) {
+    const q = applyToPoint(device, snapMark.x, snapMark.y);
+    const r = 6 * dpr;
+    ctx.strokeStyle = "#e11d48";
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(q.x - r, q.y - r);
+    ctx.lineTo(q.x + r, q.y + r);
+    ctx.moveTo(q.x + r, q.y - r);
+    ctx.lineTo(q.x - r, q.y + r);
+    ctx.stroke();
+    ctx.font = `${11 * dpr}px system-ui, sans-serif`;
+    ctx.fillStyle = "#e11d48";
+    ctx.fillText(snapMark.kind, q.x + r + 2 * dpr, q.y - r);
+  }
 };
 
-const select = (id: string | null): void => {
-  selected = id;
-  selectionView.textContent = id ? describe(id) : "Click something on the board.";
+const showSelection = (): void => {
+  selectionView.textContent =
+    selected.length === 0
+      ? "Click something on the board."
+      : selected.length === 1
+        ? describe(selected[0]!)
+        : `${selected.length} objects\n${selected.join(", ")}`;
+};
+
+const select = (ids: string[]): void => {
+  selected = ids;
+  showSelection();
   render();
+};
+
+const shiftHeld = (e: RouterEvent): boolean => "shiftKey" in e.input && e.input.shiftKey === true;
+const snapping = (e: RouterEvent): boolean => !("ctrlKey" in e.input && (e.input.ctrlKey || e.input.metaKey));
+
+/** Moves the dragged objects so that, if one of their anchors lands near another object's snap point, it lands on it. */
+const dragTo = (total: { x: number; y: number }, snap: boolean): void => {
+  if (!drag) return;
+  let target = total;
+  snapMark = null;
+  if (snap) {
+    const radius = 8 / Math.hypot(view.a, view.b);
+    let best: { dx: number; dy: number; distance: number; x: number; y: number; kind: string } | null = null;
+    for (const a of drag.anchors) {
+      const p = { x: a.x + total.x, y: a.y + total.y };
+      const found = scene.snap(p, { radius, exclude: drag.ids });
+      if (found && (!best || found.distance < best.distance)) {
+        best = { dx: found.point.x - p.x, dy: found.point.y - p.y, distance: found.distance, x: found.point.x, y: found.point.y, kind: found.kind };
+      }
+    }
+    if (best) {
+      target = { x: total.x + best.dx, y: total.y + best.dy };
+      snapMark = { x: best.x, y: best.y, kind: best.kind };
+    }
+  }
+  const step = { x: target.x - drag.moved.x, y: target.y - drag.moved.y };
+  if (step.x === 0 && step.y === 0) return;
+  for (const id of drag.ids) {
+    scene.transform(id, { a: 1, b: 0, c: 0, d: 1, e: step.x, f: step.y });
+    followMove(id, step.x, step.y);
+  }
+  drag.moved = target;
 };
 
 const wire = (): void => {
@@ -185,22 +256,35 @@ const wire = (): void => {
     render();
   });
   router.on("*", "click", (e) => {
-    select(objectOf(e));
+    const id = objectOf(e);
+    if (shiftHeld(e)) select(id === null ? selected : selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
+    else select(id === null ? [] : [id]);
     log(`click ${e.target ?? "empty space"}${e.path.length > 1 ? ` in ${e.path.slice(1).join(" < ")}` : ""}`);
   });
   router.on("*", "dragstart", (e) => {
-    moving = objectOf(e);
-    panFrom = moving === null ? e.screen : null;
-    if (moving) {
-      select(moving);
-      log(`drag ${moving}`);
+    const id = objectOf(e);
+    if (id === null) {
+      if (shiftHeld(e)) lasso = [router.toWorld(e.screen)];
+      else panFrom = e.screen;
+      return;
     }
+    // Dragging a selected object moves the whole selection.
+    const ids = selected.includes(id) ? selected : [id];
+    if (!selected.includes(id)) select([id]);
+    // Bounds points and vertices are what usually lines up; keep the list short so each move stays cheap.
+    const anchors = ids
+      .flatMap((i) => scene.anchors(i).filter((a) => a.kind === "bounds" || (a.kind === "vertex" && ids.length === 1)))
+      .slice(0, 120)
+      .map((a) => a.point);
+    drag = { ids, anchors, moved: { x: 0, y: 0 } };
+    log(`drag ${ids.join(", ")}`);
   });
   router.on("*", "drag", (e) => {
-    if (moving) {
-      scene.transform(moving, { a: 1, b: 0, c: 0, d: 1, e: e.delta!.x, f: e.delta!.y });
-      followMove(moving, e.delta!.x, e.delta!.y);
-      if (selected === moving) selectionView.textContent = describe(moving);
+    if (drag) {
+      dragTo(e.total!, snapping(e));
+      showSelection();
+    } else if (lasso) {
+      lasso.push(router.toWorld(e.screen));
     } else if (panFrom) {
       // Pan by the pointer's movement in host pixels; world-space deltas shift as the view moves.
       const d = { x: e.screen.x - panFrom.x, y: e.screen.y - panFrom.y };
@@ -211,18 +295,28 @@ const wire = (): void => {
     render();
   });
   router.on("*", "dragend", () => {
-    moving = null;
+    if (lasso && lasso.length > 2) {
+      // Select the outermost object of every op the lasso touches.
+      const picked = new Set<string>();
+      for (const opId of scene.queryPolygon(lasso)) picked.add(scene.groupChain(opId).at(-1) ?? opId);
+      select([...picked]);
+      log(`lasso picked ${picked.size}`);
+    }
+    drag = null;
+    lasso = null;
+    snapMark = null;
     panFrom = null;
+    render();
   });
   router.on("*", "keydown", (e) => {
     const key = (e.input as { key: string }).key;
-    if ((key === "Delete" || key === "Backspace") && selected) {
-      log(`remove ${selected}`);
-      scene.remove(selected);
+    if ((key === "Delete" || key === "Backspace") && selected.length > 0) {
+      log(`remove ${selected.join(", ")}`);
+      for (const id of selected) if (scene.get(id) || scene.getGroup(id)) scene.remove(id);
       liveTexts = liveTexts.filter((live) => scene.getGroup(live.parent));
       for (const live of liveTexts) relayout(live);
       hovered = null;
-      select(null);
+      select([]);
     }
   });
 };

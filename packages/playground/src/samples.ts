@@ -26,7 +26,7 @@ const circleRing = (cx: number, cy: number, r: number) =>
   Array.from({ length: 128 }, (_, i) => ({ x: cx + r * Math.cos((i / 128) * 2 * Math.PI), y: cy + r * Math.sin((i / 128) * 2 * Math.PI) }));
 
 const prose =
-  "Text here flows around the purple shape, which is just another group on the board. Drag the shape and every line is laid out again: each band of the column is cut by the shape's outline, and the text fills the pieces on both sides, which CSS floats can't do. Drag the column by its text or its dashed outline, and the text moves with it.";
+  "Text here flows around the purple shape, which is just another group on the board. Drag the shape and every line is laid out again: each band of the column is cut by the shape's outline, and the text fills the pieces on both sides. Drag the column by its text or its dashed outline, and the text moves with it.";
 
 const wrap: Sample = {
   name: "Text around a shape",

@@ -14,15 +14,15 @@ What the library needs for that is incremental updates by group, not an undo sta
 - Recording a component's drawing on its own, into a document whose group ids are prefixed or scoped to that component, so that two components' ids can't collide.
 - A change report from the scene listing which ids changed and the area they covered before and after. Redrawing only what changed (batch 9) and the app's own bookkeeping both use it.
 
-## Batch 6: geometry and selection
+## Batch 6: geometry and selection (done)
 
 - **Intersections:** `scene.intersections(a, b)` gives the points where two ops' outlines cross, for fills, strokes, text boxes and image boxes. Lines are exact. Curves are found by subdividing Bézier pieces, then refined with Newton steps.
 - **Anchors:** `scene.anchors(id)` returns vertices, curve extremes, segment midpoints, centers, bounding-box corners and edge midpoints, and text baselines and box corners. Each anchor has a kind.
 - **Snapping:** `scene.snap(point, { radius, kinds, exclude })` returns the best candidate within the radius from anchors, intersections and closest points on outlines, ranked by kind and then distance. In the playground, drag snapping shows guide marks.
 - **Lasso and marquee:** `scene.queryPolygon(points, mode)`, with the same modes as `queryRect` (intersects, contains, enclosed). The playground gets shift-click and marquee multi-select, and moves several objects at once.
-- **Offsetting:** `offsetRegion(region, distance)` grows or shrinks closed outlines, with round joins. Text layout gets a `margin` on obstacles in place of the playground's radial approximation.
+- **Offsetting:** `offsetRings(rings, distance)` grows closed outlines with round corners, as rings whose nonzero fill is the union of the region and the band along its outline (`outlineBand`). Shrinking is subtracting that band, which is how text layout pads a container; obstacles get `obstacleMargin`.
 - **Transparent paints:** hit tests skip fills and strokes whose paint is fully transparent (`rgba(…, 0)`, `transparent`, or gradients whose stops all have alpha 0), just as they already skip `globalAlpha` 0. `includeInvisible` keeps them for deliberate invisible hit areas.
-- **Gate:** intersections agree with a dense sampling oracle to within the flattening tolerance on the fixture corpus. Snapping, lasso and offset have property tests; for example, every point of an offset outline lies `distance` from the original, within tolerance.
+- **Gate:** intersections of random curves under random transforms match those of a flattening 100 times finer; a grown region holds exactly the points within the distance of the original, away from its edge by the tolerance; text with a margin and padding keeps its distance from obstacles and outline. Snapping and lasso have unit tests.
 
 ## Batch 7: text
 

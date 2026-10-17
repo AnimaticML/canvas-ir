@@ -6,6 +6,7 @@ import {
   materializeRichInlineLineRange,
   prepareRichInline,
 } from "@chenglou/pretext/rich-inline";
+import { normalizeRings, offsetRings, outlineBand } from "canvas-ir";
 import { type Interval, type Region, bandIntervals, regionTopBottom } from "./bands";
 import { baseDirection, hasRtl, visualRuns } from "./bidi";
 import { type TextMeasurer, canvasMeasurer } from "./measure";
@@ -39,6 +40,10 @@ export interface LayoutOptions {
   readonly container: Container;
   /** Regions text flows around. */
   readonly obstacles?: readonly Region[];
+  /** Space kept between the text and the container's outline. Default 0. */
+  readonly padding?: number;
+  /** Space kept between the text and every obstacle. Default 0. */
+  readonly obstacleMargin?: number;
   readonly theme?: Partial<Theme>;
   /** Default direction of paragraphs that set none. Default "ltr". */
   readonly direction?: Direction;
@@ -181,6 +186,16 @@ const detectEngine = (): string => {
 
 const isRect = (c: Container): c is RectContainer => "width" in c;
 
+/** How far a padded or margined outline may stray from the exact rounded offset. */
+const BAND_TOLERANCE = 0.25;
+
+const insetRect = (c: RectContainer, by: number): RectContainer => ({
+  x: c.x + by,
+  y: c.y + by,
+  width: Math.max(0, c.width - 2 * by),
+  ...(c.height !== undefined ? { height: Math.max(0, c.height - 2 * by) } : {}),
+});
+
 const rectRegion = (c: RectContainer): Region => {
   const bottom = c.height === undefined ? Number.MAX_SAFE_INTEGER : c.y + c.height;
   return {
@@ -209,10 +224,21 @@ export const layoutText = (text: RichText, options: LayoutOptions): TextLayout =
   const theme: Theme = { ...DEFAULT_THEME, ...options.theme };
   const measurer = options.measurer ?? canvasMeasurer();
   const paragraphs = flattenBlocks(text, theme, options.direction ?? "ltr");
-  const container = options.container;
+  const padding = Math.max(0, options.padding ?? 0);
+  const margin = Math.max(0, options.obstacleMargin ?? 0);
+  // A rectangle shrinks; any other container keeps its outline and gets a band along it as one more obstacle.
+  const container = isRect(options.container) && padding > 0 ? insetRect(options.container, padding) : options.container;
   const region = isRect(container) ? rectRegion(container) : container;
-  const { top: regionTop, bottom: regionBottom } = regionTopBottom(region);
-  const obstacles = options.obstacles ?? [];
+  const { top: outlineTop, bottom: regionBottom } = regionTopBottom(region);
+  const regionTop = isRect(container) ? outlineTop : outlineTop + padding;
+  const obstacles = [
+    ...(options.obstacles ?? []).map((o): Region =>
+      margin > 0 ? { rings: offsetRings(o.rings, margin, { fillRule: o.fillRule ?? "nonzero", tolerance: BAND_TOLERANCE }), fillRule: "nonzero" } : o,
+    ),
+    ...(!isRect(container) && padding > 0
+      ? [{ rings: outlineBand(normalizeRings(region.rings, region.fillRule ?? "nonzero"), padding, BAND_TOLERANCE), fillRule: "nonzero" as const }]
+      : []),
+  ];
   const minWidth = options.minLineWidth ?? theme.fontSize * 2;
   const fonts = new Set<string>();
 
