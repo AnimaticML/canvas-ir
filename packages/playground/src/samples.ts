@@ -1,10 +1,91 @@
-import { drawTextLayout, layoutText } from "@canvas-ir/text";
+import { type Container, type RichText, type Theme, drawTextLayout, layoutText } from "@canvas-ir/text";
 import type { RecordingContext } from "canvas-ir";
+
+/**
+ * Text the playground lays out again whenever an obstacle moves. Its block group
+ * `id` goes inside the group `parent`, which also holds the container's outline,
+ * so dragging the parent moves the container too.
+ */
+export interface LiveText {
+  readonly id: string;
+  readonly parent: string;
+  readonly text: RichText;
+  readonly theme?: Partial<Theme>;
+  readonly container: Container;
+  /** Groups whose filled shapes the text flows around, kept `margin` away. */
+  readonly obstacles: readonly string[];
+  readonly margin: number;
+}
 
 /** Something to put on the board: SVG markup drawn through canvg, or a function drawing on the recorder. */
 export type Sample =
   | { readonly name: string; readonly svg: string; readonly at: { x: number; y: number } }
-  | { readonly name: string; readonly draw: (ctx: RecordingContext) => void };
+  | { readonly name: string; readonly draw: (ctx: RecordingContext) => readonly LiveText[] | void };
+
+const circleRing = (cx: number, cy: number, r: number) =>
+  Array.from({ length: 128 }, (_, i) => ({ x: cx + r * Math.cos((i / 128) * 2 * Math.PI), y: cy + r * Math.sin((i / 128) * 2 * Math.PI) }));
+
+const prose =
+  "Text here flows around the purple shape, which is just another group on the board. Drag the shape and every line is laid out again: each band of the column is cut by the shape's outline, and the text fills the pieces on both sides, which CSS floats can't do. Drag the column by its text or its dashed outline, and the text moves with it.";
+
+const wrap: Sample = {
+  name: "Text around a shape",
+  draw: (ctx) => {
+    const column = ctx.beginGroup({ meta: { source: "text column" } });
+    ctx.strokeStyle = "#a1a1aa";
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(30.5, 250.5, 290, 280);
+    ctx.endGroup();
+    const shape = ctx.beginGroup({ meta: { source: "obstacle" } });
+    ctx.fillStyle = "#a78bfa";
+    ctx.beginPath();
+    ctx.ellipse(160, 370, 52, 40, 0.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.endGroup();
+    return [
+      {
+        id: `${column}-text`,
+        parent: column,
+        text: { blocks: [{ type: "heading", level: 4, content: ["Wrapping around"] }, { type: "paragraph", content: [prose] }] },
+        theme: { fontSize: 14 },
+        container: { x: 40, y: 258, width: 272, height: 266 },
+        obstacles: [shape],
+        margin: 8,
+      },
+    ];
+  },
+};
+
+const circle: Sample = {
+  name: "Text in a circle",
+  draw: (ctx) => {
+    const group = ctx.beginGroup({ meta: { source: "text in a circle" } });
+    ctx.fillStyle = "#e0f2fe";
+    ctx.beginPath();
+    ctx.arc(700, 380, 110, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.endGroup();
+    return [
+      {
+        id: `${group}-text`,
+        parent: group,
+        text: {
+          blocks: [
+            {
+              type: "paragraph",
+              align: "center",
+              content: ["The container is any path: here a circle. Each line gets the part of its band that is inside the circle for the line's whole height, so nothing pokes out at the curve."],
+            },
+          ],
+        },
+        theme: { fontSize: 14 },
+        container: { rings: [circleRing(700, 380, 100)] },
+        obstacles: [],
+        margin: 0,
+      },
+    ];
+  },
+};
 
 const badge = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120">
   <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#059669"/></linearGradient></defs>
@@ -85,5 +166,10 @@ export const samples: readonly Sample[] = [
   { name: "Chart", svg: chart, at: { x: 600, y: 60 } },
   { name: "Star", svg: star, at: { x: 200, y: 110 } },
   note,
+  wrap,
+  circle,
   shapes,
 ];
+
+/** The samples on the board at first; the rest are a button away. */
+export const initialSamples: readonly Sample[] = samples.filter((s) => s !== shapes);

@@ -11,11 +11,13 @@ import {
   Scene,
   applyToPoint,
   multiply,
+  pathRings,
   replayDocument,
   serializeDocument,
   toSVG,
 } from "canvas-ir";
-import { type Sample, samples } from "./samples";
+import { type Region, drawTextLayout, layoutText } from "@canvas-ir/text";
+import { type LiveText, type Sample, initialSamples, samples } from "./samples";
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
@@ -43,6 +45,7 @@ const recorderOptions: RecordingContextOptions = {
 };
 
 let scene = new Scene({ version: 1, ops: [] });
+let liveTexts: LiveText[] = [];
 let view: Matrix2D = IDENTITY;
 let router = new EventRouter(scene);
 let selected: string | null = null;
@@ -79,6 +82,55 @@ const describe = (id: string): string => {
   const b = scene.bounds(id);
   if (b) lines.push(`bounds ${b.x.toFixed(1)}, ${b.y.toFixed(1)}, ${b.width.toFixed(1)} × ${b.height.toFixed(1)}`);
   return lines.join("\n");
+};
+
+/** A ring pushed `margin` outward from its center: enough for the convex obstacles here. */
+const grow = (ring: readonly { x: number; y: number }[], margin: number) => {
+  if (margin === 0) return [...ring];
+  const cx = ring.reduce((a, p) => a + p.x, 0) / ring.length;
+  const cy = ring.reduce((a, p) => a + p.y, 0) / ring.length;
+  return ring.map((p) => {
+    const d = Math.hypot(p.x - cx, p.y - cy) || 1;
+    return { x: p.x + ((p.x - cx) / d) * margin, y: p.y + ((p.y - cy) / d) * margin };
+  });
+};
+
+/** Lays a live text out against where its obstacles are now, and swaps its ops in the scene. */
+const relayout = (live: LiveText): void => {
+  const obstacles: Region[] = [];
+  for (const group of live.obstacles) {
+    if (!scene.getGroup(group)) continue;
+    for (const id of scene.groupOps(group)) {
+      const op = scene.get(id)!;
+      if (op.kind === "fill") obstacles.push({ rings: pathRings(op.path).map((r) => grow(r, live.margin)), fillRule: op.fillRule });
+    }
+  }
+  const layout = layoutText(live.text, { container: live.container, obstacles, ...(live.theme ? { theme: live.theme } : {}) });
+  const recorder = new RecordingContext();
+  recorder.beginGroup({ id: live.parent });
+  drawTextLayout(recorder, layout, { id: live.id, meta: { source: "live text" } });
+  recorder.endGroup();
+  const drawn = recorder.getDocument();
+  if (scene.getGroup(live.id)) scene.remove(live.id);
+  // Line groups and ops get ids under the block's, so they can't collide with the board's.
+  const rename = (id: string): string => (id === live.id || id === live.parent ? id : `${live.id}/${id}`);
+  for (const g of drawn.groups ?? []) if (g.id !== live.parent) scene.addGroup({ ...g, id: rename(g.id), ...(g.parent ? { parent: rename(g.parent) } : {}) });
+  for (const op of drawn.ops) scene.insert({ ...op, id: rename(op.id), ...(op.group ? { group: rename(op.group) } : {}) });
+};
+
+const translateContainer = (live: LiveText, dx: number, dy: number): LiveText => ({
+  ...live,
+  container:
+    "rings" in live.container
+      ? { ...live.container, rings: live.container.rings.map((r) => r.map((p) => ({ x: p.x + dx, y: p.y + dy }))) }
+      : { ...live.container, x: live.container.x + dx, y: live.container.y + dy },
+});
+
+/** After `moved` moved by (dx, dy): containers inside it follow, and text whose obstacles moved is laid out again. */
+const followMove = (moved: string, dx: number, dy: number): void => {
+  const inside = (id: string) => id === moved || scene.groupChain(id).includes(moved);
+  liveTexts = liveTexts.map((live) => (inside(live.parent) ? translateContainer(live, dx, dy) : live));
+  for (const live of liveTexts) if (!inside(live.parent) && live.obstacles.some(inside)) relayout(live);
 };
 
 const render = (): void => {
@@ -147,6 +199,7 @@ const wire = (): void => {
   router.on("*", "drag", (e) => {
     if (moving) {
       scene.transform(moving, { a: 1, b: 0, c: 0, d: 1, e: e.delta!.x, f: e.delta!.y });
+      followMove(moving, e.delta!.x, e.delta!.y);
       if (selected === moving) selectionView.textContent = describe(moving);
     } else if (panFrom) {
       // Pan by the pointer's movement in host pixels; world-space deltas shift as the view moves.
@@ -166,6 +219,8 @@ const wire = (): void => {
     if ((key === "Delete" || key === "Backspace") && selected) {
       log(`remove ${selected}`);
       scene.remove(selected);
+      liveTexts = liveTexts.filter((live) => scene.getGroup(live.parent));
+      for (const live of liveTexts) relayout(live);
       hovered = null;
       select(null);
     }
@@ -223,10 +278,11 @@ const add = async (sample: Sample): Promise<void> => {
     });
     await canvg.render();
     recorder.endGroup();
-  } else {
-    sample.draw(recorder);
   }
+  const live = "svg" in sample ? undefined : sample.draw(recorder);
   scene = new Scene(recorder.getDocument());
+  liveTexts = [...liveTexts, ...(live ?? [])];
+  for (const l of live ?? []) relayout(l);
   wire();
   log(`added ${sample.name}; the board has ${scene.document.ops.length} ops`);
   render();
@@ -258,4 +314,4 @@ document.getElementById("export-svg")!.addEventListener("click", () => {
 document.getElementById("export-json")!.addEventListener("click", () => download("board.json", "application/json", serializeDocument(scene.document)));
 document.getElementById("reset-view")!.addEventListener("click", () => setView(IDENTITY));
 
-for (const sample of samples) await add(sample);
+for (const sample of initialSamples) await add(sample);

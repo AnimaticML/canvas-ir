@@ -76,7 +76,7 @@ The router dispatches `down`, `up`, `click`, `dragstart`, `drag`, `dragend`, `wh
 
 SVG export keeps arcs and ellipses as elliptical arcs under any transform, and writes groups as `<g data-group>` with their meta. Where SVG has no equal it draws the nearest thing: a conic gradient is a CSS `conic-gradient`, `clearRect` masks out what came before it, and shadows are filters drawn under the shape. Images are referenced by `src`, or by whatever `images` maps it to; an SVG shown with `<img>` needs data URLs.
 
-`packages/playground` puts this together: sample SVGs drawn through canvg, rich text, and canvas shapes on one board, with hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
+`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (in a circle, and flowing around a shape that re-lays it out as you drag it), and canvas shapes on one board, with hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
 
 ## Text layout
 
