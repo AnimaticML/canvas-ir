@@ -1,6 +1,6 @@
 // Two drawings recorded separately, day and night, and the morph between them.
 // Parts pair up by the names on their groups; what has no partner fades.
-import { type IRDocument, type Morph, RecordingContext, keyByMeta, morph } from "canvas-ir";
+import { type ComponentHandle, type ComponentSpec, type IRDocument, type Morph, RecordingContext, applyToPoint, invert, keyByMeta, morph } from "canvas-ir";
 
 export const MORPH_ID = "morph-demo";
 const at = { x: 40, y: 1020 };
@@ -138,3 +138,138 @@ let prepared: Morph | null = null;
 
 /** The morph from day to night, prepared once. */
 export const dayToNight = (): Morph => (prepared ??= morph(day, night, { key: keyByMeta("name") }));
+
+/**
+ * The morph's controls, drawn on the board under it as components: a Play
+ * button and a slider from day to night. They take the pointer and the keys
+ * through the scene's event router like anything else drawn there.
+ */
+// biome-ignore lint: components of any state
+export const morphControls = (morphTo: (t: number) => void, get: <S>(id: string) => ComponentHandle<S> | undefined): ComponentSpec<any>[] => {
+  const y = at.y + 290;
+  const X0 = at.x + 120;
+  const X1 = at.x + 500;
+  const SLIDER = "morph-slider";
+  const PLAY = "morph-play";
+  let run = 0;
+  const set = (t: number): void => {
+    get<{ t: number }>(SLIDER)?.setState({ t });
+    morphTo(t);
+  };
+  const stop = (): void => {
+    run++;
+    get<{ playing: boolean }>(PLAY)?.setState({ playing: false });
+  };
+  const play = (): void => {
+    const from = get<{ t: number }>(SLIDER)?.state.t ?? 0;
+    const to = from < 0.5 ? 1 : 0;
+    const start = performance.now();
+    const mine = ++run;
+    get<{ playing: boolean }>(PLAY)?.setState({ playing: true });
+    const frame = (now: number): void => {
+      if (mine !== run) return;
+      const k = Math.min(1, (now - start) / (1600 * Math.abs(to - from) || 1));
+      const eased = k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
+      set(from + (to - from) * eased);
+      if (k < 1) requestAnimationFrame(frame);
+      else stop();
+    };
+    requestAnimationFrame(frame);
+  };
+  const slideTo = (s: ComponentHandle<{ t: number }>, worldX: number): void => {
+    const local = applyToPoint(invert(s.transform) ?? s.transform, worldX, 0);
+    stop();
+    set(Math.min(1, Math.max(0, (local.x - X0) / (X1 - X0))));
+  };
+  const button: ComponentSpec<{ playing: boolean }> = {
+    id: PLAY,
+    state: { playing: false },
+    meta: ({ playing }) => ({ source: "morph controls", role: "button", label: playing ? "Pause the morph" : "Play the morph" }),
+    cursor: "pointer",
+    draw: (c, { playing }, ui) => {
+      c.fillStyle = ui.pressed ? "#1d4ed8" : ui.hovered ? "#3b82f6" : "#2563eb";
+      c.beginPath();
+      c.roundRect(at.x, y - 16, 90, 32, 16);
+      c.fill();
+      if (ui.focused) {
+        c.strokeStyle = "#93c5fd";
+        c.lineWidth = 2;
+        c.stroke();
+      }
+      c.fillStyle = "#ffffff";
+      if (playing) {
+        c.fillRect(at.x + 18, y - 7, 4, 14);
+        c.fillRect(at.x + 26, y - 7, 4, 14);
+      } else {
+        c.beginPath();
+        c.moveTo(at.x + 18, y - 8);
+        c.lineTo(at.x + 31, y);
+        c.lineTo(at.x + 18, y + 8);
+        c.closePath();
+        c.fill();
+      }
+      c.font = "600 13px system-ui, sans-serif";
+      c.textBaseline = "middle";
+      c.fillText(playing ? "Pause" : "Play", at.x + 40, y + 1);
+    },
+    on: {
+      click: (e) => {
+        e.stopPropagation();
+        if (get<{ playing: boolean }>(PLAY)?.state.playing) stop();
+        else play();
+      },
+    },
+  };
+  const slider: ComponentSpec<{ t: number }> = {
+    id: SLIDER,
+    state: { t: 0 },
+    meta: ({ t }) => ({ source: "morph controls", role: "slider", label: "Day to night", value: Math.round(t * 100), min: 0, max: 100 }),
+    cursor: "pointer",
+    draw: (c, { t }, ui) => {
+      c.beginGroup({ meta: { hitArea: true } });
+      c.fillStyle = "rgba(0, 0, 0, 0)";
+      c.fillRect(X0 - 12, y - 16, X1 - X0 + 24, 32);
+      c.endGroup();
+      // The track goes from the day sky to the night sky.
+      const g = c.createLinearGradient(X0, 0, X1, 0);
+      g.addColorStop(0, "#7dd3fc");
+      g.addColorStop(1, "#1e1b4b");
+      c.fillStyle = g;
+      c.beginPath();
+      c.roundRect(X0, y - 3, X1 - X0, 6, 3);
+      c.fill();
+      const x = X0 + t * (X1 - X0);
+      c.fillStyle = "#ffffff";
+      c.strokeStyle = ui.focused ? "#2563eb" : "#71717a";
+      c.lineWidth = ui.focused || ui.hovered ? 2 : 1;
+      c.beginPath();
+      c.arc(x, y, ui.pressed ? 10 : 8, 0, Math.PI * 2);
+      c.fill();
+      c.stroke();
+      c.font = "12px system-ui, sans-serif";
+      c.fillStyle = "#6b7280";
+      c.textBaseline = "top";
+      c.textAlign = "left";
+      c.fillText("Day", X0, y + 12);
+      c.textAlign = "right";
+      c.fillText("Night", X1, y + 12);
+      c.textAlign = "start";
+    },
+    on: {
+      down: (e, s) => slideTo(s, e.point.x),
+      dragstart: (e) => e.stopPropagation(),
+      drag: (e, s) => {
+        e.stopPropagation();
+        slideTo(s, e.point.x);
+      },
+      keydown: (e, s) => {
+        const key = (e.input as { key: string }).key;
+        const step = key === "ArrowRight" || key === "ArrowUp" ? 0.05 : key === "ArrowLeft" || key === "ArrowDown" ? -0.05 : 0;
+        if (step === 0) return;
+        stop();
+        set(Math.min(1, Math.max(0, s.state.t + step)));
+      },
+    },
+  };
+  return [button, slider];
+};

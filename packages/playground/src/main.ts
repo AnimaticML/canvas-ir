@@ -32,7 +32,7 @@ import { LiveText } from "@canvas-ir/text";
 import { datumAt } from "./charts";
 import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
-import { MORPH_ID, dayToNight } from "./morph-demo";
+import { MORPH_ID, dayToNight, morphControls } from "./morph-demo";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 
@@ -672,35 +672,24 @@ const reveal = (b: { x: number; y: number; width: number; height: number }): voi
   setView({ ...view, e: view.e + width / 2 - (p.x + q.x) / 2, f: view.f + height / 2 - (p.y + q.y) / 2 });
 };
 
-// The morph demo: day and night drawn apart, blended by the slider.
-const morphSlider = document.getElementById("morph-t") as HTMLInputElement;
+// The morph demo: day and night drawn apart, blended by controls drawn on the board under them.
 const morphTo = (t: number): void => {
-  const fresh = scene.getGroup(MORPH_ID) === undefined;
   scene.replaceGroup(MORPH_ID, dayToNight().at(t));
-  if (fresh) {
-    const m = dayToNight();
-    log(`morph demo: ${m.paired} ops paired by their groups' names, ${m.removed} fading out, ${m.added} fading in`);
-    reveal(scene.bounds(MORPH_ID)!);
-  }
   render();
 };
-morphSlider.addEventListener("input", () => morphTo(Number(morphSlider.value)));
-let playing = 0;
-document.getElementById("morph-play")!.addEventListener("click", () => {
-  const start = performance.now();
-  const from = Number(morphSlider.value) < 0.5 ? 0 : 1;
-  const run = ++playing;
-  const frame = (now: number): void => {
-    if (run !== playing) return;
-    const k = Math.min(1, (now - start) / 1600);
-    const eased = k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
-    const t = from === 0 ? eased : 1 - eased;
-    morphSlider.value = String(t);
-    morphTo(t);
-    if (k < 1) requestAnimationFrame(frame);
-  };
-  requestAnimationFrame(frame);
+const morphButton = document.createElement("button");
+morphButton.textContent = "+ Morph";
+morphButton.addEventListener("click", () => {
+  if (scene.getGroup(MORPH_ID) === undefined) {
+    morphTo(0);
+    const m = dayToNight();
+    log(`morph demo: ${m.paired} ops paired by their groups' names, ${m.removed} fading out, ${m.added} fading in`);
+  }
+  for (const spec of morphControls(morphTo, (id) => components?.get(id))) if (!components!.get(spec.id)) components!.mount(spec);
+  const b = scene.bounds(MORPH_ID)!;
+  reveal({ ...b, height: b.height + 70 });
 });
+samplesBar.insertBefore(morphButton, samplesBar.lastElementChild);
 lodOn.addEventListener("change", () => {
   makeRenderer();
   render();
