@@ -80,7 +80,32 @@ The router dispatches `down`, `up`, `click`, `dragstart`, `drag`, `dragend`, `wh
 
 SVG export keeps arcs and ellipses as elliptical arcs under any transform, and writes groups as `<g data-group>` with their meta. Where SVG has no equal it draws the nearest thing: a conic gradient is a CSS `conic-gradient`, `clearRect` masks out what came before it, and shadows are filters drawn under the shape. Images are referenced by `src`, or by whatever `images` maps it to; an SVG shown with `<img>` needs data URLs.
 
-`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a clickable link, in a circle, and flowing around a shape that re-lays it out as you drag it), and canvas shapes on one board, with hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
+### Components
+
+A component is an interactive object drawn from state: a button, a knob, a link that highlights on hover. It owns a group, and draws it again through `replaceGroup` whenever its state or its pointer state changes. The ops are output, like pixels; what you change is the component's state, or your own document's object that a component draws.
+
+```ts
+import { Components } from "canvas-ir";
+
+const components = new Components(scene, router, { onChange: () => render() });
+components.mount({
+  id: "save",
+  state: { saved: false },
+  cursor: "pointer",
+  draw: (ctx, state, ui) => {
+    // ui: { hovered, pressed, focused, hoveredParts } — hoveredParts names the inner groups under the pointer
+    ctx.fillStyle = ui.pressed ? "#1d4ed8" : ui.hovered ? "#3b82f6" : "#2563eb";
+    ctx.fillRect(0, 0, 90, 30);
+  },
+  on: { click: (e, c) => { c.setState({ saved: true }); e.stopPropagation(); } },
+});
+components.move("save", { a: 1, b: 0, c: 0, d: 1, e: 40, f: 0 }); // moves it now and in later drawings
+canvas.style.cursor = components.cursor ?? "";
+```
+
+Handlers run in capture, before the board's own listeners, so a knob that stops its drags keeps them from moving it. Presses, drags and keys keep reaching a component that redraws mid-gesture under new op ids. A group whose meta has `hitArea: true` makes transparent shapes hit targets (a slider's grip); one with `snap: false` is never snapped to, and `snap` also takes a `filter`.
+
+`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a link that highlights on hover, in a circle, and flowing around a shape that re-lays it out as you drag it), a knob, a slider and a button built as components that change the wrapped text, and canvas shapes on one board, with snapping settings, hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
 
 ## Text layout
 

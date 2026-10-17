@@ -416,6 +416,20 @@ describe("replaceGroup", () => {
     expect(s.groupChain(ids[0]!)).toEqual(["card", "board"]);
   });
 
+  test("removing a group removes groups nested several deep", () => {
+    const s = scene((ctx) => {
+      ctx.beginGroup({ id: "a" });
+      ctx.beginGroup({ id: "b" });
+      ctx.beginGroup({ id: "c" });
+      ctx.fillRect(0, 0, 1, 1);
+      ctx.endGroup();
+      ctx.endGroup();
+      ctx.endGroup();
+    });
+    s.remove("a");
+    expect(s.document.groups ?? []).toEqual([]);
+  });
+
   test("refuses ops outside the group", () => {
     const s = scene((ctx) => ctx.fillRect(0, 0, 5, 5));
     expect(() => s.replaceGroup("card", record((ctx) => ctx.fillRect(0, 0, 1, 1)))).toThrow("is not inside card");

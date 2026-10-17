@@ -1,5 +1,5 @@
-import { type LiveTextOptions, drawTextLayout, layoutText } from "@canvas-ir/text";
-import type { RecordingContext } from "canvas-ir";
+import { type LiveTextOptions, type RichText, type TextRun, drawTextLayout, layoutText } from "@canvas-ir/text";
+import { type ComponentHandle, type ComponentSpec, type RecordingContext, applyToPoint, invert } from "canvas-ir";
 
 /**
  * Text the playground lays out again whenever an obstacle moves. Its block group
@@ -8,10 +8,28 @@ import type { RecordingContext } from "canvas-ir";
  */
 export type LiveSpec = LiveTextOptions & { readonly parent: string };
 
+/** What the controls sample changes on the board. */
+export interface ControlHooks {
+  setMargin(px: number): void;
+  setSize(px: number): void;
+  openLink(href: string): void;
+  get<S>(id: string): ComponentHandle<S> | undefined;
+}
+
+/** What a drawn sample leaves to the board: text to keep laid out, and components to mount. */
+export interface Drawn {
+  readonly live?: readonly LiveSpec[];
+  // biome-ignore lint: components of any state
+  readonly components?: readonly ComponentSpec<any>[];
+}
+
 /** Something to put on the board: SVG markup drawn through canvg, or a function drawing on the recorder. */
 export type Sample =
   | { readonly name: string; readonly svg: string; readonly at: { x: number; y: number } }
-  | { readonly name: string; readonly draw: (ctx: RecordingContext) => readonly LiveSpec[] | void };
+  | { readonly name: string; readonly draw: (ctx: RecordingContext, hooks: ControlHooks) => Drawn | void };
+
+let nextId = 0;
+const unique = (name: string): string => `${name}-${nextId++}`;
 
 const circleRing = (cx: number, cy: number, r: number) =>
   Array.from({ length: 128 }, (_, i) => ({ x: cx + r * Math.cos((i / 128) * 2 * Math.PI), y: cy + r * Math.sin((i / 128) * 2 * Math.PI) }));
@@ -33,7 +51,8 @@ const wrap: Sample = {
     ctx.ellipse(160, 370, 52, 40, 0.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.endGroup();
-    return [
+    return {
+      live: [
       {
         id: `${column}-text`,
         parent: column,
@@ -43,7 +62,8 @@ const wrap: Sample = {
         obstacles: [shape],
         obstacleMargin: 8,
       },
-    ];
+      ],
+    };
   },
 };
 
@@ -56,7 +76,8 @@ const circle: Sample = {
     ctx.arc(700, 380, 110, 0, Math.PI * 2);
     ctx.fill();
     ctx.endGroup();
-    return [
+    return {
+      live: [
       {
         id: `${group}-text`,
         parent: group,
@@ -73,7 +94,8 @@ const circle: Sample = {
         container: { rings: [circleRing(700, 380, 100)] },
         obstacles: [],
       },
-    ];
+      ],
+    };
   },
 };
 
@@ -94,48 +116,261 @@ const star = `<svg xmlns="http://www.w3.org/2000/svg" width="110" height="110" v
   <polygon points="55,6 68,40 104,42 76,64 86,100 55,80 24,100 34,64 6,42 42,40" fill="#fbbf24" stroke="#b45309" stroke-width="4" stroke-linejoin="round"/>
 </svg>`;
 
+const noteText: RichText = {
+  blocks: [
+    { type: "heading", level: 3, content: ["Rich text, recorded"] },
+    {
+      type: "paragraph",
+      content: ["Laid out by ", { text: "@canvas-ir/text", code: true }, " and drawn as ", { text: "fillText", bold: true }, " calls. Each line is a group you can hit."],
+    },
+    { type: "list", items: [[{ type: "paragraph", content: ["Wraps like the DOM"] }], [{ type: "paragraph", content: ["Works in any shape"] }]] },
+    {
+      type: "paragraph",
+      content: [
+        "Runs can be ",
+        { text: "underlined", underline: true },
+        ", ",
+        { text: "struck out", strikethrough: true },
+        ", ",
+        { text: "overlined", overline: true },
+        " or ",
+        { text: "links you can click", href: "https://github.com/AnimaticML/canvas-ir" },
+        ".",
+      ],
+    },
+  ],
+};
+
+/** The link a component's pointer is over, from the text-run group it hovers. */
+const hoveredHref = (parts: readonly { meta?: { readonly [key: string]: unknown } }[]): string | null => {
+  const href = parts.find((g) => typeof g.meta?.href === "string")?.meta?.href;
+  return typeof href === "string" ? href : null;
+};
+
+/** The note is a component: hovering a link draws it again with that link highlighted. */
 const note: Sample = {
   name: "Text block",
-  draw: (ctx) => {
-    ctx.save();
-    ctx.fillStyle = "#fef3c7";
-    ctx.shadowColor = "rgba(0, 0, 0, 0.18)";
-    ctx.shadowBlur = 8;
-    ctx.shadowOffsetY = 3;
-    ctx.beginGroup({ meta: { source: "sticky note" } });
-    ctx.beginPath();
-    ctx.roundRect(330, 40, 230, 310, 10);
-    ctx.fill();
-    ctx.restore();
-    const layout = layoutText(
+  draw: (_ctx, hooks) => ({
+    components: [
       {
-        blocks: [
-          { type: "heading", level: 3, content: ["Rich text, recorded"] },
-          {
-            type: "paragraph",
-            content: ["Laid out by ", { text: "@canvas-ir/text", code: true }, " and drawn as ", { text: "fillText", bold: true }, " calls. Each line is a group you can hit."],
+        id: unique("note"),
+        state: {},
+        meta: { source: "sticky note" },
+        cursor: (_state, ui) => (hoveredHref(ui.hoveredParts) ? "pointer" : null),
+        draw: (ctx, _state, ui) => {
+          const hovered = hoveredHref(ui.hoveredParts);
+          ctx.save();
+          ctx.fillStyle = "#fef3c7";
+          ctx.shadowColor = "rgba(0, 0, 0, 0.18)";
+          ctx.shadowBlur = 8;
+          ctx.shadowOffsetY = 3;
+          ctx.beginPath();
+          ctx.roundRect(330, 40, 230, 310, 10);
+          ctx.fill();
+          ctx.restore();
+          const style = (run: TextRun): TextRun => (hovered !== null && run.href === hovered ? { ...run, color: "#0842a0" } : run);
+          const text: RichText = {
+            blocks: noteText.blocks.map((b) => (b.type === "paragraph" ? { ...b, content: b.content.map((r) => (typeof r === "string" ? r : style(r))) } : b)),
+          };
+          const layout = layoutText(text, { container: { x: 346, y: 52, width: 198, height: 290 }, theme: { fontSize: 14 } });
+          if (hovered !== null) {
+            // A tint behind every fragment of the hovered link.
+            ctx.fillStyle = "rgba(11, 87, 208, 0.12)";
+            for (const line of layout.lines) {
+              for (const f of line.fragments) {
+                if (layout.paragraphs[line.paragraph]?.runs[f.run]?.href !== hovered) continue;
+                ctx.beginPath();
+                ctx.roundRect(f.x - 2, line.top + 1, f.width + 4, line.height - 2, 3);
+                ctx.fill();
+              }
+            }
+          }
+          drawTextLayout(ctx, layout, { meta: { source: "sticky note text" } });
+        },
+        on: {
+          click: (e, c) => {
+            const href = hoveredHref(c.ui.hoveredParts);
+            if (href === null || ("shiftKey" in e.input && e.input.shiftKey)) return;
+            hooks.openLink(href);
           },
-          { type: "list", items: [[{ type: "paragraph", content: ["Wraps like the DOM"] }], [{ type: "paragraph", content: ["Works in any shape"] }]] },
-          {
-            type: "paragraph",
-            content: [
-              "Runs can be ",
-              { text: "underlined", underline: true },
-              ", ",
-              { text: "struck out", strikethrough: true },
-              ", ",
-              { text: "overlined", overline: true },
-              " or ",
-              { text: "links you can click", href: "https://github.com/AnimaticML/canvas-ir" },
-              ".",
-            ],
-          },
-        ],
+        },
       },
-      { container: { x: 346, y: 52, width: 198, height: 290 }, theme: { fontSize: 14 } },
-    );
-    drawTextLayout(ctx, layout, { meta: { source: "sticky note text" } });
+    ],
+  }),
+};
+
+const knobValue = (margin: number): number => margin / 24;
+
+/** A knob, a slider and a button that set the wrapped text's obstacle margin and size. */
+const controls: Sample = {
+  name: "Controls",
+  draw: (ctx, hooks) => {
+    const panel = ctx.beginGroup({ meta: { source: "controls panel" } });
+    ctx.fillStyle = "#f4f4f5";
+    ctx.strokeStyle = "#d4d4d8";
+    ctx.beginPath();
+    ctx.roundRect(340.5, 370.5, 240, 160, 10);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#52525b";
+    ctx.font = "600 12px system-ui, sans-serif";
+    ctx.fillText("The wrapped text", 352, 392);
     ctx.endGroup();
+    const knobId = unique("knob");
+    const sliderId = unique("slider");
+    const label = (c: RecordingContext, text: string, x: number, y: number): void => {
+      c.fillStyle = "#3f3f46";
+      c.font = "12px system-ui, sans-serif";
+      c.textAlign = "center";
+      c.fillText(text, x, y);
+      c.textAlign = "start";
+    };
+    const KX = 395;
+    const KY = 440;
+    const knob: ComponentSpec<{ value: number }> = {
+      id: knobId,
+      parent: panel,
+      state: { value: knobValue(8) },
+      meta: { source: "knob" },
+      cursor: (_s, ui) => (ui.pressed ? "grabbing" : "grab"),
+      draw: (c, { value }, ui) => {
+        const start = 0.75 * Math.PI;
+        const end = start + value * 1.5 * Math.PI;
+        c.lineCap = "round";
+        c.lineWidth = 5;
+        c.strokeStyle = "#d4d4d8";
+        c.beginPath();
+        c.arc(KX, KY, 30, start, start + 1.5 * Math.PI);
+        c.stroke();
+        c.strokeStyle = "#2563eb";
+        c.beginPath();
+        c.arc(KX, KY, 30, start, Math.max(end, start + 0.001));
+        c.stroke();
+        c.fillStyle = ui.hovered || ui.pressed ? "#ffffff" : "#fafafa";
+        c.strokeStyle = ui.focused ? "#2563eb" : "#a1a1aa";
+        c.lineWidth = ui.focused ? 2 : 1;
+        c.beginPath();
+        c.arc(KX, KY, 21, 0, Math.PI * 2);
+        c.fill();
+        c.stroke();
+        c.strokeStyle = "#18181b";
+        c.lineWidth = 3;
+        c.beginPath();
+        c.moveTo(KX + 8 * Math.cos(end), KY + 8 * Math.sin(end));
+        c.lineTo(KX + 17 * Math.cos(end), KY + 17 * Math.sin(end));
+        c.stroke();
+        label(c, `Margin ${Math.round(value * 24)}px`, KX, KY + 52);
+      },
+      on: {
+        dragstart: (e) => e.stopPropagation(),
+        drag: (e, k) => {
+          e.stopPropagation();
+          const center = applyToPoint(k.transform, KX, KY);
+          const angle = Math.atan2(e.point.y - center.y, e.point.x - center.x);
+          // Measured clockwise from the start of the arc, with the gap at the bottom split between its ends.
+          let along = (angle - 0.75 * Math.PI) / (1.5 * Math.PI);
+          along = ((along % (4 / 3)) + 4 / 3) % (4 / 3);
+          const value = along <= 1 ? along : along < 7 / 6 ? 1 : 0;
+          k.setState({ value });
+          hooks.setMargin(value * 24);
+        },
+        keydown: (e, k) => {
+          const key = (e.input as { key: string }).key;
+          const step = key === "ArrowRight" || key === "ArrowUp" ? 1 / 24 : key === "ArrowLeft" || key === "ArrowDown" ? -1 / 24 : 0;
+          if (step === 0) return;
+          const value = Math.min(1, Math.max(0, k.state.value + step));
+          k.setState({ value });
+          hooks.setMargin(value * 24);
+        },
+      },
+    };
+    const SX0 = 460;
+    const SX1 = 560;
+    const SY = 432;
+    const sizeAt = (v: number): number => Math.round(12 + v * 8);
+    const setSlider = (s: ComponentHandle<{ value: number }>, x: number): void => {
+      const local = applyToPoint(invert(s.transform) ?? s.transform, x, 0);
+      const value = Math.min(1, Math.max(0, (local.x - SX0) / (SX1 - SX0)));
+      s.setState({ value });
+      hooks.setSize(sizeAt(value));
+    };
+    const slider: ComponentSpec<{ value: number }> = {
+      id: sliderId,
+      parent: panel,
+      state: { value: 0.25 },
+      meta: { source: "slider" },
+      cursor: "pointer",
+      draw: (c, { value }, ui) => {
+        // A transparent grip taller than the track, so the thin track is easy to hit.
+        c.beginGroup({ meta: { hitArea: true } });
+        c.fillStyle = "rgba(0, 0, 0, 0)";
+        c.fillRect(SX0 - 10, SY - 14, SX1 - SX0 + 20, 28);
+        c.endGroup();
+        c.fillStyle = "#d4d4d8";
+        c.fillRect(SX0, SY - 2, SX1 - SX0, 4);
+        const x = SX0 + value * (SX1 - SX0);
+        c.fillStyle = "#2563eb";
+        c.fillRect(SX0, SY - 2, x - SX0, 4);
+        c.fillStyle = "#ffffff";
+        c.strokeStyle = ui.focused ? "#2563eb" : "#71717a";
+        c.lineWidth = ui.focused || ui.hovered ? 2 : 1;
+        c.beginPath();
+        c.arc(x, SY, ui.pressed ? 9 : 7, 0, Math.PI * 2);
+        c.fill();
+        c.stroke();
+        label(c, `Size ${sizeAt(value)}px`, (SX0 + SX1) / 2, SY + 28);
+      },
+      on: {
+        down: (e, s) => setSlider(s, e.point.x),
+        dragstart: (e) => e.stopPropagation(),
+        drag: (e, s) => {
+          e.stopPropagation();
+          setSlider(s, e.point.x);
+        },
+        keydown: (e, s) => {
+          const key = (e.input as { key: string }).key;
+          const step = key === "ArrowRight" || key === "ArrowUp" ? 1 / 8 : key === "ArrowLeft" || key === "ArrowDown" ? -1 / 8 : 0;
+          if (step === 0) return;
+          const value = Math.min(1, Math.max(0, s.state.value + step));
+          s.setState({ value });
+          hooks.setSize(sizeAt(value));
+        },
+      },
+    };
+    const button: ComponentSpec<{ resets: number }> = {
+      id: unique("button"),
+      parent: panel,
+      state: { resets: 0 },
+      meta: { source: "button" },
+      cursor: "pointer",
+      draw: (c, _s, ui) => {
+        c.fillStyle = ui.pressed ? "#1d4ed8" : ui.hovered ? "#3b82f6" : "#2563eb";
+        c.beginPath();
+        c.roundRect(450, 476, 110, 30, 6);
+        c.fill();
+        if (ui.focused) {
+          c.strokeStyle = "#93c5fd";
+          c.lineWidth = 2;
+          c.stroke();
+        }
+        c.fillStyle = "#ffffff";
+        c.font = "600 13px system-ui, sans-serif";
+        c.textAlign = "center";
+        c.fillText("Reset", 505, ui.pressed ? 496 : 495);
+        c.textAlign = "start";
+      },
+      on: {
+        click: (e, b) => {
+          e.stopPropagation();
+          b.setState({ resets: b.state.resets + 1 });
+          hooks.get<{ value: number }>(knobId)?.setState({ value: knobValue(8) });
+          hooks.get<{ value: number }>(sliderId)?.setState({ value: 0.25 });
+          hooks.setMargin(8);
+          hooks.setSize(14);
+        },
+      },
+    };
+    return { components: [knob, slider, button] };
   },
 };
 
@@ -172,6 +407,7 @@ export const samples: readonly Sample[] = [
   note,
   wrap,
   circle,
+  controls,
   shapes,
 ];
 

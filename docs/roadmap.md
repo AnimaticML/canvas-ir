@@ -32,6 +32,14 @@ What the library needs for that is incremental updates by group, not an undo sta
 - **Caret and selection helpers:** `positionAtPoint` maps a point to a source position at a grapheme boundary, `caretRect` maps a position to a caret, and `selectionRects` turns a range into one rect per line (several where bidi splits it), from the fragments' `sourceStart`/`sourceEnd` and prefix measurement. Needed only for editing on the canvas.
 - **Gate:** decorations land within 1px of where Chromium's DOM draws `text-decoration`, for every text fixture font at sizes from 11 to 48 px. Links, caret mapping, `replaceGroup` and `LiveText` have unit tests.
 
+## Batch 7.5: components (done)
+
+- **Components:** `Components` binds a group id to a `draw(ctx, state, ui)` function and its state. `setState` records the component again and swaps its group in through `replaceGroup`. The library tracks `hovered`, `pressed`, `focused` and `hoveredParts` (the inner groups under the pointer, such as a link's run) and redraws when they change. Components choose a cursor and handle router events in capture, stopping them to keep a gesture from the board. `move` keeps them where the host dragged them.
+- **Router:** presses, drags, key events and clicks keep reaching the groups of an op redrawn mid-gesture under a new id; `refreshHover` re-picks under a still pointer.
+- **Hit areas and snapping:** groups with `hitArea: true` make transparent shapes targets; groups with `snap: false` are never snapped to, and `snap` takes a `filter`.
+- **Playground:** the note highlights its link on hover and opens it on click; a knob, slider and button set the wrapped text's margin and size. Snapping has controls (on/off, radius, kinds, text), and text laid out against what is being dragged is never a snap target.
+- **Gate:** unit tests for redraws during presses, drags and keys, moves, hit areas and snapping filters.
+
 ## Batch 8: images
 
 - **Image outlines:** `traceImageOutline(imageData, { threshold, tolerance })` traces where the image is opaque (marching squares on the alpha channel, simplified with Douglas–Peucker) into rings in image pixel space. An `ImageRef` may carry the outline. Hit tests, closest point, snapping and text obstacles then use the real silhouette instead of the box. Tracing happens when an image is described (`describeImage`), not at query time.

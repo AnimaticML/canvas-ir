@@ -143,6 +143,16 @@
         overflow: auto;
         color: var(--muted);
       }
+      .controls {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+      }
+      .controls input[type="range"] {
+        vertical-align: middle;
+        width: 120px;
+      }
       .hint {
         color: var(--muted);
         font-size: 12px;
@@ -165,7 +175,19 @@
         <section>
           <h2>Selection</h2>
           <pre id="selection">Click something on the board.</pre>
-          <p class="hint">Drag moves an object, or one shape with Alt held; it snaps to other objects' corners, centers, crossings and outlines unless Ctrl or Cmd is held. Shift-click adds to the selection, and Shift-drag on empty space draws a lasso. Delete removes the selection. Scroll zooms; drag empty space to pan.</p>
+          <p class="hint">Drag moves an object, or one shape with Alt held; it snaps to other objects (see Snapping) unless Ctrl or Cmd is held. The knob, slider and button drag, click and take arrow keys themselves. Shift-click adds to the selection, and Shift-drag on empty space draws a lasso. Delete removes the selection. Scroll zooms; drag empty space to pan.</p>
+        </section>
+        <section>
+          <h2>Snapping</h2>
+          <div class="controls">
+            <label><input type="checkbox" id="snap-on" checked /> Snap while dragging</label>
+            <label>Radius <input type="range" id="snap-radius" min="2" max="30" value="8" /> <span id="snap-radius-value">8px</span></label>
+            <label><input type="checkbox" class="snap-kind" value="points" checked /> Corners, centers and crossings</label>
+            <label><input type="checkbox" class="snap-kind" value="bounds" checked /> Bounding boxes</label>
+            <label><input type="checkbox" class="snap-kind" value="path" checked /> Outlines</label>
+            <label><input type="checkbox" id="snap-text" /> Text</label>
+          </div>
+          <p class="hint">Text laid out around what you drag is never a target, since it moves as you drag.</p>
         </section>
         <section>
           <h2>Add an SVG</h2>

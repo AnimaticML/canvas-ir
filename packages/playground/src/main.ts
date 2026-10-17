@@ -2,6 +2,7 @@
 // and made interactive through the scene and the event router.
 import { Canvg } from "canvg";
 import {
+  Components,
   EventRouter,
   IDENTITY,
   type Matrix2D,
@@ -9,6 +10,7 @@ import {
   type RecordingContextOptions,
   type RouterEvent,
   Scene,
+  type SnapKind,
   applyToPoint,
   multiply,
   replayDocument,
@@ -16,7 +18,7 @@ import {
   toSVG,
 } from "canvas-ir";
 import { LiveText } from "@canvas-ir/text";
-import { type LiveSpec, type Sample, initialSamples, samples } from "./samples";
+import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
@@ -47,6 +49,8 @@ let scene = new Scene({ version: 1, ops: [] });
 let liveTexts: LiveText[] = [];
 let view: Matrix2D = IDENTITY;
 let router = new EventRouter(scene);
+/** Interactive objects (the note, the controls), drawn from their state. */
+let components: Components | null = null;
 /** Selected objects (outermost groups, or single ops picked with Alt), in the order picked. */
 let selected: string[] = [];
 let hovered: string | null = null;
@@ -64,15 +68,6 @@ const objectOf = (e: RouterEvent): string | null => {
   if (e.target === null) return null;
   if ("altKey" in e.input && e.input.altKey) return e.target;
   return e.path[e.path.length - 1] ?? e.target;
-};
-
-/** The link under the pointer, from the text-run group a hit is in. */
-const linkOf = (e: RouterEvent): string | null => {
-  for (const id of e.path) {
-    const href = scene.getGroup(id)?.meta?.href;
-    if (typeof href === "string") return href;
-  }
-  return null;
 };
 
 const log = (line: string): void => {
@@ -191,17 +186,33 @@ const select = (ids: string[]): void => {
 const shiftHeld = (e: RouterEvent): boolean => "shiftKey" in e.input && e.input.shiftKey === true;
 const snapping = (e: RouterEvent): boolean => !("ctrlKey" in e.input && (e.input.ctrlKey || e.input.metaKey));
 
+const snapOn = document.getElementById("snap-on") as HTMLInputElement;
+const snapRadius = document.getElementById("snap-radius") as HTMLInputElement;
+const snapText = document.getElementById("snap-text") as HTMLInputElement;
+snapRadius.addEventListener("input", () => (document.getElementById("snap-radius-value")!.textContent = `${snapRadius.value}px`));
+const KIND_GROUPS: Record<string, readonly SnapKind[]> = {
+  points: ["vertex", "intersection", "center", "midpoint", "extreme", "baseline"],
+  bounds: ["bounds"],
+  path: ["path"],
+};
+const snapKinds = (): SnapKind[] =>
+  Array.from(document.querySelectorAll<HTMLInputElement>(".snap-kind")).filter((c) => c.checked).flatMap((c) => KIND_GROUPS[c.value] ?? []);
+
 /** Moves the dragged objects so that, if one of their anchors lands near another object's snap point, it lands on it. */
 const dragTo = (total: { x: number; y: number }, snap: boolean): void => {
   if (!drag) return;
   let target = total;
   snapMark = null;
-  if (snap) {
-    const radius = 8 / Math.hypot(view.a, view.b);
+  const kinds = snapKinds();
+  if (snap && snapOn.checked && kinds.length > 0) {
+    const radius = Number(snapRadius.value) / Math.hypot(view.a, view.b);
+    // Text laid out against what moves moves with it: snapping to it would chase a moving target.
+    const exclude = [...drag.ids, ...liveTexts.filter((l) => drag!.ids.some((id) => l.dependsOn(id))).map((l) => l.id)];
+    const filter = snapText.checked ? undefined : (op: { kind: string }) => op.kind !== "text";
     let best: { dx: number; dy: number; distance: number; x: number; y: number; kind: string } | null = null;
     for (const a of drag.anchors) {
       const p = { x: a.x + total.x, y: a.y + total.y };
-      const found = scene.snap(p, { radius, exclude: drag.ids });
+      const found = scene.snap(p, { radius, kinds, exclude, ...(filter ? { filter } : {}) });
       if (found && (!best || found.distance < best.distance)) {
         best = { dx: found.point.x - p.x, dy: found.point.y - p.y, distance: found.distance, x: found.point.x, y: found.point.y, kind: found.kind };
       }
@@ -214,7 +225,7 @@ const dragTo = (total: { x: number; y: number }, snap: boolean): void => {
   const step = { x: target.x - drag.moved.x, y: target.y - drag.moved.y };
   if (step.x === 0 && step.y === 0) return;
   for (const id of drag.ids) {
-    scene.transform(id, { a: 1, b: 0, c: 0, d: 1, e: step.x, f: step.y });
+    components!.move(id, { a: 1, b: 0, c: 0, d: 1, e: step.x, f: step.y });
     followMove(id, step.x, step.y);
   }
   drag.moved = target;
@@ -222,15 +233,23 @@ const dragTo = (total: { x: number; y: number }, snap: boolean): void => {
 
 const wire = (): void => {
   router = new EventRouter(scene, { view, tolerance: 3 });
+  if (components) components.bind(scene, router);
+  else {
+    components = new Components(scene, router, {
+      recorder: recorderOptions,
+      onChange: () => {
+        canvas.style.cursor = components?.cursor ?? "";
+        render();
+      },
+    });
+  }
   router.on("*", "enter", (e) => {
     hovered = objectOf(e);
-    canvas.style.cursor = linkOf(e) ? "pointer" : "";
     render();
   });
   router.on("*", "leave", () => {
     // An enter for whatever is under the pointer now follows, if anything is.
     hovered = null;
-    canvas.style.cursor = "";
     render();
   });
   router.on("*", "click", (e) => {
@@ -238,11 +257,6 @@ const wire = (): void => {
     if (shiftHeld(e)) select(id === null ? selected : selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
     else select(id === null ? [] : [id]);
     log(`click ${e.target ?? "empty space"}${e.path.length > 1 ? ` in ${e.path.slice(1).join(" < ")}` : ""}`);
-    const href = linkOf(e);
-    if (href && !shiftHeld(e)) {
-      log(`open link ${href}`);
-      window.open(href, "_blank", "noopener");
-    }
   });
   router.on("*", "dragstart", (e) => {
     const id = objectOf(e);
@@ -296,6 +310,7 @@ const wire = (): void => {
     if ((key === "Delete" || key === "Backspace") && selected.length > 0) {
       log(`remove ${selected.join(", ")}`);
       for (const id of selected) if (scene.get(id) || scene.getGroup(id)) scene.remove(id);
+      for (const id of components!.ids) if (!scene.getGroup(id)) components!.unmount(id);
       liveTexts = liveTexts.filter((live) => scene.getGroup(parentOf(live)));
       for (const live of liveTexts) live.update();
       hovered = null;
@@ -339,6 +354,24 @@ window.addEventListener("keydown", (e) => {
 });
 new ResizeObserver(render).observe(stage);
 
+/** Texts that flow around shapes: the ones the controls change. */
+const wrapped = (): LiveText[] => liveTexts.filter((l) => (l.settings.obstacles?.length ?? 0) > 0);
+const hooks: ControlHooks = {
+  setMargin: (px) => {
+    for (const l of wrapped()) l.set({ obstacleMargin: px });
+    render();
+  },
+  setSize: (px) => {
+    for (const l of wrapped()) l.set({ theme: { ...l.settings.theme, fontSize: px } });
+    render();
+  },
+  openLink: (href) => {
+    log(`open link ${href}`);
+    window.open(href, "_blank", "noopener");
+  },
+  get: (id) => components?.get(id),
+};
+
 /** Draws more onto the board: the current document is replayed into a new recorder, then the sample is drawn after it. */
 const add = async (sample: Sample): Promise<void> => {
   const recorder = new RecordingContext(recorderOptions);
@@ -356,16 +389,17 @@ const add = async (sample: Sample): Promise<void> => {
     await canvg.render();
     recorder.endGroup();
   }
-  const live = "svg" in sample ? undefined : sample.draw(recorder);
+  const drawn = "svg" in sample ? undefined : sample.draw(recorder, hooks);
   scene = new Scene(recorder.getDocument());
-  // Texts already on the board were replayed with it; bind them to the new scene.
+  wire();
+  // Texts and components already on the board were replayed with it; bind them to the new scene.
   liveTexts = liveTexts.map((l) => new LiveText(scene, l.settings));
-  for (const spec of live ?? []) {
+  for (const spec of drawn?.live ?? []) {
     const l = new LiveText(scene, { ...spec, meta: { source: "live text" } });
     l.update();
     liveTexts.push(l);
   }
-  wire();
+  for (const spec of drawn?.components ?? []) components!.mount(spec);
   log(`added ${sample.name}; the board has ${scene.document.ops.length} ops`);
   render();
 };

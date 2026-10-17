@@ -79,6 +79,8 @@ interface Listener {
 
 interface Press {
   readonly target: string | null;
+  /** The target and its groups when pressed: drag events keep going to them even if the op is redrawn under a new id. */
+  readonly path: readonly string[];
   readonly startScreen: Point;
   readonly startWorld: Point;
   lastWorld: Point;
@@ -101,6 +103,8 @@ export class EventRouter {
   private hoverPath: string[] = [];
   private press: Press | null = null;
   private focus: string | null = null;
+  private focusPath: readonly string[] = [];
+  private lastPointer: PointerInput | null = null;
 
   constructor(
     private readonly scene: Scene,
@@ -138,9 +142,22 @@ export class EventRouter {
     return this.hoverPath[0] ?? null;
   }
 
-  /** The op the last press landed on; key events go to it. */
+  /** The op under the pointer and its groups, innermost first. */
+  get hoveredPath(): readonly string[] {
+    return this.hoverPath;
+  }
+
+  /** The op the last press landed on; key events go to it, and to its groups as they were then. */
   get focused(): string | null {
     return this.focus;
+  }
+
+  /**
+   * Hit-tests the last pointer position again, sending enter and leave for what
+   * changed under a still pointer, such as an object that moved or was redrawn.
+   */
+  refreshHover(): void {
+    if (this.lastPointer) this.updateHover(this.pick({ x: this.lastPointer.x, y: this.lastPointer.y }).path, this.lastPointer);
   }
 
   /** The world-space point under a host pixel. */
@@ -157,6 +174,7 @@ export class EventRouter {
   }
 
   pointerMove(input: PointerInput): void {
+    this.lastPointer = input;
     const screen = { x: input.x, y: input.y };
     this.updateHover(this.pick(screen).path, input);
     const press = this.press;
@@ -165,23 +183,26 @@ export class EventRouter {
     if (!press.dragging) {
       if (Math.hypot(screen.x - press.startScreen.x, screen.y - press.startScreen.y) < this.dragThreshold) return;
       press.dragging = true;
-      this.dispatch("dragstart", press.target, input, screen, { delta: sub(world, press.startWorld), total: sub(world, press.startWorld) });
+      this.dispatch("dragstart", press.target, input, screen, { delta: sub(world, press.startWorld), total: sub(world, press.startWorld) }, press.path);
     }
-    this.dispatch("drag", press.target, input, screen, { delta: sub(world, press.lastWorld), total: sub(world, press.startWorld) });
+    this.dispatch("drag", press.target, input, screen, { delta: sub(world, press.lastWorld), total: sub(world, press.startWorld) }, press.path);
     press.lastWorld = world;
   }
 
   pointerDown(input: PointerInput): void {
+    this.lastPointer = input;
     const screen = { x: input.x, y: input.y };
     const { target, path } = this.pick(screen);
     this.updateHover(path, input);
     const world = this.toWorld(screen);
-    this.press = { target, startScreen: screen, startWorld: world, lastWorld: world, dragging: false };
+    this.press = { target, path, startScreen: screen, startWorld: world, lastWorld: world, dragging: false };
     this.focus = target;
+    this.focusPath = path;
     this.dispatch("down", target, input, screen);
   }
 
   pointerUp(input: PointerInput): void {
+    this.lastPointer = input;
     const screen = { x: input.x, y: input.y };
     const { target, path } = this.pick(screen);
     this.updateHover(path, input);
@@ -189,14 +210,22 @@ export class EventRouter {
     this.press = null;
     if (press?.dragging) {
       const world = this.toWorld(screen);
-      this.dispatch("dragend", press.target, input, screen, { delta: sub(world, press.lastWorld), total: sub(world, press.startWorld) });
+      this.dispatch("dragend", press.target, input, screen, { delta: sub(world, press.lastWorld), total: sub(world, press.startWorld) }, press.path);
     }
     this.dispatch("up", target, input, screen);
-    if (press && !press.dragging && press.target === target) this.dispatch("click", target, input, screen);
+    if (!press || press.dragging) return;
+    // A click goes where the press and release agree: the same op, or else the innermost group both were in,
+    // as when a press redrew the op under a new id. A press and release on empty space click empty space.
+    if (press.target === target) this.dispatch("click", target, input, screen, {}, path);
+    else {
+      const common = path.findIndex((id) => press.path.includes(id));
+      if (common >= 0) this.dispatch("click", path[common]!, input, screen, {}, path.slice(common));
+    }
   }
 
   /** The pointer left the host element: everything hovered is left. */
   pointerLeave(input: PointerInput): void {
+    this.lastPointer = null;
     this.updateHover([], input);
   }
 
@@ -206,11 +235,11 @@ export class EventRouter {
   }
 
   keyDown(input: KeyInput): void {
-    this.dispatch("keydown", this.focus, input, null);
+    this.dispatch("keydown", this.focus, input, null, {}, this.focusPath);
   }
 
   keyUp(input: KeyInput): void {
-    this.dispatch("keyup", this.focus, input, null);
+    this.dispatch("keyup", this.focus, input, null, {}, this.focusPath);
   }
 
   private updateHover(path: string[], input: PointerInput): void {
@@ -237,8 +266,11 @@ export class EventRouter {
     input: PointerInput | WheelInput | KeyInput,
     screen: Point | null,
     extra: { delta?: Point; total?: Point } = {},
+    given?: readonly string[],
   ): void {
-    const path = target === null ? [] : [target, ...this.scene.groupChain(target)];
+    // An op redrawn since the press is gone; its groups, remembered from then, still get the event.
+    const live = target !== null && (this.scene.get(target) !== undefined || this.scene.getGroup(target) !== undefined);
+    const path = target === null ? [] : live || !given ? [target, ...this.scene.groupChain(target)] : given.filter((id) => this.scene.getGroup(id));
     const base = this.makeEvent(type, target, path, screen, input, extra);
     let stopped = false;
     const run = (current: string, capture: boolean): void => {

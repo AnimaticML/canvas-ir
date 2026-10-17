@@ -1,5 +1,5 @@
 import { IDENTITY, multiply } from "../math";
-import type { Group, IRDocument, Matrix2D, Op, PathGeometry, Point, Rect } from "../types";
+import type { Group, IRDocument, JsonValue, Matrix2D, Op, PathGeometry, Point, Rect } from "../types";
 import { type Box, boxToRect, expandBox, isEmptyBox, pathBounds, rectToBox } from "./bounds";
 import { maxScale } from "./flatten";
 import { Grid } from "./grid";
@@ -55,8 +55,10 @@ export interface SnapOptions {
   readonly radius: number;
   /** Kinds to consider, in priority order: an earlier kind within the radius beats a nearer later one. Default `SNAP_PRIORITY`. */
   readonly kinds?: readonly SnapKind[];
-  /** Op or group ids to ignore, such as what is being dragged. */
+  /** Op or group ids to ignore, such as what is being dragged. Groups whose meta has `snap: false` are always ignored. */
   readonly exclude?: readonly string[];
+  /** Keeps only ops this returns true for, such as ones of chosen kinds or layers. */
+  readonly filter?: (op: Op) => boolean;
 }
 
 export interface Snap {
@@ -210,7 +212,9 @@ export class Scene {
 
   /**
    * Ops whose painted area contains the point, topmost first. A `clearRect`
-   * covering the point hides everything drawn before it.
+   * covering the point hides everything drawn before it. Invisible ops are
+   * skipped, unless they are in a group whose meta has `hitArea: true`: a
+   * transparent shape there is a deliberate target, such as a slider's grip.
    */
   hitTest(point: Point, options: HitTestOptions = {}): Hit[] {
     const tolerance = options.tolerance ?? 0;
@@ -224,7 +228,7 @@ export class Scene {
         if (shapeContains(shape, point, 0)) break;
         continue;
       }
-      if (!options.includeInvisible && opIsInvisible(entry.op)) continue;
+      if (!options.includeInvisible && opIsInvisible(entry.op) && !this.flagged(entry.op.id, "hitArea", true)) continue;
       if (shapeContains(shape, point, tolerance)) hits.push({ id: entry.op.id, op: entry.op, groups: this.groupChain(entry.op.id) });
     }
     return hits;
@@ -325,7 +329,15 @@ export class Scene {
     }
     const probe = expandBox({ minX: point.x, minY: point.y, maxX: point.x, maxY: point.y }, radius);
     const pool = [...this.grid.query(probe)]
-      .filter((e) => e.op.kind !== "clear" && !excluded.has(e.op.id) && !opIsInvisible(e.op) && boxDistance(e.coarse, point) <= radius)
+      .filter(
+        (e) =>
+          e.op.kind !== "clear" &&
+          !excluded.has(e.op.id) &&
+          !opIsInvisible(e.op) &&
+          boxDistance(e.coarse, point) <= radius &&
+          !this.flagged(e.op.id, "snap", false) &&
+          (!options.filter || options.filter(e.op)),
+      )
       .sort((a, b) => b.z - a.z);
     let best: Snap | null = null;
     const offer = (candidate: Snap): void => {
@@ -356,6 +368,11 @@ export class Scene {
       if (found) offer({ point: found.point, kind: "path", ids: [found.id], distance: found.distance });
     }
     return best;
+  }
+
+  /** Whether a group the op is in has `meta[key] === value`. */
+  private flagged(opId: string, key: string, value: JsonValue): boolean {
+    return this.groupChain(opId).some((g) => this.groups.get(g)?.meta?.[key] === value);
   }
 
   private anchorsOf(entry: Entry): Anchor[] {
@@ -448,7 +465,9 @@ export class Scene {
   remove(id: string): void {
     if (this.groups.has(id)) {
       for (const opId of this.groupOps(id)) this.remove(opId);
-      for (const g of [...this.groups.values()]) if (g.id === id || this.groupChain(g.id).includes(id)) this.groups.delete(g.id);
+      // Find every nested group before deleting any, since deleting a parent cuts its children's chains.
+      const nested = [...this.groups.values()].filter((g) => g.id === id || this.groupChain(g.id).includes(id));
+      for (const g of nested) this.groups.delete(g.id);
       return;
     }
     const entry = this.byId.get(id);

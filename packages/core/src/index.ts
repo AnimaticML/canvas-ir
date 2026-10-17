@@ -66,6 +66,14 @@ export type {
   SnapKind,
   SnapOptions,
 } from "./geometry/scene";
+export {
+  type ComponentHandle,
+  type ComponentHandler,
+  type ComponentSpec,
+  type ComponentUi,
+  Components,
+  type ComponentsOptions,
+} from "./components";
 export { EventRouter } from "./interaction";
 export type {
   EventRouterOptions,
