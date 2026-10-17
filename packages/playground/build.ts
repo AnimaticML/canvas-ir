@@ -2,7 +2,7 @@
 const result = await Bun.build({
   entrypoints: [new URL("./src/main.ts", import.meta.url).pathname],
   target: "browser",
-  minify: true,
+  minify: process.env.NO_MINIFY ? false : true,
 });
 if (!result.success) {
   for (const log of result.logs) console.error(log);

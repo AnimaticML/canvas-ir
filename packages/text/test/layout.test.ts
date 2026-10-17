@@ -194,6 +194,59 @@ describe("blocks", () => {
   });
 });
 
+describe("bands", () => {
+  test("an obstacle's projection on a band is the union of its spans at every height in the band", async () => {
+    const { touchedInBand } = await import("../src/bands");
+    const insideFill = (p: { x: number; y: number }, rings: { x: number; y: number }[][], rule: "evenodd" | "nonzero") => {
+      let winding = 0;
+      let crossings = 0;
+      for (const ring of rings) {
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i]!;
+          const b = ring[(i + 1) % ring.length]!;
+          if (a.y <= p.y !== b.y <= p.y && a.x + ((p.y - a.y) * (b.x - a.x)) / (b.y - a.y) > p.x) {
+            crossings++;
+            winding += b.y > a.y ? 1 : -1;
+          }
+        }
+      }
+      return rule === "evenodd" ? crossings % 2 === 1 : winding !== 0;
+    };
+    let seed = 11;
+    const next = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+    for (let round = 0; round < 150; round++) {
+      // Random rings, self-crossing and overlapping each other, as obstacle margins are.
+      const rings = Array.from({ length: 1 + Math.floor(next() * 3) }, () =>
+        Array.from({ length: 3 + Math.floor(next() * 10) }, () => ({ x: next() * 200, y: next() * 100 })),
+      );
+      const fillRule = next() < 0.5 ? ("evenodd" as const) : ("nonzero" as const);
+      const y0 = next() * 100 - 10;
+      const y1 = y0 + 1 + next() * 30;
+      const fast = touchedInBand({ rings, fillRule }, y0, y1);
+      const inFast = (x: number) => fast.some(([l, r]) => x >= l && x <= r);
+      // Brute force: is some point of the band at this x inside, or on the outline (where slivers too thin to sample end)?
+      const touched = (x: number) => {
+        for (let k = 0; k <= 400; k++) if (insideFill({ x, y: y0 + ((y1 - y0) * k) / 400 }, rings, fillRule)) return true;
+        return rings.some((ring) =>
+          ring.some((a, i) => {
+            const b = ring[(i + 1) % ring.length]!;
+            if (a.x <= x !== b.x <= x) {
+              const y = a.y + ((x - a.x) * (b.y - a.y)) / (b.x - a.x);
+              return y >= y0 && y <= y1;
+            }
+            return false;
+          }),
+        );
+      };
+      for (let x = -5; x <= 205; x += 0.37) {
+        // Away from interval ends, where the sampling's own step decides.
+        if (fast.some(([l, r]) => Math.abs(x - l) < 0.6 || Math.abs(x - r) < 0.6)) continue;
+        if (inFast(x) !== touched(x)) throw new Error(`round ${round}, x ${x}: fast ${inFast(x)}`);
+      }
+    }
+  });
+});
+
 describe("drawing", () => {
   test("a layout records as one text op per fragment, which hit-tests by line", () => {
     const fixture = textFixtures.find((f) => f.name === "headings, paragraphs and lists")!;

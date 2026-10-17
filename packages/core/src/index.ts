@@ -67,6 +67,18 @@ export type {
   SnapKind,
   SnapOptions,
 } from "./geometry/scene";
+export {
+  type CubicPiece,
+  type CurveTarget,
+  type FitOptions,
+  dedupePoints,
+  fitCurve,
+  isStraight,
+  pieceAt,
+  simplifyPolyline,
+  smoothPolyline,
+  traceCurve,
+} from "./geometry/curves";
 export { type PixelData, type TraceOptions, simplifyRing, traceImageOutline, traceImageSource, traceMask } from "./geometry/trace";
 export {
   type ComponentHandle,

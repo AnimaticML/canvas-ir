@@ -6,7 +6,7 @@
   "scripts": {
     "test": "bun test",
     "test:pixel": "bun run --cwd packages/pixel test",
-    "bench": "bun run packages/core/bench/geometry.ts",
+    "bench": "bun run packages/core/bench/geometry.ts && bun run packages/text/bench/wrap.ts",
     "typecheck": "tsc -p packages/core && tsc -p packages/text && tsc -p packages/vectorize && tsc -p packages/pixel && tsc -p packages/playground"
   },
   "devDependencies": {

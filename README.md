@@ -22,7 +22,7 @@ All five phases: recording, the IR, serialization and replay; geometry queries; 
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
-All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Each drawing's SVG export, rendered by Chromium, must match its replay everywhere away from anti-aliased edges. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text, and its underlines, line-throughs and overlines must land within a pixel of the DOM's in every fixture font. Traced image outlines, under transforms, crops and smoothing, must hit-test exactly where Chromium paints the image opaque, away from the outline. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
+All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Each drawing's SVG export, rendered by Chromium, must match its replay everywhere away from anti-aliased edges. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text, and its underlines, line-throughs and overlines must land within a pixel of the DOM's in every fixture font. Traced image outlines, under transforms, crops and smoothing, must hit-test exactly where Chromium paints the image opaque, away from the outline. A benchmark keeps every query on a 10,000-op board, and text layout around a traced outline, under budget (`bun run bench`).
 
 ## Use
 
@@ -117,7 +117,11 @@ const recorder = new RecordingContext({
 });
 ```
 
-`@canvas-ir/vectorize` is an experiment for flat art and UI screenshots: `vectorize(imageData)` picks a small palette (folding anti-aliased blends of two palette colors into them), traces each color's pixels, and returns a document of fills, largest first, so smaller regions sit on top and larger ones need no holes for them. The pixel run reports how close the replay comes to each source; it isn't gated.
+`@canvas-ir/vectorize` is an experiment for flat art and UI screenshots: `vectorize(imageData)` picks a small palette (folding anti-aliased blends of two palette colors into them), traces each color's pixels, and returns a document of fills, largest first, so smaller regions sit on top and larger ones need no holes for them. `curves: true` fits cubic Béziers to the outlines instead of polygons, keeping sharp corners. The pixel run reports how close the replay comes to each source, in both modes; it isn't gated.
+
+## Curves
+
+`simplifyPolyline(points, tolerance, closed)` drops points a line stays within `tolerance` of. `smoothPolyline(points, closed)` turns a polyline into cubic pieces through every point (centripetal Catmull–Rom). `fitCurve(points, tolerance, { closed, cornerAngle, cornerWindow })` fits as few cubics as stay within `tolerance`, keeping turns sharper than `cornerAngle` as corners; a `cornerWindow` of a few points measures turns over a span, so a traced pixel staircase reads as a curve and a box keeps its corners. `traceCurve(ctx, pieces, closed)` draws the pieces, straight ones as `lineTo`. For freehand strokes: `traceCurve(ctx, fitCurve(simplifyPolyline(points, 0.5, false), 1), false)`.
 
 ## Text layout
 

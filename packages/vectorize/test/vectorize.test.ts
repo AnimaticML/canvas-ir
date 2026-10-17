@@ -40,6 +40,18 @@ describe("vectorize", () => {
     expect(result.rings).toBeLessThan(8);
   });
 
+  test("curves fit the outlines, keeping the button's corners", () => {
+    const polygons = vectorize(card(), { tolerance: 0.5 });
+    const curved = vectorize(card(), { tolerance: 0.5, curves: true });
+    const scene = new Scene(curved.document);
+    expect((scene.hitTest({ x: 104, y: 64 })[0]!.op as FillOp).paint).toBe("#dc2626");
+    expect((scene.hitTest({ x: 11, y: 21 })[0]!.op as FillOp).paint).toBe("#2563eb");
+    expect(scene.hitTest({ x: 9.5, y: 19.5 }).map((h) => (h.op as FillOp).paint)).toEqual(["#ffffff"]);
+    const dot = (curved.document.ops[2] as FillOp).path;
+    expect(dot.subpaths.some((s) => s.segments.some((seg) => seg.kind === "cubic"))).toBe(true);
+    expect(curved.points).toBeLessThanOrEqual(polygons.points);
+  });
+
   test("transparent pixels are left out", () => {
     const image = card();
     for (let i = 3; i < image.data.length; i += 4) {

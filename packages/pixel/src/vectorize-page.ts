@@ -19,7 +19,8 @@ export interface VectorizeReport {
 
 const run = async (sources: readonly { name: string; png: string }[]): Promise<VectorizeReport[]> => {
   const out: VectorizeReport[] = [];
-  for (const { name, png } of sources) {
+  for (const { name: source, png } of sources) for (const curves of [false, true]) {
+    const name = curves ? `${source}, curves` : source;
     try {
       const img = new Image();
       img.src = `data:image/png;base64,${png}`;
@@ -28,7 +29,7 @@ const run = async (sources: readonly { name: string; png: string }[]): Promise<V
       const source = new OffscreenCanvas(width, height).getContext("2d")!;
       source.drawImage(img, 0, 0);
       const pixels = source.getImageData(0, 0, width, height);
-      const result = vectorize(pixels);
+      const result = vectorize(pixels, { curves });
       const replay = new OffscreenCanvas(width, height).getContext("2d")!;
       replayDocument(replay as unknown as CanvasRenderingContext2D, result.document);
       const a = pixels.data;

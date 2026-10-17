@@ -3,7 +3,7 @@
 // fringes fold into their nearest palette color, each color's pixels are traced
 // into rings, and the regions are drawn largest first, so smaller ones sit on
 // top and the larger ones under them need no holes where those go.
-import { type IRDocument, type PixelData, type Point, RecordingContext, simplifyRing, traceMask } from "canvas-ir";
+import { type IRDocument, type PixelData, type Point, RecordingContext, fitCurve, isStraight, simplifyRing, traceCurve, traceMask } from "canvas-ir";
 
 export interface VectorizeOptions {
   /** Most palette colors. Default 32. */
@@ -18,6 +18,14 @@ export interface VectorizeOptions {
   readonly tolerance?: number;
   /** Rings enclosing fewer square pixels than this are dropped. Default 0. */
   readonly minArea?: number;
+  /**
+   * Fit cubic curves to the simplified outlines, keeping corners sharper than
+   * `cornerAngle`: smoother edges and fewer points, at the cost of queries that
+   * flatten curves. Default false: polygons.
+   */
+  readonly curves?: boolean;
+  /** Turns sharper than this, in degrees, stay corners when fitting curves. Default 50. */
+  readonly cornerAngle?: number;
 }
 
 export interface VectorizeResult {
@@ -25,6 +33,7 @@ export interface VectorizeResult {
   readonly document: IRDocument;
   readonly palette: readonly string[];
   readonly rings: number;
+  /** Polygon vertices; with curves, one per straight piece and three per curved one (two handles and an end). */
   readonly points: number;
 }
 
@@ -84,6 +93,8 @@ export const vectorize = (image: PixelData, options: VectorizeOptions = {}): Vec
     alphaThreshold: options.alphaThreshold ?? 128,
     tolerance: options.tolerance ?? 0.75,
     minArea: options.minArea ?? 0,
+    curves: options.curves ?? false,
+    cornerAngle: options.cornerAngle ?? 50,
   };
   const { width, height, data } = image;
   const n = width * height;
@@ -143,6 +154,13 @@ export const vectorize = (image: PixelData, options: VectorizeOptions = {}): Vec
     for (const ring of kept) {
       const simple = simplifyRing(ring, o.tolerance);
       ringCount++;
+      if (o.curves && simple.length > 4) {
+        // Fit the pixel edges themselves, looking a few pixels each way for corners, so a staircase reads as a curve.
+        const pieces = fitCurve(simplifyRing(ring, 0.01), o.tolerance + 0.5, { closed: true, cornerAngle: o.cornerAngle, cornerWindow: 3 });
+        pointCount += pieces.reduce((n, p) => n + (isStraight(p) ? 1 : 3), 0);
+        traceCurve(ctx, pieces, true);
+        continue;
+      }
       pointCount += simple.length;
       simple.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
       ctx.closePath();

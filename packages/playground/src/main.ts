@@ -454,7 +454,7 @@ document.getElementById("vectorize")!.addEventListener("click", () => {
     const { width, height } = op.image;
     const pixels = new OffscreenCanvas(width, height).getContext("2d")!;
     pixels.drawImage(img, 0, 0, width, height);
-    const result = vectorize(pixels.getImageData(0, 0, width, height));
+    const result = vectorize(pixels.getImageData(0, 0, width, height), { curves: true });
     const at = scene.document.ops.findIndex((o) => o.id === op.id);
     scene.remove(op.id);
     result.document.ops.forEach((fill, i) => {
