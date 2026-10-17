@@ -400,6 +400,50 @@ export class Scene {
     this.place(op, index);
   }
 
+  /**
+   * Swaps a group's contents for newly recorded ones, in place in drawing order:
+   * how a component that drew itself into a group redraws after a change. The
+   * document must hold the group (under its id) and only groups nested in it,
+   * and its ops must all belong to them. Nested group and op ids are prefixed
+   * with `id/` so they can't collide with the rest of the scene. The group keeps
+   * its parent unless `parent` names another; a new group's ops go after its
+   * parent's. Returns the new op ids.
+   */
+  replaceGroup(id: string, document: IRDocument, options: { parent?: string } = {}): string[] {
+    const groups = document.groups ?? [];
+    const root = groups.find((g) => g.id === id);
+    const inside = (g: Group): boolean => {
+      for (let p: string | undefined = g.parent; p !== undefined; p = groups.find((x) => x.id === p)?.parent) if (p === id) return true;
+      return false;
+    };
+    for (const g of groups) if (g.id !== id && !inside(g)) throw new Error(`group ${g.id} is not inside ${id}`);
+    for (const op of document.ops) if (op.group === undefined || (op.group !== id && !inside(groups.find((g) => g.id === op.group)!))) {
+      throw new Error(`op ${op.id} is not inside ${id}`);
+    }
+    const rename = (x: string): string => (x === id || x.startsWith(`${id}/`) ? x : `${id}/${x}`);
+    const old = this.groups.get(id);
+    const firstOp = this.entries.findIndex((e) => e.op.group === id || (e.op.group !== undefined && this.groupChain(e.op.id).includes(id)));
+    if (old) this.remove(id);
+    const parent = options.parent ?? old?.parent;
+    // A new group goes after the rest of its parent's ops, or last.
+    let after = -1;
+    if (parent !== undefined && firstOp < 0) {
+      for (let i = this.entries.length - 1; i >= 0 && after < 0; i--) {
+        const op = this.entries[i]!.op;
+        if (op.group === parent || (op.group !== undefined && this.groupChain(op.id).includes(parent))) after = i;
+      }
+    }
+    const index = firstOp >= 0 ? firstOp : after >= 0 ? after + 1 : this.entries.length;
+    const meta = root?.meta ?? old?.meta;
+    this.addGroup({ id, ...(parent !== undefined ? { parent } : {}), ...(meta !== undefined ? { meta } : {}) });
+    for (const g of groups) if (g.id !== id) this.addGroup({ ...g, id: rename(g.id), parent: rename(g.parent!) });
+    return document.ops.map((op, i) => {
+      const renamed = { ...op, id: rename(op.id), group: rename(op.group!) } as Op;
+      this.insert(renamed, index + i);
+      return renamed.id;
+    });
+  }
+
   /** Removes an op, or a group with its ops and nested groups. */
   remove(id: string): void {
     if (this.groups.has(id)) {

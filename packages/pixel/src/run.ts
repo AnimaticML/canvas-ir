@@ -5,10 +5,12 @@
 // (see withComposedTransforms in page.ts). Hit tests must agree with Chromium's.
 // Each drawing's SVG export, rendered by Chromium, must match its replay away
 // from edges. SVG_DEBUG=<name> writes that drawing's export and both renderings
-// to SVG_DEBUG_DIR.
+// to SVG_DEBUG_DIR. Text layouts must break and place lines as the DOM does, and
+// text decorations must land within a pixel of the DOM's.
 import { chromium } from "playwright-core";
 import { readdir } from "node:fs/promises";
 import type { Comparison, CorpusResult, FixtureResult, GeometryResult, SvgResult } from "./page";
+import { checkDecorations } from "./decorations";
 import type { TextResult } from "./text-page";
 
 const describe = (c: Comparison): string =>
@@ -150,6 +152,17 @@ try {
   }
   console.log(`\n${texts.length - textFailed} of ${texts.length} text layouts match the DOM`);
   failed += textFailed;
+
+  // Decorations: underline, line-through and overline land within a pixel of the DOM's.
+  const decorations = await checkDecorations(browser);
+  const decorationsOff = decorations.filter((d) => !d.dom || Math.abs(d.dom.top - d.ours.top) > 1 || Math.abs(d.dom.thickness - d.ours.thickness) > 1);
+  for (const d of decorationsOff) {
+    const dom = d.dom ? `top ${d.dom.top}, thickness ${d.dom.thickness}` : "nothing";
+    console.log(`FAIL  decoration: ${d.kind} at ${d.size}px ${d.family}: DOM ${dom}, ours top ${d.ours.top}, thickness ${d.ours.thickness}`);
+  }
+  const families = new Set(decorations.map((d) => d.family)).size;
+  console.log(`\n${decorations.length - decorationsOff.length} of ${decorations.length} decorations (${families} families) land within 1px of the DOM's`);
+  failed += decorationsOff.length;
 
   if (failed > 0) process.exitCode = 1;
 } finally {

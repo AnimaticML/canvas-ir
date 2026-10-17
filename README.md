@@ -22,7 +22,7 @@ All five phases: recording, the IR, serialization and replay; geometry queries; 
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
-All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Each drawing's SVG export, rendered by Chromium, must match its replay everywhere away from anti-aliased edges. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
+All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Each drawing's SVG export, rendered by Chromium, must match its replay everywhere away from anti-aliased edges. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text, and its underlines, line-throughs and overlines must land within a pixel of the DOM's in every fixture font. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
 
 ## Use
 
@@ -58,7 +58,7 @@ scene.snap(pointer, { radius: 8, exclude: ["dragged"] }); // { point, kind, ids,
 
 ## Groups, events and SVG
 
-`beginGroup` and `endGroup` are extension calls on the recording context. Ops drawn between them belong to the group, groups nest, and a group can carry JSON `meta`. Hits report the op and its group chain, and the scene can bound, move and remove a group as one object. Groups are separate from `save`/`restore`.
+`beginGroup` and `endGroup` are extension calls on the recording context. Ops drawn between them belong to the group, groups nest, and a group can carry JSON `meta`. Hits report the op and its group chain, and the scene can bound, move and remove a group as one object. `scene.replaceGroup(id, document)` swaps a group's drawing for a newly recorded one in place, in drawing order, with nested ids prefixed by `id/`: that is how a component that draws itself into a group redraws after a change. Groups are separate from `save`/`restore`.
 
 ```ts
 import { EventRouter, toSVG } from "canvas-ir";
@@ -80,7 +80,7 @@ The router dispatches `down`, `up`, `click`, `dragstart`, `drag`, `dragend`, `wh
 
 SVG export keeps arcs and ellipses as elliptical arcs under any transform, and writes groups as `<g data-group>` with their meta. Where SVG has no equal it draws the nearest thing: a conic gradient is a CSS `conic-gradient`, `clearRect` masks out what came before it, and shadows are filters drawn under the shape. Images are referenced by `src`, or by whatever `images` maps it to; an SVG shown with `<img>` needs data URLs.
 
-`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (in a circle, and flowing around a shape that re-lays it out as you drag it), and canvas shapes on one board, with hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
+`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a clickable link, in a circle, and flowing around a shape that re-lays it out as you drag it), and canvas shapes on one board, with hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
 
 ## Text layout
 
@@ -108,6 +108,21 @@ drawTextLayout(ctx, layout); // one fillText per run; layout.lines has every lin
 ```
 
 The layout records the Pretext version, the line-breaking engine and every font it measured in `layout.fingerprint`, so a host can tell when a stored layout came from another environment.
+
+Runs can be `underline`, `strikethrough` or `overline`; the lines are filled rects placed where Chromium's DOM places `text-decoration` (`decorationMetrics`), within a pixel. A run with an `href` or a `data` object is drawn in a group of its own, one per line it spans, with `{ type: "text-run", paragraph, run, href, data }` as meta, so a hit names the link. Links take the theme's `linkColor` and are underlined unless `linkUnderline` is off.
+
+```ts
+import { LiveText, caretRect, positionAtPoint, selectionRects } from "@canvas-ir/text";
+
+// Text bound to the scene: obstacles are read from it, and update() swaps the block's group.
+const live = new LiveText(scene, { id: "caption", text, container, obstacles: ["photo"], obstacleMargin: 8 });
+live.update();
+if (live.dependsOn(movedId)) live.update();
+
+const p = positionAtPoint(live.layout!, point); // { paragraph, run, offset, line }, at a grapheme boundary
+caretRect(live.layout!, p!);                     // { x, top, height, line }
+selectionRects(live.layout!, p!, other);         // one rect per line, bidi-aware
+```
 
 ## How the IR stores drawing
 

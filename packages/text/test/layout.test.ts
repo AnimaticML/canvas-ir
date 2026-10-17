@@ -11,30 +11,11 @@ import {
   visualRuns,
 } from "../src";
 import captured from "./captured.json";
-import { type MeasurementTable, fixtureOptions, layoutSnapshot, measurementKey, textFixtures } from "./fixtures";
-
-/** Answers canvas measurement from the table captured in Chromium, as Pretext and our measurer both ask it. */
-const installMeasurementShim = (table: MeasurementTable): void => {
-  class ShimContext {
-    font = "10px sans-serif";
-    letterSpacing = "0px";
-    wordSpacing = "0px";
-    fontKerning = "auto";
-    measureText(text: string): Record<string, number> {
-      const m = table[measurementKey(this, text)];
-      if (!m) throw new Error(`no captured measurement for ${JSON.stringify(text)} in ${this.font}; run capture-text`);
-      return m;
-    }
-  }
-  (globalThis as { OffscreenCanvas?: unknown }).OffscreenCanvas = class {
-    getContext(): ShimContext {
-      return new ShimContext();
-    }
-  };
-};
+import { fixtureOptions, layoutSnapshot, textFixtures } from "./fixtures";
+import { installMeasurementShim } from "./shim";
 
 beforeAll(() => {
-  installMeasurementShim(captured.measurements as MeasurementTable);
+  installMeasurementShim();
   setLocale("en");
 });
 

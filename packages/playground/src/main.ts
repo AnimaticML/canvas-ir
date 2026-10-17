@@ -11,13 +11,12 @@ import {
   Scene,
   applyToPoint,
   multiply,
-  pathRings,
   replayDocument,
   serializeDocument,
   toSVG,
 } from "canvas-ir";
-import { type Region, drawTextLayout, layoutText } from "@canvas-ir/text";
-import { type LiveText, type Sample, initialSamples, samples } from "./samples";
+import { LiveText } from "@canvas-ir/text";
+import { type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
@@ -67,6 +66,15 @@ const objectOf = (e: RouterEvent): string | null => {
   return e.path[e.path.length - 1] ?? e.target;
 };
 
+/** The link under the pointer, from the text-run group a hit is in. */
+const linkOf = (e: RouterEvent): string | null => {
+  for (const id of e.path) {
+    const href = scene.getGroup(id)?.meta?.href;
+    if (typeof href === "string") return href;
+  }
+  return null;
+};
+
 const log = (line: string): void => {
   logView.textContent = `${line}\n${logView.textContent ?? ""}`.split("\n").slice(0, 40).join("\n");
 };
@@ -90,47 +98,15 @@ const describe = (id: string): string => {
   return lines.join("\n");
 };
 
-/** Lays a live text out against where its obstacles are now, and swaps its ops in the scene. */
-const relayout = (live: LiveText): void => {
-  const obstacles: Region[] = [];
-  for (const group of live.obstacles) {
-    if (!scene.getGroup(group)) continue;
-    for (const id of scene.groupOps(group)) {
-      const op = scene.get(id)!;
-      if (op.kind === "fill") obstacles.push({ rings: pathRings(op.path), fillRule: op.fillRule });
-    }
-  }
-  const layout = layoutText(live.text, {
-    container: live.container,
-    obstacles,
-    obstacleMargin: live.margin,
-    ...(live.theme ? { theme: live.theme } : {}),
-  });
-  const recorder = new RecordingContext();
-  recorder.beginGroup({ id: live.parent });
-  drawTextLayout(recorder, layout, { id: live.id, meta: { source: "live text" } });
-  recorder.endGroup();
-  const drawn = recorder.getDocument();
-  if (scene.getGroup(live.id)) scene.remove(live.id);
-  // Line groups and ops get ids under the block's, so they can't collide with the board's.
-  const rename = (id: string): string => (id === live.id || id === live.parent ? id : `${live.id}/${id}`);
-  for (const g of drawn.groups ?? []) if (g.id !== live.parent) scene.addGroup({ ...g, id: rename(g.id), ...(g.parent ? { parent: rename(g.parent) } : {}) });
-  for (const op of drawn.ops) scene.insert({ ...op, id: rename(op.id), ...(op.group ? { group: rename(op.group) } : {}) });
-};
-
-const translateContainer = (live: LiveText, dx: number, dy: number): LiveText => ({
-  ...live,
-  container:
-    "rings" in live.container
-      ? { ...live.container, rings: live.container.rings.map((r) => r.map((p) => ({ x: p.x + dx, y: p.y + dy }))) }
-      : { ...live.container, x: live.container.x + dx, y: live.container.y + dy },
-});
+const parentOf = (live: LiveText): string => (live.settings as LiveSpec).parent;
 
 /** After `moved` moved by (dx, dy): containers inside it follow, and text whose obstacles moved is laid out again. */
 const followMove = (moved: string, dx: number, dy: number): void => {
   const inside = (id: string) => id === moved || scene.groupChain(id).includes(moved);
-  liveTexts = liveTexts.map((live) => (inside(live.parent) ? translateContainer(live, dx, dy) : live));
-  for (const live of liveTexts) if (!inside(live.parent) && live.obstacles.some(inside)) relayout(live);
+  for (const live of liveTexts) {
+    if (inside(parentOf(live))) live.translate(dx, dy);
+    else if (live.dependsOn(moved)) live.update();
+  }
 };
 
 const render = (): void => {
@@ -248,11 +224,13 @@ const wire = (): void => {
   router = new EventRouter(scene, { view, tolerance: 3 });
   router.on("*", "enter", (e) => {
     hovered = objectOf(e);
+    canvas.style.cursor = linkOf(e) ? "pointer" : "";
     render();
   });
   router.on("*", "leave", () => {
     // An enter for whatever is under the pointer now follows, if anything is.
     hovered = null;
+    canvas.style.cursor = "";
     render();
   });
   router.on("*", "click", (e) => {
@@ -260,6 +238,11 @@ const wire = (): void => {
     if (shiftHeld(e)) select(id === null ? selected : selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
     else select(id === null ? [] : [id]);
     log(`click ${e.target ?? "empty space"}${e.path.length > 1 ? ` in ${e.path.slice(1).join(" < ")}` : ""}`);
+    const href = linkOf(e);
+    if (href && !shiftHeld(e)) {
+      log(`open link ${href}`);
+      window.open(href, "_blank", "noopener");
+    }
   });
   router.on("*", "dragstart", (e) => {
     const id = objectOf(e);
@@ -313,8 +296,8 @@ const wire = (): void => {
     if ((key === "Delete" || key === "Backspace") && selected.length > 0) {
       log(`remove ${selected.join(", ")}`);
       for (const id of selected) if (scene.get(id) || scene.getGroup(id)) scene.remove(id);
-      liveTexts = liveTexts.filter((live) => scene.getGroup(live.parent));
-      for (const live of liveTexts) relayout(live);
+      liveTexts = liveTexts.filter((live) => scene.getGroup(parentOf(live)));
+      for (const live of liveTexts) live.update();
       hovered = null;
       select([]);
     }
@@ -375,8 +358,13 @@ const add = async (sample: Sample): Promise<void> => {
   }
   const live = "svg" in sample ? undefined : sample.draw(recorder);
   scene = new Scene(recorder.getDocument());
-  liveTexts = [...liveTexts, ...(live ?? [])];
-  for (const l of live ?? []) relayout(l);
+  // Texts already on the board were replayed with it; bind them to the new scene.
+  liveTexts = liveTexts.map((l) => new LiveText(scene, l.settings));
+  for (const spec of live ?? []) {
+    const l = new LiveText(scene, { ...spec, meta: { source: "live text" } });
+    l.update();
+    liveTexts.push(l);
+  }
   wire();
   log(`added ${sample.name}; the board has ${scene.document.ops.length} ops`);
   render();

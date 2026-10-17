@@ -364,3 +364,60 @@ describe("transforming then querying equals querying then transforming", () => {
     }
   });
 });
+
+describe("replaceGroup", () => {
+  const drawn = (color: string, count: number) =>
+    record((ctx) => {
+      ctx.beginGroup({ id: "card", meta: { v: count } });
+      ctx.fillStyle = color;
+      for (let i = 0; i < count; i++) ctx.fillRect(i * 20, 0, 10, 10);
+      ctx.beginGroup({ id: "label" });
+      ctx.fillRect(0, 20, 50, 5);
+      ctx.endGroup();
+      ctx.endGroup();
+    });
+
+  test("swaps a group's ops in place, keeping drawing order and parent", () => {
+    const s = scene((ctx) => {
+      ctx.beginGroup({ id: "board" });
+      ctx.fillRect(-100, -100, 5, 5);
+      ctx.beginGroup({ id: "card" });
+      ctx.fillRect(0, 0, 10, 10);
+      ctx.endGroup();
+      ctx.fillRect(100, 100, 5, 5);
+      ctx.endGroup();
+    });
+    const [before, , after] = s.document.ops.map((op) => op.id);
+    const ids = s.replaceGroup("card", drawn("red", 3));
+    expect(ids).toHaveLength(4);
+    expect(ids.every((id) => id.startsWith("card/"))).toBe(true);
+    expect(s.document.ops.map((op) => op.id)).toEqual([before!, ...ids, after!]);
+    const groups = s.document.groups!;
+    expect(groups.find((g) => g.id === "card")).toEqual({ id: "card", parent: "board", meta: { v: 3 } });
+    expect(groups.find((g) => g.id === "card/label")?.parent).toBe("card");
+    expect(s.hitTest({ x: 45, y: 5 })[0]?.groups).toEqual(["card", "board"]);
+    expect(s.hitTest({ x: 5, y: 22 })[0]?.groups).toEqual(["card/label", "card", "board"]);
+    // Again with fewer ops: nothing of the old drawing is left.
+    const again = s.replaceGroup("card", drawn("blue", 1));
+    expect(s.document.ops.map((op) => op.id)).toEqual([before!, ...again, after!]);
+    expect(s.hitTest({ x: 45, y: 5 })).toEqual([]);
+    expect(s.document.groups!.filter((g) => g.id.startsWith("card")).length).toBe(2);
+  });
+
+  test("a new group goes after its parent's ops", () => {
+    const s = scene((ctx) => {
+      ctx.beginGroup({ id: "board" });
+      ctx.fillRect(0, 0, 5, 5);
+      ctx.endGroup();
+      ctx.fillRect(100, 100, 5, 5);
+    });
+    const ids = s.replaceGroup("card", drawn("red", 1), { parent: "board" });
+    expect(s.document.ops.map((op) => op.id).indexOf(ids[0]!)).toBe(1);
+    expect(s.groupChain(ids[0]!)).toEqual(["card", "board"]);
+  });
+
+  test("refuses ops outside the group", () => {
+    const s = scene((ctx) => ctx.fillRect(0, 0, 5, 5));
+    expect(() => s.replaceGroup("card", record((ctx) => ctx.fillRect(0, 0, 1, 1)))).toThrow("is not inside card");
+  });
+});

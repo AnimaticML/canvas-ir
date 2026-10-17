@@ -393,7 +393,10 @@ const placeLine = (
   theme: Theme,
   measurer: TextMeasurer,
 ): { fragments: TextFragment[]; width: number } => {
-  const colorOf = (run: number): string => paragraph.runs[run]!.color ?? theme.color;
+  const colorOf = (run: number): string => {
+    const r = paragraph.runs[run]!;
+    return r.color ?? (r.href !== undefined ? theme.linkColor : theme.color);
+  };
   const available = interval[1] - interval[0];
   const needsBidi = direction === "rtl" || fragments.some((f) => hasRtl(f.text));
   if (!needsBidi) {

@@ -1,4 +1,4 @@
-import { type Container, type RichText, type Theme, drawTextLayout, layoutText } from "@canvas-ir/text";
+import { type LiveTextOptions, drawTextLayout, layoutText } from "@canvas-ir/text";
 import type { RecordingContext } from "canvas-ir";
 
 /**
@@ -6,21 +6,12 @@ import type { RecordingContext } from "canvas-ir";
  * `id` goes inside the group `parent`, which also holds the container's outline,
  * so dragging the parent moves the container too.
  */
-export interface LiveText {
-  readonly id: string;
-  readonly parent: string;
-  readonly text: RichText;
-  readonly theme?: Partial<Theme>;
-  readonly container: Container;
-  /** Groups whose filled shapes the text flows around, kept `margin` away. */
-  readonly obstacles: readonly string[];
-  readonly margin: number;
-}
+export type LiveSpec = LiveTextOptions & { readonly parent: string };
 
 /** Something to put on the board: SVG markup drawn through canvg, or a function drawing on the recorder. */
 export type Sample =
   | { readonly name: string; readonly svg: string; readonly at: { x: number; y: number } }
-  | { readonly name: string; readonly draw: (ctx: RecordingContext) => readonly LiveText[] | void };
+  | { readonly name: string; readonly draw: (ctx: RecordingContext) => readonly LiveSpec[] | void };
 
 const circleRing = (cx: number, cy: number, r: number) =>
   Array.from({ length: 128 }, (_, i) => ({ x: cx + r * Math.cos((i / 128) * 2 * Math.PI), y: cy + r * Math.sin((i / 128) * 2 * Math.PI) }));
@@ -50,7 +41,7 @@ const wrap: Sample = {
         theme: { fontSize: 14 },
         container: { x: 40, y: 258, width: 272, height: 266 },
         obstacles: [shape],
-        margin: 8,
+        obstacleMargin: 8,
       },
     ];
   },
@@ -81,7 +72,6 @@ const circle: Sample = {
         theme: { fontSize: 14 },
         container: { rings: [circleRing(700, 380, 100)] },
         obstacles: [],
-        margin: 0,
       },
     ];
   },
@@ -114,7 +104,7 @@ const note: Sample = {
     ctx.shadowOffsetY = 3;
     ctx.beginGroup({ meta: { source: "sticky note" } });
     ctx.beginPath();
-    ctx.roundRect(330, 40, 230, 250, 10);
+    ctx.roundRect(330, 40, 230, 310, 10);
     ctx.fill();
     ctx.restore();
     const layout = layoutText(
@@ -126,9 +116,23 @@ const note: Sample = {
             content: ["Laid out by ", { text: "@canvas-ir/text", code: true }, " and drawn as ", { text: "fillText", bold: true }, " calls. Each line is a group you can hit."],
           },
           { type: "list", items: [[{ type: "paragraph", content: ["Wraps like the DOM"] }], [{ type: "paragraph", content: ["Works in any shape"] }]] },
+          {
+            type: "paragraph",
+            content: [
+              "Runs can be ",
+              { text: "underlined", underline: true },
+              ", ",
+              { text: "struck out", strikethrough: true },
+              ", ",
+              { text: "overlined", overline: true },
+              " or ",
+              { text: "links you can click", href: "https://github.com/AnimaticML/canvas-ir" },
+              ".",
+            ],
+          },
         ],
       },
-      { container: { x: 346, y: 52, width: 198, height: 230 }, theme: { fontSize: 14 } },
+      { container: { x: 346, y: 52, width: 198, height: 290 }, theme: { fontSize: 14 } },
     );
     drawTextLayout(ctx, layout, { meta: { source: "sticky note text" } });
     ctx.endGroup();

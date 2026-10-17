@@ -1,3 +1,5 @@
+import type { JsonValue } from "canvas-ir";
+
 /**
  * The rich text this package lays out: blocks of inline runs, in the shape an
  * HTML editor's document maps onto (paragraphs, headings, lists, marks).
@@ -17,6 +19,13 @@ export interface TextRun {
   /** Font size in px. */
   readonly size?: number;
   readonly family?: string;
+  /** A link target. The run is drawn in the theme's link color, underlined, in a group whose meta carries it. */
+  readonly href?: string;
+  /** Anything the app wants back when the run is hit, kept in its group's meta. */
+  readonly data?: { readonly [key: string]: JsonValue };
+  readonly underline?: boolean;
+  readonly strikethrough?: boolean;
+  readonly overline?: boolean;
 }
 
 /** A plain string is a run with no marks. */
@@ -75,6 +84,10 @@ export interface Theme {
   /** Gap between a list marker's end and its item's text, in px. */
   readonly listMarkerGap: number;
   readonly bullets: readonly string[];
+  /** Color of runs with an `href` and no color of their own. */
+  readonly linkColor: string;
+  /** Whether links are underlined, as browsers draw them by default. */
+  readonly linkUnderline: boolean;
 }
 
 export const DEFAULT_THEME: Theme = {
@@ -92,6 +105,8 @@ export const DEFAULT_THEME: Theme = {
   listIndent: 28,
   listMarkerGap: 8,
   bullets: ["•", "◦", "▪"],
+  linkColor: "#0b57d0",
+  linkUnderline: true,
 };
 
 /** The canvas font shorthand for a run in a block. */

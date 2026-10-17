@@ -16,3 +16,6 @@ export {
 } from "./layout";
 export { type FontMetrics, type TextMeasurer, canvasMeasurer } from "./measure";
 export * from "./model";
+export { type DecorationLine, type DecorationMetrics, decorationMetrics } from "./decoration";
+export { LiveText, type LiveTextOptions } from "./live";
+export { type CaretRect, type SelectionRect, type TextPosition, caretRect, comparePositions, positionAtPoint, selectionRects } from "./caret";

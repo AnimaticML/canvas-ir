@@ -10,7 +10,7 @@ An app keeps its own document model (for example HTML web components synced thro
 
 What the library needs for that is incremental updates by group, not an undo stack:
 
-- `Scene.replaceGroup(id, document)` swaps a group's ops and nested groups for newly recorded ones in place, keeping its position in drawing order. The playground's live text does this by hand today.
+- `Scene.replaceGroup(id, document)` swaps a group's ops and nested groups for newly recorded ones in place, keeping its position in drawing order. `LiveText` in `@canvas-ir/text` uses it (done in batch 7).
 - Recording a component's drawing on its own, into a document whose group ids are prefixed or scoped to that component, so that two components' ids can't collide.
 - A change report from the scene listing which ids changed and the area they covered before and after. Redrawing only what changed (batch 9) and the app's own bookkeeping both use it.
 
@@ -24,13 +24,13 @@ What the library needs for that is incremental updates by group, not an undo sta
 - **Transparent paints:** hit tests skip fills and strokes whose paint is fully transparent (`rgba(…, 0)`, `transparent`, or gradients whose stops all have alpha 0), just as they already skip `globalAlpha` 0. `includeInvisible` keeps them for deliberate invisible hit areas.
 - **Gate:** intersections of random curves under random transforms match those of a flattening 100 times finer; a grown region holds exactly the points within the distance of the original, away from its edge by the tolerance; text with a margin and padding keeps its distance from obstacles and outline. Snapping and lasso have unit tests.
 
-## Batch 7: text
+## Batch 7: text (done)
 
 - **Run data and hyperlinks:** `TextRun` gains `href` and an open `data` object. `drawTextLayout` puts each run that has them in a group, inside its line group, with `{ type: "text-run", href, data }` as meta. A link that wraps becomes one group per line, all sharing the run's index. The playground shows a hover cursor and opens the link on click.
-- **Decorations:** underline, strikethrough and overline on runs, drawn as filled rects after the text. Position and thickness follow the browsers' fallbacks when the font's own values aren't available to Canvas. Underlines skip descenders only if that turns out to be cheap.
-- **Live layout in the library:** a text block bound to its container and obstacle groups, laid out again when they move or change, replacing its group through `replaceGroup`. This is the playground's live text, moved into `@canvas-ir/text`.
-- **Caret and selection helpers:** map a point to a source offset and an offset to a caret rect, and turn a source range into selection rects, from the fragments' `sourceStart`/`sourceEnd` and prefix measurement. Needed only for editing on the canvas.
-- **Gate:** decorations land within 1px of where Chromium's DOM draws `text-decoration` for the text fixtures. Links and caret mapping have unit tests.
+- **Decorations:** underline, strikethrough and overline on runs, drawn as filled rects: underlines and overlines before the text, line-throughs after, as browsers do. Canvas can't read the font's own values, so `decorationMetrics(size, ascent)` reproduces where Chromium draws them: a tenth of the size thick, the underline 0.106 em below the baseline, the line-through centered a third of the ascent above it, the overline on the ascent. Underlines don't skip descenders.
+- **Live layout in the library:** `LiveText` binds a text block to a scene, its container and obstacle ids. `update()` reads the obstacles' current outlines (fills as filled, strokes as a band of their width, text and images as boxes), lays the text out and swaps its group through `Scene.replaceGroup`; `dependsOn(id)` says whether a change needs that. The playground uses it.
+X
+- **Gate:** decorations land within 1px of where Chromium's DOM draws `text-decoration`, for every text fixture font at sizes from 11 to 48 px. Links, caret mapping, `replaceGroup` and `LiveText` have unit tests.
 
 ## Batch 8: images
 

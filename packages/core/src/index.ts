@@ -51,7 +51,7 @@ export type {
   TextStyle,
 } from "./types";
 export { SNAP_PRIORITY, Scene, transformOp } from "./geometry/scene";
-export { pathRings } from "./geometry/flatten";
+export { maxScale, pathRings } from "./geometry/flatten";
 export { normalizeRings, offsetRings, outlineBand } from "./geometry/offset";
 export { opIsInvisible, paintIsTransparent } from "./geometry/visibility";
 export type { Anchor, AnchorKind } from "./geometry/features";
