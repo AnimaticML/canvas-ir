@@ -165,6 +165,7 @@
       <h1>CanvasIR Playground</h1>
       <span id="samples"></span>
       <span class="spacer"></span>
+      <button id="vectorize">Vectorize image</button>
       <button id="export-svg">Export SVG</button>
       <button id="export-json">Export JSON</button>
       <button id="reset-view">Reset view</button>
@@ -175,7 +176,7 @@
         <section>
           <h2>Selection</h2>
           <pre id="selection">Click something on the board.</pre>
-          <p class="hint">Drag moves an object, or one shape with Alt held; it snaps to other objects (see Snapping) unless Ctrl or Cmd is held. The knob, slider and button drag, click and take arrow keys themselves. Shift-click adds to the selection, and Shift-drag on empty space draws a lasso. Delete removes the selection. Scroll zooms; drag empty space to pan.</p>
+          <p class="hint">Drag moves an object, or one shape with Alt held; it snaps to other objects (see Snapping) unless Ctrl or Cmd is held. The knob, slider and button drag, click and take arrow keys themselves. Shift-click adds to the selection, and Shift-drag on empty space draws a lasso. Images hit-test, snap and wrap text by their opaque pixels; select the orange sticker and press Vectorize image to turn it into fills. Delete removes the selection. Scroll zooms; drag empty space to pan.</p>
         </section>
         <section>
           <h2>Snapping</h2>

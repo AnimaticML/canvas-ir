@@ -1,0 +1,13 @@
+{
+  "name": "@canvas-ir/vectorize",
+  "version": "0.0.0",
+  "private": true,
+  "description": "An experiment: flat art and UI screenshots traced into CanvasIR fills, one region per color",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "canvas-ir": "workspace:*"
+  }
+}

@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "canvas-ir": "workspace:*",
-    "@canvas-ir/text": "workspace:*"
+    "@canvas-ir/text": "workspace:*",
+    "@canvas-ir/vectorize": "workspace:*"
   },
   "devDependencies": {
     "canvg": "4.0.3",

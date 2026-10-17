@@ -12,17 +12,17 @@ All five phases: recording, the IR, serialization and replay; geometry queries; 
 | --- | --- |
 | Paths with the spec's construction rules, including `arc`, `arcTo`, `ellipse`, `roundRect`, and `Path2D` with SVG path data | Pixel access: `getImageData`, `putImageData`, `createImageData` |
 | `fill`, `stroke`, `clip`, the rect helpers, `isPointInPath`, `isPointInStroke` | Patterns or gradients made by another context |
-| Colors (normalized like browsers), gradients and patterns | Caret and selection helpers for editors |
-| `drawImage`, `fillText`, `strokeText`, `measureText` | Image hit tests by their opaque pixels (batch 8) |
+| Colors (normalized like browsers), gradients and patterns | |
+| `drawImage`, `fillText`, `strokeText`, `measureText`; images hit-test by their opaque pixels when traced | |
 | All transform calls, `save`/`restore`/`reset`, line styles and dashes, alpha, compositing, shadows, filter, image smoothing | Canvas composite operations other than source-over and the blend modes, in SVG export |
 | Replay onto any real 2D context; validated JSON round trip | |
-| Groups, an event router with capture and bubbling, SVG export | |
-| Rich text layout: paragraphs, headings, lists, mixed fonts, any-shaped containers, obstacles, bidi | |
+| Groups, an event router with capture and bubbling, components drawn from state, SVG export | |
+| Rich text layout: paragraphs, headings, lists, mixed fonts, decorations, links, any-shaped containers, obstacles, bidi, caret and selection | |
 | Geometry: exact bounds, hit tests, rect and lasso queries, closest point, intersections, anchors, snapping, outline offsetting, moving ops | |
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
-All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Each drawing's SVG export, rendered by Chromium, must match its replay everywhere away from anti-aliased edges. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text, and its underlines, line-throughs and overlines must land within a pixel of the DOM's in every fixture font. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
+All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Each drawing's SVG export, rendered by Chromium, must match its replay everywhere away from anti-aliased edges. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text, and its underlines, line-throughs and overlines must land within a pixel of the DOM's in every fixture font. Traced image outlines, under transforms, crops and smoothing, must hit-test exactly where Chromium paints the image opaque, away from the outline. A benchmark keeps every query on a 10,000-op board under budget (`bun run bench`).
 
 ## Use
 
@@ -107,6 +107,18 @@ Handlers run in capture, before the board's own listeners, so a knob that stops 
 
 `packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a link that highlights on hover, in a circle, and flowing around a shape that re-lays it out as you drag it), a knob, a slider and a button built as components that change the wrapped text, and canvas shapes on one board, with snapping settings, hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
 
+## Images
+
+`traceImageOutline(imageData, { threshold, tolerance, minArea })` traces where an image is opaque into rings in its pixel space: pixel edges, simplified to within `tolerance`. Give it to the recording context through `describeImage`, and hit tests, closest points, snapping and text layout use the silhouette instead of the box. `traceImageSource(image, width, height)` does the reading through an `OffscreenCanvas`.
+
+```ts
+const recorder = new RecordingContext({
+  describeImage: (img) => ({ src: srcOf(img), width: 180, height: 140, outline: traceImageSource(img, 180, 140) }),
+});
+```
+
+`@canvas-ir/vectorize` is an experiment for flat art and UI screenshots: `vectorize(imageData)` picks a small palette (folding anti-aliased blends of two palette colors into them), traces each color's pixels, and returns a document of fills, largest first, so smaller regions sit on top and larger ones need no holes for them. The pixel run reports how close the replay comes to each source; it isn't gated.
+
 ## Text layout
 
 `@canvas-ir/text` lays out rich text with [Pretext](https://github.com/chenglou/pretext), so lines break where a browser would break them, and draws it as `fillText` calls into any context, a `RecordingContext` included.
@@ -166,7 +178,7 @@ selectionRects(live.layout!, p!, other);         // one rect per line, bidi-awar
 - A `clearRect` hides whatever it covers from hit tests. Ops that paint nothing visible (`globalAlpha` 0, or a fully transparent color or gradient) are skipped unless asked for, so a click goes through them to what's underneath.
 - Snapping ranks candidates by kind (vertex, intersection, center, midpoint, extreme, baseline, bounds, then the nearest point on an outline), and the nearest within a kind. Anchors come from the recorded segments, so arc centers and curve extremes are exact; intersections are exact for straight edges and within the tolerance for curves.
 - `offsetRings` grows an outline with round corners, and `outlineBand` is the strip along it. Text layout uses them for `obstacleMargin` and `padding`.
-- A point must be inside every clip path of an op to hit it. Images hit-test as the part of their destination the source covers, text as its ink box from the recorded measurement.
+- A point must be inside every clip path of an op to hit it. Images hit-test as the part of their destination the source covers, or, when their `ImageRef` carries an `outline`, as that silhouette within it; text hit-tests as its ink box from the recorded measurement.
 
 ## Develop
 
@@ -178,4 +190,4 @@ bun run bench
 bun run test:pixel   # needs Chromium; set CHROMIUM_PATH if Playwright can't find one
 ```
 
-`packages/core` is the library, `packages/text` the text layout layer on top of it, `packages/pixel` holds the browser checks, and `packages/playground` is a demo app that depends on both libraries. After changing a text fixture, run `bun run --cwd packages/pixel capture-text` to capture its measurements and layout from Chromium for the Bun tests. Tooling depends on the libraries, never the reverse. `SVG_DEBUG=<drawing name>` on the pixel run writes that drawing's SVG export and both renderings to `SVG_DEBUG_DIR`.
+`packages/core` is the library, `packages/text` the text layout layer on top of it, `packages/vectorize` the vectorizer experiment, `packages/pixel` holds the browser checks, and `packages/playground` is a demo app that depends on both libraries. After changing a text fixture, run `bun run --cwd packages/pixel capture-text` to capture its measurements and layout from Chromium for the Bun tests. Tooling depends on the libraries, never the reverse. `SVG_DEBUG=<drawing name>` on the pixel run writes that drawing's SVG export and both renderings to `SVG_DEBUG_DIR`.

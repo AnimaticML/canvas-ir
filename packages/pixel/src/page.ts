@@ -18,7 +18,9 @@ import {
   toSVG,
 } from "canvas-ir";
 import { type FixtureEnv, HEIGHT, WIDTH, fixtures } from "./fixtures";
+import "./outline-page";
 import "./text-page";
+import "./vectorize-page";
 
 /** The fixtures' image: an opaque 16 by 12 checkerboard with a gradient, so smoothing and mirroring show. */
 const makeImage = (): OffscreenCanvas => {

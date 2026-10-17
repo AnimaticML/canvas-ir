@@ -40,15 +40,15 @@ What the library needs for that is incremental updates by group, not an undo sta
 - **Playground:** the note highlights its link on hover and opens it on click; a knob, slider and button set the wrapped text's margin and size. Snapping has controls (on/off, radius, kinds, text), and text laid out against what is being dragged is never a snap target.
 - **Gate:** unit tests for redraws during presses, drags and keys, moves, hit areas and snapping filters.
 
-## Batch 8: images
+## Batch 8: images (done)
 
-- **Image outlines:** `traceImageOutline(imageData, { threshold, tolerance })` traces where the image is opaque (marching squares on the alpha channel, simplified with Douglas–Peucker) into rings in image pixel space. An `ImageRef` may carry the outline. Hit tests, closest point, snapping and text obstacles then use the real silhouette instead of the box. Tracing happens when an image is described (`describeImage`), not at query time.
-- **Screenshot and flat-art vectorizing (an experiment, in its own package):** PNGs of UI and flat illustrations have few colors, unlike photos.
-  - Quantize the colors, folding anti-aliasing fringes into their neighbors.
-  - Trace one region per color, simplify the regions, and fit lines and arcs.
-  - Emit fills in z-order: background first, then shapes. The result can be exported as SVG through the existing export.
+- **Image outlines:** `traceImageOutline(imageData, { threshold, tolerance, minArea })` follows the pixel edges where alpha reaches the threshold (so the rings' nonzero fill is exactly the opaque pixels) and simplifies them with Douglas–Peucker. An `ImageRef` may carry the outline. Hit tests, closest point, snapping to outlines, intersections and text obstacles (`scene.region`) then use the silhouette, cut by the source crop; anchors stay on the box. Tracing happens when an image is described (`describeImage`, or `traceImageSource` in a browser), not at query time.
+- **Screenshot and flat-art vectorizing (an experiment, in `@canvas-ir/vectorize`):**
+  - The palette is the most common colors, skipping near duplicates and blends of two colors already chosen, which are anti-aliased edges; every pixel takes its nearest palette color.
+  - Each color's pixels are traced and simplified. Fitting arcs and curves is not done yet: outlines are polygons.
+  - Fills are emitted largest first. A larger region drops its holes where colors drawn later fill them, so no seams show. The result exports as SVG like any document.
   - Text in a screenshot becomes shapes, not text.
-- **Gate:** outline hit tests agree with the alpha channel at every pixel away from the outline. The vectorizer reports a pixel difference against the source PNG on a small corpus; it's tracked, not gated, while it's an experiment.
+- **Gate:** for test images with soft edges, holes, glyphs, thin lines and specks, drawn as is, scaled and rotated, and cropped, skewed and smoothed, hit tests agree with the painted alpha at every device pixel clear of the outline and crop edge. The vectorizer reports its mean difference and the share of pixels off by more than 32 against UI screenshots and corpus SVGs; tracked, not gated.
 
 ## Batch 9: rendering performance
 

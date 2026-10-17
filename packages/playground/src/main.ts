@@ -15,8 +15,15 @@ import {
   multiply,
   replayDocument,
   serializeDocument,
+  imageToWorld,
   toSVG,
+  traceImageSource,
+  transformOp,
+  type ImageOp,
+  type Op,
+  type Point,
 } from "canvas-ir";
+import { vectorize } from "@canvas-ir/vectorize";
 import { LiveText } from "@canvas-ir/text";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 
@@ -29,6 +36,8 @@ const logView = document.getElementById("log")!;
 // Images seen while recording, by the src the IR stores, so replay draws the same objects.
 const images = new Map<string, CanvasImageSource>();
 const imageIds = new Map<unknown, string>();
+// Each image's traced silhouette, so hit tests, snapping and text wrap follow its opaque pixels.
+const outlines = new Map<unknown, Point[][]>();
 const recorderOptions: RecordingContextOptions = {
   describeImage: (img) => {
     const source = img as { src?: string; width?: number; height?: number; naturalWidth?: number; naturalHeight?: number };
@@ -41,7 +50,12 @@ const recorderOptions: RecordingContextOptions = {
       imageIds.set(img, src);
       images.set(src, img as CanvasImageSource);
     }
-    return { src, width, height };
+    let outline = outlines.get(img);
+    if (!outline) {
+      outline = traceImageSource(img as CanvasImageSource, width, height);
+      outlines.set(img, outline);
+    }
+    return { src, width, height, outline };
   },
 };
 
@@ -426,6 +440,32 @@ document.getElementById("add-svg")!.addEventListener("click", () => {
 document.getElementById("export-svg")!.addEventListener("click", () => {
   const b = stage.getBoundingClientRect();
   download("board.svg", "image/svg+xml", toSVG(scene.document, { width: Math.round(b.width), height: Math.round(b.height) }));
+});
+document.getElementById("vectorize")!.addEventListener("click", () => {
+  // Images in the selection become fills, one per color, drawn where the image was.
+  const ops = selected.flatMap((id) => (scene.getGroup(id) ? scene.groupOps(id) : [id])).map((id) => scene.get(id)).filter((op): op is ImageOp => op?.kind === "image");
+  if (ops.length === 0) {
+    log("select an image to vectorize, such as the orange sticker");
+    return;
+  }
+  for (const op of ops) {
+    const img = images.get(op.image.src);
+    if (!img) continue;
+    const { width, height } = op.image;
+    const pixels = new OffscreenCanvas(width, height).getContext("2d")!;
+    pixels.drawImage(img, 0, 0, width, height);
+    const result = vectorize(pixels.getImageData(0, 0, width, height));
+    const at = scene.document.ops.findIndex((o) => o.id === op.id);
+    scene.remove(op.id);
+    result.document.ops.forEach((fill, i) => {
+      const { group: _, ...rest } = transformOp(fill, imageToWorld(op));
+      scene.insert({ ...rest, id: `${op.id}/v${i}`, ...(op.group !== undefined ? { group: op.group } : {}), ...(op.clip ? { clip: op.clip } : {}) } as Op, at + i);
+    });
+    log(`vectorized ${op.id}: ${result.palette.length} colors, ${result.rings} rings, ${result.points} points`);
+  }
+  for (const live of liveTexts) live.update();
+  showSelection();
+  render();
 });
 document.getElementById("export-json")!.addEventListener("click", () => download("board.json", "application/json", serializeDocument(scene.document)));
 document.getElementById("reset-view")!.addEventListener("click", () => setView(IDENTITY));

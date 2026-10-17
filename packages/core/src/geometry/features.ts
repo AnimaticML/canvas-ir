@@ -2,7 +2,7 @@ import { applyToPoint } from "../math";
 import type { Op, PathGeometry, Point } from "../types";
 import { type Box, isEmptyBox } from "./bounds";
 import { arcSweep, ellipseFrame } from "./flatten";
-import type { Shape } from "./shape";
+import { type Shape, imageRing } from "./shape";
 
 /**
  * What an anchor marks: a path's vertices (subpath starts and segment ends),
@@ -151,7 +151,8 @@ export const opAnchors = (op: Op, shape: Shape): Anchor[] => {
       break;
     case "image":
     case "clear": {
-      const ring = shape.rings[0];
+      // An outlined image still snaps by its box; its silhouette is snapped to as an outline.
+      const ring = op.kind === "image" && shape.silhouette ? imageRing(op) : shape.rings[0];
       if (!ring) return [];
       anchors = ring.flatMap((p, i) => [
         { point: p, kind: "vertex" as const },

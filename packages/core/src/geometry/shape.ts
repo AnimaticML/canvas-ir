@@ -1,4 +1,4 @@
-import { IDENTITY, applyToPoint, invert } from "../math";
+import { IDENTITY, applyToPoint, invert, multiply } from "../math";
 import type { ClipPath, FillRule, ImageOp, Matrix2D, Op, Point, TextOp } from "../types";
 import { type Box, EMPTY_BOX, boxOfPoints, isEmptyBox, pathBounds, unionBox } from "./bounds";
 import { type Edge, edgeIntersections } from "./features";
@@ -32,6 +32,8 @@ export interface Shape {
   readonly centerline: readonly Polyline[];
   /** The clip region: a point must be inside every one of these. */
   readonly clips: readonly ClipShape[];
+  /** An image with an outline: `rings` are its silhouette, filled nonzero, instead of its box. */
+  readonly silhouette?: boolean;
 }
 
 export interface ClipShape {
@@ -78,8 +80,16 @@ const quad = (m: Matrix2D, x0: number, y0: number, x1: number, y1: number): Poin
   applyToPoint(m, x0, y1),
 ];
 
+/** Maps an image op's pixel space to world space. */
+export const imageToWorld = (op: ImageOp): Matrix2D => {
+  const { source: s, dest: d } = op;
+  const kx = d.width / s.width;
+  const ky = d.height / s.height;
+  return multiply(op.transform, { a: kx, b: 0, c: 0, d: ky, e: d.x - s.x * kx, f: d.y - s.y * ky });
+};
+
 /** The world-space box of what an image op paints: the destination, cut down where the source leaves the image. */
-const imageRing = (op: ImageOp): Point[] | null => {
+export const imageRing = (op: ImageOp): Point[] | null => {
   const { source: s, dest: d, image } = op;
   const sx0 = Math.max(s.x, 0);
   const sy0 = Math.max(s.y, 0);
@@ -108,7 +118,7 @@ const textRing = (op: TextOp): Point[] | null => {
 export const buildShape = (op: Op, tolerance: number): Shape => {
   const shape = buildUnclipped(op, tolerance);
   if (!op.clip || isEmptyBox(shape.paintBox)) return shape;
-  const clips = op.clip.map((c) => clipShape(c, tolerance));
+  const clips = [...shape.clips, ...op.clip.map((c) => clipShape(c, tolerance))];
   const paintBox = clips.reduce((box, c) => intersectBoxes(box, c.box), shape.paintBox);
   return { ...shape, clips, paintBox: isEmptyBox(paintBox) ? EMPTY_BOX : paintBox };
 };
@@ -153,20 +163,50 @@ export const buildUnclipped = (op: Op, tolerance: number): Shape => {
       };
     }
     case "image":
-    case "text": {
-      const ring = op.kind === "image" ? imageRing(op) : textRing(op);
-      if (!ring) return emptyShape(op);
-      const box = boxOfPoints(ring);
-      const outline: Polyline = {
-        points: ring,
-        smooth: ring.map(() => false),
-        tangentIn: ring.map(() => null),
-        tangentOut: ring.map(() => null),
-        closed: true,
-      };
-      return { ...emptyShape(op), geometryBox: box, paintBox: box, rings: [ring], centerline: [outline] };
-    }
+      if (op.image.outline) {
+        const crop = imageRing(op);
+        if (!crop) return emptyShape(op);
+        // The silhouette, cut to the part of the image the source takes: the crop is a clip.
+        const m = imageToWorld(op);
+        const rings = op.image.outline.map((r) => r.map((p) => applyToPoint(m, p.x, p.y)));
+        const cropBox = boxOfPoints(crop);
+        const box = intersectBoxes(rings.map(boxOfPoints).reduce(unionBox, EMPTY_BOX), cropBox);
+        if (isEmptyBox(box)) return emptyShape(op);
+        const centerline: Polyline[] = rings.map((points) => ({
+          points,
+          smooth: points.map(() => false),
+          tangentIn: points.map(() => null),
+          tangentOut: points.map(() => null),
+          closed: true,
+        }));
+        return {
+          ...emptyShape(op),
+          geometryBox: box,
+          paintBox: box,
+          rings,
+          centerline,
+          clips: [{ rings: [crop], fillRule: "nonzero", box: cropBox }],
+          silhouette: true,
+        };
+      }
+      return boxShape(op, imageRing(op));
+    case "text":
+      return boxShape(op, textRing(op));
   }
+};
+
+/** An image or text as its box. */
+const boxShape = (op: Op, ring: Point[] | null): Shape => {
+  if (!ring) return emptyShape(op);
+  const box = boxOfPoints(ring);
+  const outline: Polyline = {
+    points: ring,
+    smooth: ring.map(() => false),
+    tangentIn: ring.map(() => null),
+    tangentOut: ring.map(() => null),
+    closed: true,
+  };
+  return { ...emptyShape(op), geometryBox: box, paintBox: box, rings: [ring], centerline: [outline] };
 };
 
 const insideClips = (shape: Shape, p: Point): boolean =>
@@ -180,6 +220,7 @@ export const shapeContains = (shape: Shape, p: Point, tolerance: number): boolea
   if (p.x < b.minX - tolerance || p.x > b.maxX + tolerance || p.y < b.minY - tolerance || p.y > b.maxY + tolerance) {
     return false;
   }
+  if (shape.silhouette) return insideFill(p, shape.rings, "nonzero") || (tolerance > 0 && shape.rings.some((ring) => distanceToRing(p, ring) <= tolerance));
   switch (shape.op.kind) {
     case "clear":
     case "image":
@@ -220,6 +261,7 @@ export const shapeIntersectsBox = (shape: Shape, query: Box): boolean => {
   if (shape.rings.some((ring) => ringTouchesBox(ring, box))) return true;
   // No boundary crosses the box, so it is either wholly inside the area or wholly outside.
   const corner = boxCorners(box)[0]!;
+  if (shape.silhouette) return insideFill(corner, shape.rings, "nonzero");
   return shape.op.kind === "fill" ? insideFill(corner, shape.rings, shape.op.fillRule) : inConvex(corner, shape.rings[0]!);
 };
 

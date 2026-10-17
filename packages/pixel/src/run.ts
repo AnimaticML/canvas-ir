@@ -6,11 +6,15 @@
 // Each drawing's SVG export, rendered by Chromium, must match its replay away
 // from edges. SVG_DEBUG=<name> writes that drawing's export and both renderings
 // to SVG_DEBUG_DIR. Text layouts must break and place lines as the DOM does, and
-// text decorations must land within a pixel of the DOM's.
+// text decorations must land within a pixel of the DOM's. Traced image
+// outlines must hit-test like the painted alpha away from their edges.
 import { chromium } from "playwright-core";
 import { readdir } from "node:fs/promises";
 import type { Comparison, CorpusResult, FixtureResult, GeometryResult, SvgResult } from "./page";
 import { checkDecorations } from "./decorations";
+import type { OutlineResult } from "./outline-page";
+import type { VectorizeReport } from "./vectorize-page";
+import { vectorizeSources } from "./vectorize-sources";
 import type { TextResult } from "./text-page";
 
 const describe = (c: Comparison): string =>
@@ -153,6 +157,18 @@ try {
   console.log(`\n${texts.length - textFailed} of ${texts.length} text layouts match the DOM`);
   failed += textFailed;
 
+  // Image outlines: hit tests on traced silhouettes agree with the painted alpha away from the outline.
+  const outlines = await page.evaluate(() => (globalThis as unknown as { runOutlines: () => OutlineResult[] }).runOutlines());
+  let outlinesFailed = 0;
+  for (const r of outlines) {
+    const ok = !r.error && r.disagree === 0 && r.checked > 0;
+    if (!ok) outlinesFailed++;
+    const detail = r.error ?? `${r.rings} rings, ${r.points} points; ${r.checked} pixels checked, ${r.disagree} disagree`;
+    console.log(`${ok ? "pass" : "FAIL"}  outline: ${r.name}  (${detail})`);
+  }
+  console.log(`\n${outlines.length - outlinesFailed} of ${outlines.length} image outlines hit-test like the painted alpha\n`);
+  failed += outlinesFailed;
+
   // Decorations: underline, line-through and overline land within a pixel of the DOM's.
   const decorations = await checkDecorations(browser);
   const decorationsOff = decorations.filter((d) => !d.dom || Math.abs(d.dom.top - d.ours.top) > 1 || Math.abs(d.dom.thickness - d.ours.thickness) > 1);
@@ -163,6 +179,24 @@ try {
   const families = new Set(decorations.map((d) => d.family)).size;
   console.log(`\n${decorations.length - decorationsOff.length} of ${decorations.length} decorations (${families} families) land within 1px of the DOM's`);
   failed += decorationsOff.length;
+
+  // The vectorizer experiment: tracked, not gated. A crash still fails.
+  const reports = await page.evaluate(
+    (sources) => (globalThis as unknown as { runVectorize: (s: unknown) => Promise<VectorizeReport[]> }).runVectorize(sources),
+    await vectorizeSources(browser, new Map(files.map((f) => [f.name, f.svg]))),
+  );
+  console.log("");
+  for (const r of reports) {
+    if (r.error) {
+      failed++;
+      console.log(`FAIL  vectorize: ${r.name}  (${r.error})`);
+      continue;
+    }
+    const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
+    console.log(
+      `info  vectorize: ${r.name}  (${r.colors} colors, ${r.rings} rings, ${r.points} points; mean difference ${r.meanDelta.toFixed(2)}, ${pct(r.off)} of pixels off by over 32; SVG ${(r.svgBytes / 1024).toFixed(1)} KB)`,
+    );
+  }
 
   if (failed > 0) process.exitCode = 1;
 } finally {

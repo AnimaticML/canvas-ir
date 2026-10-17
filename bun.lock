@@ -20,6 +20,7 @@
       "name": "@canvas-ir/pixel",
       "dependencies": {
         "@canvas-ir/text": "workspace:*",
+        "@canvas-ir/vectorize": "workspace:*",
         "canvas-ir": "workspace:*",
       },
       "devDependencies": {
@@ -32,6 +33,7 @@
       "name": "@canvas-ir/playground",
       "dependencies": {
         "@canvas-ir/text": "workspace:*",
+        "@canvas-ir/vectorize": "workspace:*",
         "canvas-ir": "workspace:*",
         "canvg": "4.0.3",
       },
@@ -45,6 +47,13 @@
         "canvas-ir": "workspace:*",
       },
     },
+    "packages/vectorize": {
+      "name": "@canvas-ir/vectorize",
+      "version": "0.0.0",
+      "dependencies": {
+        "canvas-ir": "workspace:*",
+      },
+    },
   },
   "packages": {
     "@canvas-ir/pixel": ["@canvas-ir/pixel@workspace:packages/pixel"],
@@ -52,6 +61,8 @@
     "@canvas-ir/playground": ["@canvas-ir/playground@workspace:packages/playground"],
 
     "@canvas-ir/text": ["@canvas-ir/text@workspace:packages/text"],
+
+    "@canvas-ir/vectorize": ["@canvas-ir/vectorize@workspace:packages/vectorize"],
 
     "@chenglou/pretext": ["@chenglou/pretext@1.0.0", "", {}, "sha512-BxKiDMxWJhyzL8asvcgg3T9YnUU7OUFsKO8oRaR2SYAPX4Sh2wM9gqTBjrBaZ4fnl84cEQ8czC0Q1M83z3chsA=="],
 

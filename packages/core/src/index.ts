@@ -51,6 +51,7 @@ export type {
   TextStyle,
 } from "./types";
 export { SNAP_PRIORITY, Scene, transformOp } from "./geometry/scene";
+export { imageToWorld } from "./geometry/shape";
 export { maxScale, pathRings } from "./geometry/flatten";
 export { normalizeRings, offsetRings, outlineBand } from "./geometry/offset";
 export { opIsInvisible, paintIsTransparent } from "./geometry/visibility";
@@ -66,6 +67,7 @@ export type {
   SnapKind,
   SnapOptions,
 } from "./geometry/scene";
+export { type PixelData, type TraceOptions, simplifyRing, traceImageOutline, traceImageSource, traceMask } from "./geometry/trace";
 export {
   type ComponentHandle,
   type ComponentHandler,

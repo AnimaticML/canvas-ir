@@ -143,6 +143,12 @@ export interface ImageRef {
   readonly src: string;
   readonly width: number;
   readonly height: number;
+  /**
+   * Where the image is opaque, as closed rings in its pixel space filled with
+   * the nonzero rule (see `traceImageOutline`). Hit tests, closest points,
+   * snapping and text layout use it instead of the image's box.
+   */
+  readonly outline?: readonly (readonly Point[])[];
 }
 
 export type PatternRepetition = "repeat" | "repeat-x" | "repeat-y" | "no-repeat";

@@ -75,7 +75,9 @@ const compositing = z
 const rect = z.object({ x: finite, y: finite, width: finite, height: finite }).strict();
 const sizedRect = z.object({ x: finite, y: finite, width: finite.positive(), height: finite.positive() }).strict();
 const stops = z.array(z.object({ offset: finite.min(0).max(1), color: z.string() }).strict());
-const imageRef = z.object({ src: z.string(), width: finite.positive(), height: finite.positive() }).strict();
+const imageRef = z
+  .object({ src: z.string(), width: finite.positive(), height: finite.positive(), outline: z.array(z.array(point)).optional() })
+  .strict();
 
 const paint = z.union([
   z.string(),

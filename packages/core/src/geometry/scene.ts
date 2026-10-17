@@ -1,5 +1,5 @@
 import { IDENTITY, multiply } from "../math";
-import type { Group, IRDocument, JsonValue, Matrix2D, Op, PathGeometry, Point, Rect } from "../types";
+import type { FillRule, Group, IRDocument, JsonValue, Matrix2D, Op, PathGeometry, Point, Rect } from "../types";
 import { type Box, boxToRect, expandBox, isEmptyBox, pathBounds, rectToBox } from "./bounds";
 import { maxScale } from "./flatten";
 import { Grid } from "./grid";
@@ -368,6 +368,20 @@ export class Scene {
       if (found) offer({ point: found.point, kind: "path", ids: [found.id], distance: found.distance });
     }
     return best;
+  }
+
+  /**
+   * The area an op covers, as world-space rings and their fill rule: a fill's
+   * outline, an image's silhouette (or box), a text op's box. Text layout flows
+   * around these. Null for strokes, whose area is pieces, and for ops that
+   * paint nothing. Clips are not applied.
+   */
+  region(id: string): { rings: Point[][]; fillRule: FillRule } | null {
+    const entry = this.byId.get(id);
+    if (!entry || entry.op.kind === "stroke" || entry.op.kind === "clear") return null;
+    const shape = this.shape(entry);
+    if (shape.rings.length === 0) return null;
+    return { rings: shape.rings.map((r) => [...r]), fillRule: entry.op.kind === "fill" ? entry.op.fillRule : "nonzero" };
   }
 
   /** Whether a group the op is in has `meta[key] === value`. */

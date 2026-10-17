@@ -35,21 +35,57 @@ const circleRing = (cx: number, cy: number, r: number) =>
   Array.from({ length: 128 }, (_, i) => ({ x: cx + r * Math.cos((i / 128) * 2 * Math.PI), y: cy + r * Math.sin((i / 128) * 2 * Math.PI) }));
 
 const prose =
-  "Text here flows around the purple shape, which is just another group on the board. Drag the shape and every line is laid out again: each band of the column is cut by the shape's outline, and the text fills the pieces on both sides. Drag the column by its text or its dashed outline, and the text moves with it.";
+  "Text here flows around the purple shape and the orange sticker, which is an image: lines follow its opaque pixels, not its box. Drag either one and every line is laid out again. Drag the column by its text or its dashed outline, and the text moves with it.";
+
+/**
+ * A sticker drawn on a canvas and placed as an image: an orange blob with a star
+ * cut out of it. Its transparent parts, the star included, aren't part of it.
+ */
+const sticker = (): OffscreenCanvas => {
+  const canvas = new OffscreenCanvas(180, 140);
+  const c = canvas.getContext("2d")!;
+  c.fillStyle = "#fb923c";
+  c.beginPath();
+  for (const [x, y, r] of [[62, 72, 50], [112, 58, 46], [120, 98, 34]] as const) {
+    c.moveTo(x + r, y);
+    c.arc(x, y, r, 0, Math.PI * 2);
+  }
+  c.fill();
+  c.globalCompositeOperation = "destination-out";
+  c.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? 24 : 10;
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    c.lineTo(92 + r * Math.cos(a), 72 + r * Math.sin(a));
+  }
+  c.fill();
+  c.globalCompositeOperation = "source-over";
+  c.fillStyle = "#7c2d12";
+  c.font = "bold 18px sans-serif";
+  c.fillText("PNG", 32, 80);
+  return canvas;
+};
 
 const wrap: Sample = {
-  name: "Text around a shape",
+  name: "Text around shapes",
   draw: (ctx) => {
     const column = ctx.beginGroup({ meta: { source: "text column" } });
     ctx.strokeStyle = "#a1a1aa";
     ctx.setLineDash([4, 4]);
-    ctx.strokeRect(30.5, 250.5, 290, 280);
+    ctx.strokeRect(30.5, 250.5, 290, 300);
     ctx.endGroup();
     const shape = ctx.beginGroup({ meta: { source: "obstacle" } });
     ctx.fillStyle = "#a78bfa";
     ctx.beginPath();
     ctx.ellipse(160, 370, 52, 40, 0.5, 0, Math.PI * 2);
     ctx.fill();
+    ctx.endGroup();
+    const image = ctx.beginGroup({ meta: { source: "sticker image" } });
+    ctx.save();
+    ctx.translate(196, 448);
+    ctx.rotate(-0.25);
+    ctx.drawImage(sticker() as unknown as CanvasImageSource, 0, 0, 110, 85);
+    ctx.restore();
     ctx.endGroup();
     return {
       live: [
@@ -58,8 +94,8 @@ const wrap: Sample = {
         parent: column,
         text: { blocks: [{ type: "heading", level: 4, content: ["Wrapping around"] }, { type: "paragraph", content: [prose] }] },
         theme: { fontSize: 14 },
-        container: { x: 40, y: 258, width: 272, height: 266 },
-        obstacles: [shape],
+        container: { x: 40, y: 258, width: 272, height: 286 },
+        obstacles: [shape, image],
         obstacleMargin: 8,
       },
       ],

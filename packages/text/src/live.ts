@@ -1,4 +1,4 @@
-import { type JsonValue, type Point, RecordingContext, type Scene, maxScale, outlineBand, pathRings } from "canvas-ir";
+import { type JsonValue, RecordingContext, type Scene, maxScale, outlineBand, pathRings } from "canvas-ir";
 import type { Region } from "./bands";
 import { type DrawTextOptions, drawTextLayout } from "./draw";
 import { type LayoutOptions, type TextLayout, layoutText } from "./layout";
@@ -71,23 +71,15 @@ export class LiveText {
     const ops = (this.options.obstacles ?? []).flatMap((id) => (this.scene.getGroup(id) ? this.scene.groupOps(id) : this.scene.get(id) ? [id] : []));
     for (const id of ops) {
       const op = this.scene.get(id)!;
-      if (op.kind === "fill") regions.push({ rings: pathRings(op.path), fillRule: op.fillRule });
-      else if (op.kind === "stroke") {
+      if (op.kind === "stroke") {
         // The stroke as a band along its path, half its width (in world units) on each side.
         const half = (op.stroke.lineWidth / 2) * maxScale(op.transform);
         regions.push({ rings: outlineBand(pathRings(op.path), half, 0.25), fillRule: "nonzero" });
-      } else if (op.kind !== "clear") {
-        const b = this.scene.bounds(id);
-        if (b) {
-          const box: Point[] = [
-            { x: b.x, y: b.y },
-            { x: b.x + b.width, y: b.y },
-            { x: b.x + b.width, y: b.y + b.height },
-            { x: b.x, y: b.y + b.height },
-          ];
-          regions.push({ rings: [box] });
-        }
+        continue;
       }
+      // Fills by their outline, images by their silhouette when they have one, text by its box.
+      const region = this.scene.region(id);
+      if (region) regions.push(region);
     }
     return regions;
   }
