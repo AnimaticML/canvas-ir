@@ -1,0 +1,14 @@
+{
+  "name": "@canvas-ir/physics",
+  "version": "0.0.0",
+  "private": true,
+  "description": "2D physics for CanvasIR drawings: planck.js (Box2D) bodies that move groups through live transforms, with colliders traced from what was drawn",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "canvas-ir": "workspace:*",
+    "planck": "1.5.0"
+  }
+}

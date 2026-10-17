@@ -7,16 +7,19 @@
     "build": "bun run build.ts"
   },
   "dependencies": {
+    "@canvas-ir/physics": "workspace:*",
     "@canvas-ir/text": "workspace:*",
     "@canvas-ir/vectorize": "workspace:*",
     "canvas-ir": "workspace:*",
     "canvg": "4.0.3",
     "chart.js": "4.4.7",
+    "d3-force": "3.0.0",
     "d3-scale": "4.0.2",
     "d3-shape": "3.2.0"
   },
   "devDependencies": {
     "@types/d3-scale": "4.0.8",
-    "@types/d3-shape": "3.1.6"
+    "@types/d3-shape": "3.1.6",
+    "@types/d3-force": "3.0.10"
   }
 }

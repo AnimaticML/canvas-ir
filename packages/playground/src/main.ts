@@ -34,6 +34,8 @@ import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
 import { MORPH_ID, dayToNight, morphControls } from "./morph-demo";
 import { PELICAN_ID, POSES_PER_TURN, Ride, rideButton } from "./pelican";
+import { PHYSICS_ID, type Sandbox, createSandbox, sandboxButton } from "./physics-demo";
+import { GRAPH_ID, type ForceGraph, createGraph, graphButton } from "./graph-demo";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 
@@ -136,6 +138,8 @@ let snapMark: { x: number; y: number; kind: string } | null = null;
 let lasso: { x: number; y: number }[] | null = null;
 /** While panning empty space: the last pointer position, in host pixels. */
 let panFrom: { x: number; y: number } | null = null;
+/** A physics body or graph node being dragged: it follows the pointer through its simulation, not by moving its ops. */
+let grabbed: "physics" | "graph" | null = null;
 
 /** What a click or drag acts on: the outermost group around the op, or the op itself with Alt held. */
 const objectOf = (e: RouterEvent): string | null => {
@@ -367,6 +371,20 @@ const wire = (): void => {
     log(`click ${e.target ?? "empty space"}${e.path.length > 1 ? ` in ${e.path.slice(1).join(" < ")}` : ""}`);
   });
   router.on("*", "dragstart", (e) => {
+    // A body or node is dragged through its simulation, so it keeps colliding or pulling on its links.
+    const parts = e.target === null ? [] : [e.target, ...e.path];
+    const body = sandbox && scene.getGroup(PHYSICS_ID) ? parts.find((p) => sandbox!.physics.body(p)?.isDynamic()) : undefined;
+    if (body && sandbox!.physics.grab(body, e.point)) {
+      grabbed = "physics";
+      runPhysics();
+      return;
+    }
+    const node = graph && scene.getGroup(GRAPH_ID) ? parts.find((p) => graph!.nodeOf(p)) : undefined;
+    if (node) {
+      graph!.grab(node, e.point);
+      grabbed = "graph";
+      return;
+    }
     const id = objectOf(e);
     if (id === null) {
       if (shiftHeld(e)) lasso = [router.toWorld(e.screen)];
@@ -387,6 +405,9 @@ const wire = (): void => {
     log(`drag ${ids.join(", ")}`);
   });
   router.on("*", "drag", (e) => {
+    if (grabbed === "physics") sandbox?.physics.drag(e.point);
+    if (grabbed === "graph") graph?.drag(e.point);
+    if (grabbed) return;
     if (drag) {
       dragTo(e.total!, snapping(e));
       showSelection();
@@ -402,6 +423,9 @@ const wire = (): void => {
     render();
   });
   router.on("*", "dragend", () => {
+    if (grabbed === "physics") sandbox?.physics.release();
+    if (grabbed === "graph") graph?.release();
+    grabbed = null;
     if (lasso && lasso.length > 2) {
       // Select the outermost object of every op the lasso touches.
       const picked = new Set<string>();
@@ -734,6 +758,85 @@ pelicanButton.addEventListener("click", () => {
   if (stats) log(`pelican: each frame morphs ${stats.paired} ops between two drawn poses`);
 });
 samplesBar.insertBefore(pelicanButton, samplesBar.firstElementChild);
+
+// Physics: bodies drawn as canvas code, simulated by planck.js, moved by live transforms.
+let sandbox: Sandbox | null = null;
+let physicsRun = 0;
+const runPhysics = (): void => {
+  if (physicsRun > 0) return;
+  physicsRun = 1;
+  let last = performance.now();
+  const frame = (now: number): void => {
+    if (!sandbox || !scene.getGroup(PHYSICS_ID)) {
+      physicsRun = 0;
+      return;
+    }
+    // A board replayed into a new scene (after adding a sample) holds the bodies where they are now.
+    if (sandbox.physics.scene !== scene) sandbox.physics.rebind(scene);
+    sandbox.physics.step((now - last) / 1000);
+    last = now;
+    render();
+    // Asleep and not held: stop until something wakes it.
+    const awake = sandbox.physics.bodies.some((id) => {
+      const body = sandbox!.physics.body(id)!;
+      return body.isDynamic() && body.isAwake();
+    });
+    if (!awake && grabbed !== "physics") {
+      physicsRun = 0;
+      return;
+    }
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+};
+const physicsButton = document.createElement("button");
+physicsButton.textContent = "+ Physics";
+physicsButton.addEventListener("click", () => {
+  if (!sandbox || !scene.getGroup(PHYSICS_ID)) {
+    if (sandbox) sandbox = null;
+    sandbox = createSandbox(scene);
+    log(`physics: ${sandbox.physics.bodies.length} bodies, colliders read off their drawings (boxes, circles, hulls, outlines)`);
+  }
+  const count = (): number => sandbox!.physics.bodies.filter((id) => sandbox!.physics.body(id)!.isDynamic()).length;
+  if (!components!.get("physics-drop")) {
+    components!.mount(
+      sandboxButton(() => {
+        if (sandbox!.physics.scene !== scene) sandbox!.physics.rebind(scene);
+        sandbox!.drop(6);
+        components?.get<{ bodies: number }>("physics-drop")?.setState({ bodies: count() });
+        runPhysics();
+      }),
+    );
+  }
+  components?.get<{ bodies: number }>("physics-drop")?.setState({ bodies: count() });
+  const b = scene.bounds(PHYSICS_ID)!;
+  reveal({ ...b, height: b.height + 50 });
+  runPhysics();
+});
+samplesBar.insertBefore(physicsButton, pelicanButton.nextSibling);
+
+// A force-directed graph: d3-force moves the nodes, each drawn once.
+let graph: ForceGraph | null = null;
+const graphButtonEl = document.createElement("button");
+graphButtonEl.textContent = "+ Graph";
+graphButtonEl.addEventListener("click", () => {
+  if (!graph || !scene.getGroup(GRAPH_ID)) {
+    graph?.stop();
+    let frames = 0;
+    graph = createGraph(
+      () => scene,
+      () => {
+        // Show the cost now and then; every tick would redraw the caption too.
+        if (frames++ % 20 === 0) components?.get<{ ms: number }>("graph-shake")?.setState({ ms: graph?.stats.ms ?? 0 });
+        render();
+      },
+    );
+  }
+  if (!components!.get("graph-shake")) components!.mount(graphButton(() => graph?.simulation.alpha(1).restart()));
+  const b = scene.bounds(GRAPH_ID)!;
+  reveal({ ...b, height: b.height + 50 });
+});
+samplesBar.insertBefore(graphButtonEl, physicsButton.nextSibling);
 lodOn.addEventListener("change", () => {
   makeRenderer();
   render();
