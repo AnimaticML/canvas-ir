@@ -19,6 +19,7 @@ All five phases: recording, the IR, serialization and replay; geometry queries; 
 | A renderer that redraws only what changed, culls what is out of view, caches layers while dragging and simplifies what is too small to see | |
 | Groups, an event router with capture and bubbling, components drawn from state, SVG export | |
 | Morphing between drawings; HTML and WebGL elements placed in drawing order; an accessibility tree | |
+| Live transforms, a Flash-style timeline (clips, motion tweens, labels, frame scripts), 2D physics with planck.js | |
 | Rich text layout: paragraphs, headings, lists, mixed fonts, decorations, links, any-shaped containers, obstacles, bidi, caret and selection | |
 | Geometry: exact bounds, hit tests, rect and lasso queries, closest point, intersections, anchors, snapping, outline offsetting, moving ops | |
 
@@ -107,7 +108,7 @@ canvas.style.cursor = components.cursor ?? "";
 
 Handlers run in capture, before the board's own listeners, so a knob that stops its drags keeps them from moving it. Presses, drags and keys keep reaching a component that redraws mid-gesture under new op ids. A group whose meta has `hitArea: true` makes transparent shapes hit targets (a slider's grip); one with `snap: false` is never snapped to, and `snap` also takes a `filter`.
 
-`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a link that highlights on hover, in a circle, and flowing around a shape that re-lays it out as you drag it), a knob, a slider and a button built as components that change the wrapped text, canvas shapes, D3 and Chart.js charts, a day-to-night morph, a pelican riding a bicycle (eight drawn poses per pedal turn, morphed into every frame between), an HTML form and a WebGL cube embedded on the board, and pen, rectangle, ellipse and text tools, on one board, with snapping settings, hover and selection outlines, dragging, zoom and pan, SVG and JSON export, a Devtools panel and an accessibility tree. It renders through `Renderer` and shows what each frame redrew; a button adds 10,000 shapes to try it on a big board. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
+`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a link that highlights on hover, in a circle, and flowing around a shape that re-lays it out as you drag it), a knob, a slider and a button built as components that change the wrapped text, canvas shapes, D3 and Chart.js charts, a day-to-night morph, a pelican riding a bicycle (eight drawn poses per pedal turn, morphed into every frame between), a physics sandbox of crates, balls and stars to throw around, a force-directed graph, an HTML form and a WebGL cube embedded on the board, and pen, rectangle, ellipse and text tools, on one board, with snapping settings, hover and selection outlines, dragging, zoom and pan, SVG and JSON export, a Devtools panel and an accessibility tree. It renders through `Renderer` and shows what each frame redrew; a button adds 10,000 shapes to try it on a big board. Its **Pelican Ride** page is a small game built the same way: the pelican pedals a bicycle on sprung wheel joints over hills, crates and lakes, flaps over the water and catches fish. Run it with `bun run --cwd packages/playground dev`, or build self-contained files with `bun run --cwd packages/playground build` (`dist/index.html` and `dist/game.html`).
 
 ## Rendering
 
@@ -139,6 +140,27 @@ The scene's index is a hierarchical grid: each op sits at the level where its bo
 ```ts
 const m = morph(day, night, { key: keyByMeta("name") });
 scene.replaceGroup("scene", m.at(0.4));
+```
+
+- **Live transforms:** `scene.setTransform(id, matrix)` places a group (or op) where it is drawn, relative to how it was drawn. Setting it again replaces it, so a body moved by physics sixty times a second is never recorded again and never drifts. Nested live transforms compose, and ops redrawn into a moving group, by a component or `replaceGroup`, are drawn in its moving space.
+- **Timeline:** Flash's time model. A `Clip` is drawn keyframes and the morph between each pair (a shape tween), looping or held; `motionAt` keyframes a transform (a motion tween). A `Timeline` runs tracks, each a group with a clip, a motion or a nested timeline on its own clock, and a `Player` plays it with `play`, `stop`, `gotoAndPlay(label)` and scripts on frames.
+
+```ts
+const pedal = new Clip(crankAngles.map((crank, i) => ({ at: i / 8, drawing: () => drawing("rider", (ctx) => drawRider(ctx, crank)) })), { loop: true });
+const timeline = new Timeline([
+  { target: "bike", motion: [{ at: 0, transform: pose({ x: 0 }) }, { at: 4, transform: pose({ x: 800 }) }] },
+  { target: "rider", parent: "bike", clip: pedal, speed: 2 },
+], { labels: { finish: 4 } });
+new Player(timeline, scene).play();
+```
+
+- **Physics:** `@canvas-ir/physics` runs [planck.js](https://github.com/piqnt/planck.js), a port of Box2D, over a scene. `physics.add(id, { collider })` makes a group a body, with its collider read off what was drawn: its box, a circle, the convex hull of what was painted, or for ground of any shape the painted outline itself. `step(seconds)` advances in fixed steps and moves awake bodies by live transforms; `grab`, `drag` and `release` pull a body on a spring; `attach` binds a body built directly with planck (the game's bicycle frame on wheel joints).
+
+```ts
+const physics = new Physics(scene, { gravity: { x: 0, y: 980 } });
+physics.add("ground", { collider: "outline" });
+physics.add("crate");
+requestAnimationFrame(function frame(now) { physics.step(1 / 60); renderer.render(); requestAnimationFrame(frame); });
 ```
 
 - **Embeds:** `ctx.embed(x, y, w, h, { type: "video" })` reserves a place in drawing order for an HTML element. On a canvas it cuts a hole; `EmbedLayer` puts your element beneath the canvas in that hole, so shapes drawn later cover it and earlier ones don't, and lets the pointer through to it.
@@ -239,4 +261,4 @@ bun run bench
 bun run test:pixel   # needs Chromium; set CHROMIUM_PATH if Playwright can't find one
 ```
 
-`packages/core` is the library, `packages/text` the text layout layer on top of it, `packages/vectorize` the vectorizer experiment, `packages/pixel` holds the browser checks, and `packages/playground` is a demo app that depends on both libraries. After changing a text fixture, run `bun run --cwd packages/pixel capture-text` to capture its measurements and layout from Chromium for the Bun tests. Tooling depends on the libraries, never the reverse. `SVG_DEBUG=<drawing name>` on the pixel run writes that drawing's SVG export and both renderings to `SVG_DEBUG_DIR`.
+`packages/core` is the library, `packages/text` the text layout layer on top of it, `packages/physics` the physics layer, `packages/vectorize` the vectorizer experiment, `packages/pixel` holds the browser checks, and `packages/playground` is a demo app that depends on both libraries. After changing a text fixture, run `bun run --cwd packages/pixel capture-text` to capture its measurements and layout from Chromium for the Bun tests. Tooling depends on the libraries, never the reverse. `SVG_DEBUG=<drawing name>` on the pixel run writes that drawing's SVG export and both renderings to `SVG_DEBUG_DIR`.

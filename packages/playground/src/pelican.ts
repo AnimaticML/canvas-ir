@@ -76,7 +76,107 @@ const legFor = (pedal: { x: number; y: number }) => {
   return { thigh: a, knee, shin };
 };
 
-export const drawPelican = (ctx: Ctx, pose: Pose): void => {
+/** What to leave out of a drawing: the game draws the scenery, the wheels and the wing on their own. */
+export interface PelicanParts {
+  readonly scenery?: boolean;
+  readonly wheels?: boolean;
+  readonly wing?: boolean;
+}
+
+/** Where the drawing's parts are, for the game's bodies: wheel centers and radius, the bottom bracket, the head. */
+export const PELICAN_GEOMETRY = { rear: REAR, front: FRONT, wheelRadius: WHEEL_R, bottomBracket: BB, head: { x: 332, y: 40 }, seat: SEAT, ground: GROUND };
+
+/** A wheel, centered on the origin, turned by `angle`. */
+export const drawWheel = (ctx: Ctx, angle: number): void => {
+  ctx.strokeStyle = C.tire;
+  ctx.lineWidth = 9;
+  ctx.beginPath();
+  ctx.arc(0, 0, WHEEL_R - 4.5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = C.rim;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, WHEEL_R - 10, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.rotate(angle);
+  ctx.strokeStyle = C.spoke;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  for (let i = 0; i < 12; i++) {
+    const s = (i * Math.PI) / 6;
+    ctx.moveTo(4 * Math.cos(s + 0.4), 4 * Math.sin(s + 0.4));
+    ctx.lineTo((WHEEL_R - 10) * Math.cos(s), (WHEEL_R - 10) * Math.sin(s));
+  }
+  ctx.stroke();
+  ctx.fillStyle = "#64748b";
+  ctx.beginPath();
+  ctx.arc(0, 0, 6, 0, Math.PI * 2);
+  ctx.fill();
+};
+
+/** Where the wing is: holding the handlebar, or spread and raised or lowered in a flap. */
+export type WingPose = "grip" | "up" | "down";
+
+const SHOULDER = { x: 220, y: 130 };
+
+/** The near wing. Spread, it is drawn pointing along x and turned about the shoulder, so a morph turns it there. */
+export const drawWing = (ctx: Ctx, pose: WingPose): void => {
+  if (pose === "grip") {
+    // The wing reaches forward to the handlebar and holds it with its tip.
+    ctx.fillStyle = C.wing;
+    ctx.strokeStyle = C.outline;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(214, 132);
+    ctx.bezierCurveTo(262, 104, 330, 118, BAR.x - 2, BAR.y - 10);
+    ctx.bezierCurveTo(BAR.x + 6, BAR.y - 6, BAR.x + 2, BAR.y + 6, BAR.x - 10, BAR.y + 4);
+    ctx.bezierCurveTo(338, 170, 270, 176, 214, 132);
+    ctx.fill();
+    ctx.stroke();
+    // Dark flight feathers along the trailing edge.
+    ctx.fillStyle = C.wingTip;
+    ctx.beginPath();
+    ctx.moveTo(222, 140);
+    ctx.bezierCurveTo(270, 168, 320, 166, 352, 158);
+    ctx.lineTo(344, 168);
+    ctx.lineTo(330, 164);
+    ctx.lineTo(318, 172);
+    ctx.lineTo(304, 166);
+    ctx.lineTo(290, 172);
+    ctx.lineTo(278, 164);
+    ctx.bezierCurveTo(254, 162, 236, 154, 222, 140);
+    ctx.fill();
+    return;
+  }
+  ctx.translate(SHOULDER.x, SHOULDER.y);
+  // Up: raised high behind the head. Down: swept low behind the body.
+  ctx.rotate(pose === "up" ? -2.0 : 2.75);
+  ctx.fillStyle = C.wing;
+  ctx.strokeStyle = C.outline;
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(-6, -12);
+  ctx.bezierCurveTo(50, -30, 130, -26, 190, -4);
+  ctx.bezierCurveTo(196, 0, 194, 6, 186, 8);
+  ctx.bezierCurveTo(120, 22, 50, 26, -6, 14);
+  ctx.fill();
+  ctx.stroke();
+  // Long dark primaries at the tip, fanned along the trailing edge.
+  ctx.fillStyle = C.wingTip;
+  ctx.beginPath();
+  ctx.moveTo(80, 18);
+  ctx.bezierCurveTo(120, 16, 160, 10, 188, 6);
+  ctx.lineTo(178, 20);
+  ctx.lineTo(164, 18);
+  ctx.lineTo(150, 28);
+  ctx.lineTo(136, 22);
+  ctx.lineTo(120, 30);
+  ctx.lineTo(106, 24);
+  ctx.bezierCurveTo(96, 24, 88, 22, 80, 18);
+  ctx.fill();
+};
+
+export const drawPelican = (ctx: Ctx, pose: Pose, parts: PelicanParts = {}): void => {
   const rec = ctx as unknown as { beginGroup?: (o: { id?: string; meta?: object }) => string; endGroup?: () => void };
   const part = (name: string, body: () => void): void => {
     rec.beginGroup?.({ meta: { name } });
@@ -91,7 +191,7 @@ export const drawPelican = (ctx: Ctx, pose: Pose): void => {
   const wheel = crank * 2;
   const bob = Math.sin(crank * 2) * 1.5;
 
-  part("sky", () => {
+  if (parts.scenery !== false) part("sky", () => {
     const g = ctx.createLinearGradient(0, 0, 0, GROUND);
     g.addColorStop(0, "#bae6fd");
     g.addColorStop(1, "#f0f9ff");
@@ -115,7 +215,7 @@ export const drawPelican = (ctx: Ctx, pose: Pose): void => {
     }
   });
 
-  part("road", () => {
+  if (parts.scenery !== false) part("road", () => {
     ctx.fillStyle = C.road;
     ctx.beginPath();
     ctx.roundRect(0, GROUND, PELICAN_SIZE.width, 28, 6);
@@ -199,40 +299,19 @@ export const drawPelican = (ctx: Ctx, pose: Pose): void => {
       ctx.fillRect(-11, -3, 22, 6);
     });
 
-  const drawWheel = (name: string, center: { x: number; y: number }) =>
+  const wheelAt = (name: string, center: { x: number; y: number }) =>
     part(name, () => {
       ctx.translate(center.x, center.y);
-      ctx.strokeStyle = C.tire;
-      ctx.lineWidth = 9;
-      ctx.beginPath();
-      ctx.arc(0, 0, WHEEL_R - 4.5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.strokeStyle = C.rim;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, 0, WHEEL_R - 10, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.rotate(wheel);
-      ctx.strokeStyle = C.spoke;
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      for (let i = 0; i < 12; i++) {
-        const s = (i * Math.PI) / 6;
-        ctx.moveTo(4 * Math.cos(s + 0.4), 4 * Math.sin(s + 0.4));
-        ctx.lineTo((WHEEL_R - 10) * Math.cos(s), (WHEEL_R - 10) * Math.sin(s));
-      }
-      ctx.stroke();
-      ctx.fillStyle = "#64748b";
-      ctx.beginPath();
-      ctx.arc(0, 0, 6, 0, Math.PI * 2);
-      ctx.fill();
+      drawWheel(ctx, wheel);
     });
 
   // Far side first: the far leg and pedal, then the bike, then the near leg, body, neck and head.
   drawLeg("far leg", far, true);
   drawPedal("far pedal", crank + Math.PI);
-  drawWheel("rear wheel", REAR);
-  drawWheel("front wheel", FRONT);
+  if (parts.wheels !== false) {
+    wheelAt("rear wheel", REAR);
+    wheelAt("front wheel", FRONT);
+  }
 
   part("frame", () => {
     ctx.strokeStyle = C.frame;
@@ -344,32 +423,7 @@ export const drawPelican = (ctx: Ctx, pose: Pose): void => {
       ctx.fill();
       ctx.stroke();
     });
-    part("wing", () => {
-      // The wing reaches forward to the handlebar and holds it with its tip.
-      ctx.fillStyle = C.wing;
-      ctx.strokeStyle = C.outline;
-      ctx.lineWidth = 1.8;
-      ctx.beginPath();
-      ctx.moveTo(214, 132);
-      ctx.bezierCurveTo(262, 104, 330, 118, BAR.x - 2, BAR.y - 10);
-      ctx.bezierCurveTo(BAR.x + 6, BAR.y - 6, BAR.x + 2, BAR.y + 6, BAR.x - 10, BAR.y + 4);
-      ctx.bezierCurveTo(338, 170, 270, 176, 214, 132);
-      ctx.fill();
-      ctx.stroke();
-      // Dark flight feathers along the trailing edge.
-      ctx.fillStyle = C.wingTip;
-      ctx.beginPath();
-      ctx.moveTo(222, 140);
-      ctx.bezierCurveTo(270, 168, 320, 166, 352, 158);
-      ctx.lineTo(344, 168);
-      ctx.lineTo(330, 164);
-      ctx.lineTo(318, 172);
-      ctx.lineTo(304, 166);
-      ctx.lineTo(290, 172);
-      ctx.lineTo(278, 164);
-      ctx.bezierCurveTo(254, 162, 236, 154, 222, 140);
-      ctx.fill();
-    });
+    if (parts.wing !== false) part("wing", () => drawWing(ctx, "grip"));
     part("head", () => {
       ctx.translate(332, 40);
       // Pouch under the beak, then the beak, then the head over its root.

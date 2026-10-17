@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pelican Ride</title>
+    <style>
+      :root {
+        --ink: #0f172a;
+        --muted: #475569;
+        --panel: rgba(255, 255, 255, 0.82);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: #e0f2fe; color: var(--ink); font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+      #game {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        background: linear-gradient(#7dd3fc, #e0f2fe 70%);
+        touch-action: none;
+      }
+      .hud { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; pointer-events: none; }
+      .chip { background: var(--panel); border-radius: 999px; padding: 6px 12px; font-weight: 600; backdrop-filter: blur(4px); }
+      .wings { display: inline-flex; align-items: center; gap: 8px; }
+      .bar { width: 120px; height: 8px; border-radius: 4px; background: #cbd5e1; overflow: hidden; }
+      .bar > i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #f97316, #facc15); }
+      .title { margin-left: auto; color: var(--muted); font-weight: 500; }
+      .title a { color: inherit; pointer-events: auto; }
+      #message {
+        position: fixed; left: 50%; top: 30%; transform: translate(-50%, -50%);
+        background: var(--panel); padding: 14px 20px; border-radius: 14px; font-size: 18px; font-weight: 700; text-align: center;
+        max-width: calc(100% - 32px); pointer-events: none;
+      }
+      #message[hidden] { display: none; }
+      .pad { position: fixed; bottom: 16px; display: flex; gap: 12px; }
+      .pad.left { left: 16px; }
+      .pad.right { right: 16px; }
+      .pad button {
+        width: 72px; height: 72px; border-radius: 50%; border: 0; background: var(--panel); color: var(--ink);
+        font-size: 26px; font-weight: 700; touch-action: none; user-select: none; -webkit-user-select: none;
+      }
+      .pad button.flap { width: 96px; font-size: 16px; border-radius: 36px; }
+      .pad button.on { background: #fdba74; }
+      @media (hover: hover) and (pointer: fine) { .pad { opacity: 0.55; } }
+    </style>
+  </head>
+  <body>
+    <canvas id="game" aria-label="Pelican Ride: a pelican on a bicycle rides a course of hills, crates and lakes"></canvas>
+    <div class="hud">
+      <span class="chip" id="time">0.0 s</span>
+      <span class="chip" id="fish">🐟 0</span>
+      <span class="chip wings">Wings <span class="bar"><i id="stamina"></i></span></span>
+      <span class="title">Pelican Ride · drawn and simulated with CanvasIR · <a href="./">playground</a></span>
+    </div>
+    <div id="message" hidden></div>
+    <div class="pad left">
+      <button type="button" data-key="left" aria-label="Brake">◀</button>
+      <button type="button" data-key="right" aria-label="Pedal">▶</button>
+    </div>
+    <div class="pad right">
+      <button type="button" class="flap" data-key="flap" aria-label="Flap">Flap</button>
+    </div>
+    <script type="module" src="./game-main.ts"></script>
+  </body>
+</html>

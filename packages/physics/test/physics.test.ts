@@ -115,3 +115,24 @@ describe("rebinding", () => {
     expect(b.y + b.height).toBeCloseTo(300, 0);
   });
 });
+
+describe("attach", () => {
+  test("a body made with planck moves a group drawn around the origin", async () => {
+    const { Box } = await import("planck");
+    const ctx = new RecordingContext();
+    ctx.beginGroup({ id: "chassis" });
+    ctx.fillRect(-20, -5, 40, 10);
+    ctx.endGroup();
+    const scene = new Scene(ctx.getDocument());
+    const physics = new Physics(scene, { gravity: { x: 0, y: 0 } });
+    const body = physics.world.createBody({ type: "dynamic", position: physics.meters({ x: 200, y: 100 }), angle: Math.PI / 2 });
+    body.createFixture(new Box(0.4, 0.1), 1);
+    physics.attach("chassis", body, { x: 0, y: 0 });
+    physics.sync();
+    // The drawing's origin is at the body, turned a quarter.
+    const b = scene.bounds("chassis")!;
+    expect(b.x + b.width / 2).toBeCloseTo(200, 6);
+    expect(b.y + b.height / 2).toBeCloseTo(100, 6);
+    expect(b.height).toBeCloseTo(40, 6);
+  });
+});

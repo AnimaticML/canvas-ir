@@ -184,7 +184,8 @@ export class Physics {
     if (kind === "box") shapes.push(new Box(Math.max(skin, box.width / 2 / s - skin), Math.max(skin, box.height / 2 / s - skin)));
     else if (kind === "circle") shapes.push(new Circle(Math.max(box.width, box.height) / 2 / s));
     else {
-      const rings = this.rings(id);
+      // Ground follows the filled areas only: a stroke's box (grass along a hilltop, say) would be a wall.
+      const rings = this.rings(id, kind === "hull");
       if (kind === "hull") {
         const hull = reduceHull(convexHull(rings.flat()), 8);
         shapes.push(hull.length >= 3 ? new Polygon(hull.map(local)) : new Box(box.width / 2 / s, box.height / 2 / s));
@@ -217,20 +218,41 @@ export class Physics {
     return body;
   }
 
-  /** The painted rings of a group's ops, in world space: fills' outlines, and other ops' boxes. */
-  private rings(id: string): Point[][] {
+  /**
+   * Moves a group with a body made directly with planck (a bicycle's frame on
+   * wheel joints, say). `origin` is the point of the drawing, as it is now,
+   * that sits at the body's position when the body has not turned. Default:
+   * the body's position.
+   */
+  attach(id: string, body: Body, origin?: Point): void {
+    if (this.entries.has(id)) throw new Error(`${id} already has a body`);
+    const p = body.getPosition();
+    const at = origin ?? { x: p.x * this.scale, y: p.y * this.scale };
+    body.setUserData(id);
+    this.entries.set(id, { id, body, origin: at });
+    this.base.set(id, this._scene.transformOf(id));
+  }
+
+  /** Pixels to meters, for making bodies directly with planck. */
+  meters(p: Point): { x: number; y: number } {
+    return { x: p.x / this.scale, y: p.y / this.scale };
+  }
+
+  /** The painted rings of a group's ops, in world space: fills' outlines, and with `boxes` the boxes of strokes too; boxes alone if there is nothing else. */
+  private rings(id: string, boxes: boolean): Point[][] {
     const scene = this._scene;
     const ids = scene.getGroup(id) ? scene.groupOps(id) : [id];
     const out: Point[][] = [];
+    const strokes: Point[][] = [];
     for (const opId of ids) {
       const region = scene.region(opId);
       if (region) out.push(...region.rings);
       else {
         const b = scene.bounds(opId, "paint");
-        if (b) out.push([{ x: b.x, y: b.y }, { x: b.x + b.width, y: b.y }, { x: b.x + b.width, y: b.y + b.height }, { x: b.x, y: b.y + b.height }]);
+        if (b) strokes.push([{ x: b.x, y: b.y }, { x: b.x + b.width, y: b.y }, { x: b.x + b.width, y: b.y + b.height }, { x: b.x, y: b.y + b.height }]);
       }
     }
-    return out;
+    return boxes || out.length === 0 ? [...out, ...strokes] : out;
   }
 
   remove(id: string): void {
