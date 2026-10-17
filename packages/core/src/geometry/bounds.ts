@@ -40,6 +40,19 @@ export const expandBox = (b: Box, by: number): Box => ({
 export const boxesOverlap = (a: Box, b: Box): boolean =>
   a.minX <= b.maxX && b.minX <= a.maxX && a.minY <= b.maxY && b.minY <= a.maxY;
 
+/** The box around a box's corners under a matrix: exact for translations and scales, conservative under rotation. */
+export const transformBox = (b: Box, m: Matrix2D): Box => {
+  if (isEmptyBox(b)) return b;
+  if (m.b === 0 && m.c === 0) {
+    const x0 = m.a * b.minX + m.e;
+    const x1 = m.a * b.maxX + m.e;
+    const y0 = m.d * b.minY + m.f;
+    const y1 = m.d * b.maxY + m.f;
+    return { minX: Math.min(x0, x1), minY: Math.min(y0, y1), maxX: Math.max(x0, x1), maxY: Math.max(y0, y1) };
+  }
+  return boxOfPoints([applyToPoint(m, b.minX, b.minY), applyToPoint(m, b.maxX, b.minY), applyToPoint(m, b.minX, b.maxY), applyToPoint(m, b.maxX, b.maxY)]);
+};
+
 export const boxOfPoints = (points: readonly Point[]): Box => {
   let minX = Infinity;
   let minY = Infinity;

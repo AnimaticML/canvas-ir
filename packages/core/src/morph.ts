@@ -99,6 +99,9 @@ const compose = ({ x, y, angle, sx, sy, skew }: Decomposed): Matrix2D => {
   return { a: cos * sx, b: sin * sx, c: cos * skew * sx - sin * sy, d: sin * skew * sx + cos * sy, e: x, f: y };
 };
 
+/** Blends two transforms as move, turn (the short way round), scale and skew, so a turning part turns rather than squashing. */
+export const blendTransforms = (m: Matrix2D, n: Matrix2D, t: number): Matrix2D => lerpMatrix(m, n, t);
+
 const lerpMatrix = (m: Matrix2D, n: Matrix2D, t: number): Matrix2D => {
   const p = decompose(m);
   const q = decompose(n);

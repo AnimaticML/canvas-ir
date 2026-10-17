@@ -1,6 +1,6 @@
-import { IDENTITY, multiply } from "../math";
+import { IDENTITY, invert, multiply, sameMatrix } from "../math";
 import type { FillRule, Group, IRDocument, JsonValue, Matrix2D, Op, PathGeometry, Point, Rect } from "../types";
-import { type Box, boxToRect, expandBox, isEmptyBox, pathBounds, rectToBox } from "./bounds";
+import { type Box, boxToRect, expandBox, isEmptyBox, pathBounds, rectToBox, transformBox } from "./bounds";
 import { maxScale } from "./flatten";
 import { Grid } from "./grid";
 import {
@@ -95,7 +95,11 @@ interface Entry {
   shape: Shape | null;
   anchors: Anchor[] | null;
   edges: Edge[] | null;
+  /** The op before live transforms, and its index box, while a group it is in (or the op itself) has one. */
+  rest: { op: Op; coarse: Box } | null;
 }
+
+const isTranslation = (m: Matrix2D): boolean => m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1;
 
 /**
  * Composes `matrix` onto everything the op was drawn with, as if the drawing had
@@ -156,6 +160,10 @@ export class Scene {
   private readonly members = new Map<string, Set<Entry>>();
   private readonly children = new Map<string, Set<string>>();
   private readonly listeners = new Set<(change: SceneChange) => void>();
+  /** Live transforms of groups and ops, set by `setTransform`. */
+  private readonly live = new Map<string, Matrix2D>();
+  /** Each group's ops in drawing order, kept until an op joins or leaves a group: what moving a group many times a second reads. */
+  private readonly contents = new Map<string, Entry[]>();
 
   constructor(document: IRDocument, options: SceneOptions = {}) {
     this.tolerance = options.tolerance ?? 0.1;
@@ -205,9 +213,14 @@ export class Scene {
   }
 
   private groupEntries(groupId: string): Entry[] {
+    // Inserts and removals renumber ops but never reorder them, so a cached list stays sorted.
+    const cached = this.contents.get(groupId);
+    if (cached) return cached;
     const found: Entry[] = [];
     for (const id of this.subtree(groupId)) for (const e of this.members.get(id) ?? []) found.push(e);
-    return found.sort((a, b) => a.z - b.z);
+    found.sort((a, b) => a.z - b.z);
+    this.contents.set(groupId, found);
+    return found;
   }
 
   /**
@@ -260,13 +273,16 @@ export class Scene {
 
   private join(entry: Entry): void {
     if (entry.op.group === undefined) return;
+    this.contents.clear();
     let set = this.members.get(entry.op.group);
     if (!set) this.members.set(entry.op.group, (set = new Set()));
     set.add(entry);
   }
 
   private leave(entry: Entry): void {
-    if (entry.op.group !== undefined) this.members.get(entry.op.group)?.delete(entry);
+    if (entry.op.group === undefined) return;
+    this.contents.clear();
+    this.members.get(entry.op.group)?.delete(entry);
   }
 
   /** Adds a group, so ops inserted later can belong to it. */
@@ -275,6 +291,7 @@ export class Scene {
     if (group.parent !== undefined && !this.groups.has(group.parent)) throw new Error(`no group ${group.parent}`);
     this.groups.set(group.id, group);
     this.link(group);
+    this.contents.clear();
   }
 
   get(id: string): Op | undefined {
@@ -504,14 +521,78 @@ export class Scene {
     return entry.edges;
   }
 
-  /** Replaces the op with the same id. */
+  /** Replaces the op with the same id. The op is as drawn on the board: live transforms around it already apply. */
   replace(op: Op): void {
     const entry = this.byId.get(op.id);
     if (!entry) throw new Error(`no op with id ${op.id}`);
-    this.update(entry, op, coarseBox(op));
+    const coarse = coarseBox(op);
+    if (entry.rest) entry.rest = this.unlive(op, coarse);
+    this.update(entry, op, coarse);
   }
 
-  private update(entry: Entry, op: Op, coarse: Box): void {
+  /** An op as drawn, taken back out of the live transforms around it. */
+  private unlive(op: Op, coarse: Box): Entry["rest"] {
+    const back = invert(this.liveChain(op.id));
+    if (!back) return null;
+    return { op: transformOp(op, back), coarse: transformBox(coarse, back) };
+  }
+
+  /** The live transforms an op is under, outermost first, multiplied: what turns its rest into what is drawn. */
+  private liveChain(opId: string, memo?: Map<string, Matrix2D>): Matrix2D {
+    if (this.live.size === 0) return IDENTITY;
+    const own = this.live.get(opId) ?? IDENTITY;
+    const group = this.byId.get(opId)?.op.group;
+    const outer = group === undefined ? IDENTITY : this.groupLive(group, memo);
+    return own === IDENTITY ? outer : multiply(outer, own);
+  }
+
+  private groupLive(id: string, memo?: Map<string, Matrix2D>): Matrix2D {
+    const known = memo?.get(id);
+    if (known) return known;
+    const parent = this.groups.get(id)?.parent;
+    const outer = parent === undefined ? IDENTITY : this.groupLive(parent, memo);
+    const own = this.live.get(id);
+    const m = own === undefined ? outer : outer === IDENTITY ? own : multiply(outer, own);
+    memo?.set(id, m);
+    return m;
+  }
+
+  /** The live transform set on a group or op with `setTransform`, or the identity. */
+  transformOf(id: string): Matrix2D {
+    return this.live.get(id) ?? IDENTITY;
+  }
+
+  /**
+   * Sets the live transform of a group or op: where it is drawn, relative to
+   * how it was drawn. Unlike `transform`, which composes onto the ops, this
+   * replaces the last one set, so a body moved by physics or a clip on a
+   * timeline is placed sixty times a second without drift and without being
+   * recorded again. Nested live transforms compose: a wheel turning inside a
+   * moving bicycle. Ops inserted into the group later, as when a component or
+   * `replaceGroup` redraws it, are drawn in its moving space too. The
+   * document holds the ops as drawn, so what is serialized or replayed is
+   * where things are now.
+   */
+  setTransform(id: string, matrix: Matrix2D): void {
+    const isGroup = this.groups.has(id);
+    if (!isGroup && !this.byId.has(id)) throw new Error(`no op or group with id ${id}`);
+    const old = this.live.get(id) ?? IDENTITY;
+    if (sameMatrix(old, matrix)) return;
+    if (sameMatrix(matrix, IDENTITY)) this.live.delete(id);
+    else this.live.set(id, matrix);
+    const entries = isGroup ? this.groupEntries(id) : [this.byId.get(id)!];
+    const memo = new Map<string, Matrix2D>();
+    for (const entry of entries) {
+      entry.rest ??= { op: entry.op, coarse: entry.coarse };
+      const m = this.liveChain(entry.op.id, memo);
+      const op = transformOp(entry.rest.op, m);
+      const c = entry.rest.coarse;
+      this.update(entry, op, isTranslation(m) ? { minX: c.minX + m.e, minY: c.minY + m.f, maxX: c.maxX + m.e, maxY: c.maxY + m.f } : transformBox(c, m), true);
+      if (this.live.size === 0) entry.rest = null;
+    }
+  }
+
+  private update(entry: Entry, op: Op, coarse: Box, keepRest = false): void {
     if (op.group !== undefined && !this.groups.has(op.group)) throw new Error(`no group ${op.group}`);
     const before = entry.op;
     const beforeBox = entry.coarse;
@@ -523,6 +604,7 @@ export class Scene {
     entry.edges = null;
     entry.coarse = coarse;
     if (regroup) this.join(entry);
+    if (!keepRest && entry.rest && regroup) entry.rest = this.unlive(op, coarse);
     this.grid.insert(entry, entry.coarse);
     this.emit(op.id, before, beforeBox, entry);
   }
@@ -536,7 +618,10 @@ export class Scene {
       if (!entry) throw new Error(`no op with id ${id}`);
       const op = transformOp(entry.op, matrix);
       const c = entry.coarse;
-      this.update(entry, op, shift ? { minX: c.minX + matrix.e, minY: c.minY + matrix.f, maxX: c.maxX + matrix.e, maxY: c.maxY + matrix.f } : coarseBox(op));
+      const coarse = shift ? { minX: c.minX + matrix.e, minY: c.minY + matrix.f, maxX: c.maxX + matrix.e, maxY: c.maxY + matrix.f } : coarseBox(op);
+      // Under a live transform the move goes into the rest too, so the next `setTransform` keeps it.
+      if (entry.rest) entry.rest = this.unlive(op, coarse);
+      this.update(entry, op, coarse, true);
     }
   }
 
@@ -544,7 +629,14 @@ export class Scene {
   insert(op: Op, index = this.entries.length): void {
     if (this.byId.has(op.id)) throw new Error(`duplicate op id ${op.id}`);
     if (op.group !== undefined && !this.groups.has(op.group)) throw new Error(`no group ${op.group}`);
-    this.place(op, index);
+    // In a group with a live transform the op is drawn in its moving space.
+    const m = op.group === undefined || this.live.size === 0 ? IDENTITY : this.groupLive(op.group);
+    if (m === IDENTITY) {
+      this.place(op, index);
+      return;
+    }
+    const coarse = coarseBox(op);
+    this.place(transformOp(op, m), index, { op, coarse }, transformBox(coarse, m));
   }
 
   /**
@@ -570,6 +662,7 @@ export class Scene {
     const rename = (x: string): string => (x === id || x.startsWith(`${id}/`) ? x : `${id}/${x}`);
     const old = this.groups.get(id);
     const firstOp = this.groups.has(id) ? (this.groupEntries(id)[0]?.z ?? -1) : -1;
+    const moving = this.live.get(id);
     if (old) this.remove(id);
     const parent = options.parent ?? old?.parent;
     // A new group goes after the rest of its parent's ops, or last.
@@ -578,6 +671,8 @@ export class Scene {
     const index = firstOp >= 0 ? firstOp : after >= 0 ? after + 1 : this.entries.length;
     const meta = root?.meta ?? old?.meta;
     this.addGroup({ id, ...(parent !== undefined ? { parent } : {}), ...(meta !== undefined ? { meta } : {}) });
+    // The group keeps its live transform: its new contents are drawn where it is now.
+    if (moving) this.live.set(id, moving);
     for (const g of groups) if (g.id !== id) this.addGroup({ ...g, id: rename(g.id), parent: rename(g.parent!) });
     return document.ops.map((op, i) => {
       const renamed = { ...op, id: rename(op.id), group: rename(op.group!) } as Op;
@@ -596,7 +691,9 @@ export class Scene {
       const nested = this.subtree(id);
       const parent = this.groups.get(id)!.parent;
       if (parent !== undefined) this.children.get(parent)?.delete(id);
+      this.contents.clear();
       for (const g of nested) {
+        this.live.delete(g);
         this.groups.delete(g);
         this.children.delete(g);
         this.members.delete(g);
@@ -606,6 +703,7 @@ export class Scene {
     const entry = this.byId.get(id);
     if (!entry) return;
     this.grid.remove(entry);
+    this.live.delete(id);
     this.byId.delete(id);
     this.leave(entry);
     this.entries.splice(entry.z, 1);
@@ -613,9 +711,9 @@ export class Scene {
     this.emit(id, entry.op, entry.coarse, null);
   }
 
-  private place(op: Op, index: number): void {
+  private place(op: Op, index: number, rest: Entry["rest"] = null, coarse: Box = coarseBox(op)): void {
     if (this.byId.has(op.id)) throw new Error(`duplicate op id ${op.id}`);
-    const entry: Entry = { op, z: index, coarse: coarseBox(op), shape: null, anchors: null, edges: null };
+    const entry: Entry = { op, z: index, coarse, shape: null, anchors: null, edges: null, rest };
     this.entries.splice(index, 0, entry);
     if (index < this.entries.length - 1) this.renumber(index);
     this.byId.set(op.id, entry);

@@ -108,3 +108,19 @@ export type { LevelOfDetail, RenderStats, RendererOptions, Surface } from "./ren
 export { type Morph, type MorphOptions, keyByMeta, mixColors, morph } from "./morph";
 export { EmbedLayer, type EmbedLayerOptions } from "./embed";
 export { AccessibilityLayer, type AccessibilityLayerOptions, type AccessibleNode, accessibilityTree } from "./accessibility";
+export { blendTransforms } from "./morph";
+export {
+  Clip,
+  type ClipOptions,
+  type Easing,
+  type Keyframe,
+  type MotionKey,
+  Player,
+  Timeline,
+  type TimelineOptions,
+  type Track,
+  drawing,
+  easings,
+  motionAt,
+  pose,
+} from "./timeline";
