@@ -22,7 +22,7 @@ import { opIsInvisible } from "./visibility";
 export interface SceneOptions {
   /** Maximum distance between a curve and its flattened outline, in world units. Default 0.1. */
   readonly tolerance?: number;
-  /** Grid cell size for the spatial index, in world units. Default 128. */
+  /** The finest cell size of the spatial index, in world units: smaller objects share cells. Default 1/64. */
   readonly cellSize?: number;
 }
 
@@ -71,6 +71,17 @@ export interface Snap {
 
 /** The default snap priority: vertices first, the nearest point on any outline last. */
 export const SNAP_PRIORITY: readonly SnapKind[] = ["vertex", "intersection", "center", "midpoint", "extreme", "baseline", "bounds", "path"];
+
+/**
+ * One op added, changed or removed: what it was and what it is, each with the
+ * conservative world box the index keeps for it (null when it paints nowhere).
+ * A renderer redraws where either box was.
+ */
+export interface SceneChange {
+  readonly id: string;
+  readonly before: { readonly op: Op; readonly box: Rect | null } | null;
+  readonly after: { readonly op: Op; readonly box: Rect | null } | null;
+}
 
 export interface ClosestPointResult extends ClosestPoint {
   readonly id: string;
@@ -141,11 +152,16 @@ export class Scene {
   private entries: Entry[] = [];
   private readonly byId = new Map<string, Entry>();
   private readonly groups = new Map<string, Group>();
+  /** Each group's own ops, and its child groups, so a group's contents are found without scanning the board. */
+  private readonly members = new Map<string, Set<Entry>>();
+  private readonly children = new Map<string, Set<string>>();
+  private readonly listeners = new Set<(change: SceneChange) => void>();
 
   constructor(document: IRDocument, options: SceneOptions = {}) {
     this.tolerance = options.tolerance ?? 0.1;
-    this.grid = new Grid(options.cellSize ?? 128);
+    this.grid = new Grid(options.cellSize ?? 1 / 64);
     for (const group of document.groups ?? []) this.groups.set(group.id, group);
+    for (const group of this.groups.values()) this.link(group);
     document.ops.forEach((op) => this.place(op, this.entries.length));
   }
 
@@ -172,7 +188,85 @@ export class Scene {
 
   /** Ids of the ops in a group or any group nested in it, in drawing order. */
   groupOps(groupId: string): string[] {
-    return this.entries.filter((e) => e.op.group !== undefined && (e.op.group === groupId || this.groupChain(e.op.id).includes(groupId))).map((e) => e.op.id);
+    return this.groupEntries(groupId).map((e) => e.op.id);
+  }
+
+  /** The group and every group nested in it. */
+  private subtree(groupId: string): string[] {
+    const out: string[] = [];
+    const stack = [groupId];
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (!this.groups.has(id)) continue;
+      out.push(id);
+      for (const child of this.children.get(id) ?? []) stack.push(child);
+    }
+    return out;
+  }
+
+  private groupEntries(groupId: string): Entry[] {
+    const found: Entry[] = [];
+    for (const id of this.subtree(groupId)) for (const e of this.members.get(id) ?? []) found.push(e);
+    return found.sort((a, b) => a.z - b.z);
+  }
+
+  /**
+   * Listens for ops being added, changed and removed, with where they were and
+   * are: what a renderer needs to redraw only what changed. Returns a function
+   * that stops listening.
+   */
+  onChange(listener: (change: SceneChange) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /**
+   * Ids of ops whose index box meets the rect, in drawing order: a cheap
+   * superset of what paints there, found without building shapes, for culling.
+   */
+  opsIn(rect: Rect): string[] {
+    const box = rectToBox(rect);
+    return [...this.grid.query(box)]
+      .filter((e) => {
+        const c = e.coarse;
+        return c.minX <= box.maxX && c.maxX >= box.minX && c.minY <= box.maxY && c.maxY >= box.minY;
+      })
+      .sort((a, b) => a.z - b.z)
+      .map((e) => e.op.id);
+  }
+
+  /** The op's position in drawing order, or -1. */
+  indexOf(id: string): number {
+    return this.byId.get(id)?.z ?? -1;
+  }
+
+  private emit(id: string, before: Entry["op"] | null, beforeBox: Box | null, after: Entry | null): void {
+    if (this.listeners.size === 0) return;
+    const rect = (b: Box | null): Rect | null => (b === null || isEmptyBox(b) ? null : boxToRect(b));
+    const change: SceneChange = {
+      id,
+      before: before ? { op: before, box: rect(beforeBox) } : null,
+      after: after ? { op: after.op, box: rect(after.coarse) } : null,
+    };
+    for (const listener of this.listeners) listener(change);
+  }
+
+  private link(group: Group): void {
+    if (group.parent === undefined) return;
+    let set = this.children.get(group.parent);
+    if (!set) this.children.set(group.parent, (set = new Set()));
+    set.add(group.id);
+  }
+
+  private join(entry: Entry): void {
+    if (entry.op.group === undefined) return;
+    let set = this.members.get(entry.op.group);
+    if (!set) this.members.set(entry.op.group, (set = new Set()));
+    set.add(entry);
+  }
+
+  private leave(entry: Entry): void {
+    if (entry.op.group !== undefined) this.members.get(entry.op.group)?.delete(entry);
   }
 
   /** Adds a group, so ops inserted later can belong to it. */
@@ -180,30 +274,36 @@ export class Scene {
     if (this.groups.has(group.id) || this.byId.has(group.id)) throw new Error(`duplicate id ${group.id}`);
     if (group.parent !== undefined && !this.groups.has(group.parent)) throw new Error(`no group ${group.parent}`);
     this.groups.set(group.id, group);
+    this.link(group);
   }
 
   get(id: string): Op | undefined {
     return this.byId.get(id)?.op;
   }
 
-  /** Geometry bounds (the path, curve extrema exact) or paint bounds (what is painted, stroke included). */
-  bounds(id: string, kind: "geometry" | "paint" = "paint"): Rect | null {
+  /**
+   * Geometry bounds (the path, curve extrema exact), paint bounds (what is
+   * painted, stroke included), or the index's box: a cheap conservative paint
+   * box computed without building the shape, as culling uses.
+   */
+  bounds(id: string, kind: "geometry" | "paint" | "index" = "paint"): Rect | null {
     const box = this.boxOf(id, kind);
     return box === null || isEmptyBox(box) ? null : boxToRect(box);
   }
 
-  private boxOf(id: string, kind: "geometry" | "paint"): Box | null {
+  private boxOf(id: string, kind: "geometry" | "paint" | "index"): Box | null {
     const entry = this.byId.get(id);
     if (entry) {
+      if (kind === "index") return entry.coarse;
       const shape = this.shape(entry);
       return kind === "geometry" ? shape.geometryBox : shape.paintBox;
     }
     if (!this.groups.has(id)) return null;
     // A group's bounds are the union of its ops'; clears paint nothing of their own.
     let box: Box | null = null;
-    for (const opId of this.groupOps(id)) {
-      if (this.byId.get(opId)!.op.kind === "clear") continue;
-      const b = this.boxOf(opId, kind)!;
+    for (const entry of this.groupEntries(id)) {
+      if (entry.op.kind === "clear") continue;
+      const b = this.boxOf(entry.op.id, kind)!;
       if (isEmptyBox(b)) continue;
       box = box ? { minX: Math.min(box.minX, b.minX), minY: Math.min(box.minY, b.minY), maxX: Math.max(box.maxX, b.maxX), maxY: Math.max(box.maxY, b.maxY) } : b;
     }
@@ -403,25 +503,36 @@ export class Scene {
   replace(op: Op): void {
     const entry = this.byId.get(op.id);
     if (!entry) throw new Error(`no op with id ${op.id}`);
-    this.byId.delete(entry.op.id);
+    this.update(entry, op, coarseBox(op));
+  }
+
+  private update(entry: Entry, op: Op, coarse: Box): void {
+    if (op.group !== undefined && !this.groups.has(op.group)) throw new Error(`no group ${op.group}`);
+    const before = entry.op;
+    const beforeBox = entry.coarse;
+    const regroup = before.group !== op.group;
+    if (regroup) this.leave(entry);
     entry.op = op;
     entry.shape = null;
     entry.anchors = null;
     entry.edges = null;
-    entry.coarse = coarseBox(op);
-    this.byId.set(op.id, entry);
+    entry.coarse = coarse;
+    if (regroup) this.join(entry);
     this.grid.insert(entry, entry.coarse);
+    this.emit(op.id, before, beforeBox, entry);
   }
 
   /** Composes `matrix` onto the transforms of an op, or of every op in a group; see `transformOp`. */
   transform(id: string, matrix: Matrix2D): void {
-    if (this.groups.has(id)) {
-      for (const opId of this.groupOps(id)) this.replace(transformOp(this.get(opId)!, matrix));
-      return;
+    const entries = this.groups.has(id) ? this.groupEntries(id) : [this.byId.get(id)];
+    // A translation, as in a drag, moves the index box as is.
+    const shift = matrix.a === 1 && matrix.b === 0 && matrix.c === 0 && matrix.d === 1;
+    for (const entry of entries) {
+      if (!entry) throw new Error(`no op with id ${id}`);
+      const op = transformOp(entry.op, matrix);
+      const c = entry.coarse;
+      this.update(entry, op, shift ? { minX: c.minX + matrix.e, minY: c.minY + matrix.f, maxX: c.maxX + matrix.e, maxY: c.maxY + matrix.f } : coarseBox(op));
     }
-    const op = this.get(id);
-    if (!op) throw new Error(`no op with id ${id}`);
-    this.replace(transformOp(op, matrix));
   }
 
   /** Inserts an op at `index` in drawing order (default: on top). */
@@ -453,17 +564,12 @@ export class Scene {
     }
     const rename = (x: string): string => (x === id || x.startsWith(`${id}/`) ? x : `${id}/${x}`);
     const old = this.groups.get(id);
-    const firstOp = this.entries.findIndex((e) => e.op.group === id || (e.op.group !== undefined && this.groupChain(e.op.id).includes(id)));
+    const firstOp = this.groups.has(id) ? (this.groupEntries(id)[0]?.z ?? -1) : -1;
     if (old) this.remove(id);
     const parent = options.parent ?? old?.parent;
     // A new group goes after the rest of its parent's ops, or last.
     let after = -1;
-    if (parent !== undefined && firstOp < 0) {
-      for (let i = this.entries.length - 1; i >= 0 && after < 0; i--) {
-        const op = this.entries[i]!.op;
-        if (op.group === parent || (op.group !== undefined && this.groupChain(op.id).includes(parent))) after = i;
-      }
-    }
+    if (parent !== undefined && firstOp < 0) after = this.groupEntries(parent).at(-1)?.z ?? -1;
     const index = firstOp >= 0 ? firstOp : after >= 0 ? after + 1 : this.entries.length;
     const meta = root?.meta ?? old?.meta;
     this.addGroup({ id, ...(parent !== undefined ? { parent } : {}), ...(meta !== undefined ? { meta } : {}) });
@@ -478,18 +584,28 @@ export class Scene {
   /** Removes an op, or a group with its ops and nested groups. */
   remove(id: string): void {
     if (this.groups.has(id)) {
-      for (const opId of this.groupOps(id)) this.remove(opId);
+      const doomed = this.groupEntries(id);
+      // Remove from the top down, so each splice renumbers only what is above it.
+      for (let i = doomed.length - 1; i >= 0; i--) this.remove(doomed[i]!.op.id);
       // Find every nested group before deleting any, since deleting a parent cuts its children's chains.
-      const nested = [...this.groups.values()].filter((g) => g.id === id || this.groupChain(g.id).includes(id));
-      for (const g of nested) this.groups.delete(g.id);
+      const nested = this.subtree(id);
+      const parent = this.groups.get(id)!.parent;
+      if (parent !== undefined) this.children.get(parent)?.delete(id);
+      for (const g of nested) {
+        this.groups.delete(g);
+        this.children.delete(g);
+        this.members.delete(g);
+      }
       return;
     }
     const entry = this.byId.get(id);
     if (!entry) return;
     this.grid.remove(entry);
     this.byId.delete(id);
+    this.leave(entry);
     this.entries.splice(entry.z, 1);
     this.renumber(entry.z);
+    this.emit(id, entry.op, entry.coarse, null);
   }
 
   private place(op: Op, index: number): void {
@@ -498,7 +614,9 @@ export class Scene {
     this.entries.splice(index, 0, entry);
     if (index < this.entries.length - 1) this.renumber(index);
     this.byId.set(op.id, entry);
+    this.join(entry);
     this.grid.insert(entry, entry.coarse);
+    this.emit(op.id, null, null, entry);
   }
 
   private renumber(from: number): void {

@@ -16,13 +16,14 @@ All five phases: recording, the IR, serialization and replay; geometry queries; 
 | `drawImage`, `fillText`, `strokeText`, `measureText`; images hit-test by their opaque pixels when traced | |
 | All transform calls, `save`/`restore`/`reset`, line styles and dashes, alpha, compositing, shadows, filter, image smoothing | Canvas composite operations other than source-over and the blend modes, in SVG export |
 | Replay onto any real 2D context; validated JSON round trip | |
+| A renderer that redraws only what changed, culls what is out of view, caches layers while dragging and simplifies what is too small to see | |
 | Groups, an event router with capture and bubbling, components drawn from state, SVG export | |
 | Rich text layout: paragraphs, headings, lists, mixed fonts, decorations, links, any-shaped containers, obstacles, bidi, caret and selection | |
 | Geometry: exact bounds, hit tests, rect and lasso queries, closest point, intersections, anchors, snapping, outline offsetting, moving ops | |
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
-All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Each drawing's SVG export, rendered by Chromium, must match its replay everywhere away from anti-aliased edges. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text, and its underlines, line-throughs and overlines must land within a pixel of the DOM's in every fixture font. Traced image outlines, under transforms, crops and smoothing, must hit-test exactly where Chromium paints the image opaque, away from the outline. A benchmark keeps every query on a 10,000-op board, and text layout around a traced outline, under budget (`bun run bench`).
+All of it is checked in headless Chromium. Every fixture in [`packages/pixel`](packages/pixel/src/fixtures.ts), and every SVG in its [corpus](packages/pixel/corpus) drawn by [canvg](https://github.com/canvg/canvg), is drawn directly and also recorded, serialized, parsed and replayed, and the two canvases must match pixel for pixel. Hit tests on the same drawings must agree with Chromium's own `isPointInPath` and `isPointInStroke` everywhere away from an edge, and with the pixels painted for images and text. Each drawing's SVG export, rendered by Chromium, must match its replay everywhere away from anti-aliased edges. Rich text laid out by `@canvas-ir/text` must wrap where Chromium's DOM layout wraps the same paragraphs, with lines at the same heights and the same horizontal extents, in Latin, CJK, Thai, Arabic, Hebrew and mixed-direction text, and its underlines, line-throughs and overlines must land within a pixel of the DOM's in every fixture font. Traced image outlines, under transforms, crops and smoothing, must hit-test exactly where Chromium paints the image opaque, away from the outline. After random edits to a board of every fixture, the renderer's partial redraws must match a full replay away from anti-aliased edges, and its cached layers within rounding; a drag on a 10,000-op board must stay under a 16 ms frame. A benchmark keeps every query on a 10,000-op board, and text layout around a traced outline, under budget (`bun run bench`).
 
 ## Use
 
@@ -105,7 +106,29 @@ canvas.style.cursor = components.cursor ?? "";
 
 Handlers run in capture, before the board's own listeners, so a knob that stops its drags keeps them from moving it. Presses, drags and keys keep reaching a component that redraws mid-gesture under new op ids. A group whose meta has `hitArea: true` makes transparent shapes hit targets (a slider's grip); one with `snap: false` is never snapped to, and `snap` also takes a `filter`.
 
-`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a link that highlights on hover, in a circle, and flowing around a shape that re-lays it out as you drag it), a knob, a slider and a button built as components that change the wrapped text, and canvas shapes on one board, with snapping settings, hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
+`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a link that highlights on hover, in a circle, and flowing around a shape that re-lays it out as you drag it), a knob, a slider and a button built as components that change the wrapped text, and canvas shapes on one board, with snapping settings, hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. It renders through `Renderer` and shows what each frame redrew; a button adds 10,000 shapes to try it on a big board. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
+
+## Rendering
+
+`Renderer` keeps a canvas in step with a scene. It listens to the scene's changes, and each `render()` redraws only where ops were and are now, shadows and filters included, replaying just the ops there, found through the scene's index. Ops out of view are never replayed.
+
+```ts
+const renderer = new Renderer(scene, canvas.getContext("2d")!, { images: (src) => images.get(src), background: "#fff" });
+renderer.setView(deviceMatrix, canvas.width, canvas.height);
+scene.transform("g1", { a: 1, b: 0, c: 0, d: 1, e: 5, f: 0 });
+renderer.render(); // { mode: "partial", ops: 12, rects: [...] }
+
+renderer.lift(["g1"]); // while dragging g1: cache what is below and above it
+renderer.drop();
+```
+
+- Damaged areas are redrawn on a scratch canvas the size of the target and copied over, rather than replayed under a clip: Chromium rasterizes a path differently under a clip, so this keeps every pixel away from an edge what a full replay paints.
+- `lift(ids)` caches everything below and above the lifted ops as two layers, so a drag frame draws a bitmap, the lifted ops and another bitmap, in the damaged area only. Layers aren't used when something above isn't composited `source-over`.
+- A pan by whole pixels moves the canvas's pixels and redraws the uncovered strips. Any other view change redraws everything.
+- `copy`, `destination-in` and the other composite operations that clear outside their shape, and filters it can't bound, make a change redraw everything.
+- `lod: {}` simplifies what is too small to see: text under 3 device pixels becomes a bar, ops under half a pixel are skipped, and images shown at under half size are drawn from halved copies.
+
+The scene's index is a hierarchical grid: each op sits at the level where its box covers at most 2 x 2 cells, so specks and huge shapes alike are found quickly at any zoom, and moving one is constant time. Groups keep their ops indexed, so moving or removing a group touches only its own ops.
 
 ## Images
 
@@ -178,7 +201,7 @@ selectionRects(live.layout!, p!, other);         // one rect per line, bidi-awar
 
 - `Scene` derives a shape per op on first use and caches it: the path flattened in world space for fills, and for strokes a union of convex pieces (a quad per segment, plus joins and caps) built in the stroke's own space, so width, dashes and joins stay right under non-uniform scale and skew.
 - Bounds are exact: curve and arc extrema are solved analytically. Hit tests and rect queries are exact for lines and within the flattening tolerance (default 0.1 world units) for curves.
-- A uniform grid narrows each query to nearby ops. Moving or replacing an op recomputes only that op.
+- A hierarchical grid narrows each query to nearby ops, at any object size. Moving or replacing an op recomputes only that op.
 - A `clearRect` hides whatever it covers from hit tests. Ops that paint nothing visible (`globalAlpha` 0, or a fully transparent color or gradient) are skipped unless asked for, so a click goes through them to what's underneath.
 - Snapping ranks candidates by kind (vertex, intersection, center, midpoint, extreme, baseline, bounds, then the nearest point on an outline), and the nearest within a kind. Anchors come from the recorded segments, so arc centers and curve extremes are exact; intersections are exact for straight edges and within the tolerance for curves.
 - `offsetRings` grows an outline with round corners, and `outlineBand` is the strip along it. Text layout uses them for `obstacleMargin` and `padding`.

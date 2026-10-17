@@ -12,7 +12,7 @@ What the library needs for that is incremental updates by group, not an undo sta
 
 - `Scene.replaceGroup(id, document)` swaps a group's ops and nested groups for newly recorded ones in place, keeping its position in drawing order. `LiveText` in `@canvas-ir/text` uses it (done in batch 7).
 - Recording a component's drawing on its own, into a document whose group ids are prefixed or scoped to that component, so that two components' ids can't collide.
-- A change report from the scene listing which ids changed and the area they covered before and after. Redrawing only what changed (batch 9) and the app's own bookkeeping both use it.
+- A change report from the scene listing which ids changed and the area they covered before and after: `scene.onChange` (done in batch 9). The renderer and the app's own bookkeeping both use it.
 
 ## Batch 6: geometry and selection (done)
 
@@ -52,23 +52,26 @@ What the library needs for that is incremental updates by group, not an undo sta
   - Text in a screenshot becomes shapes, not text.
 - **Gate:** for test images with soft edges, holes, glyphs, thin lines and specks, drawn as is, scaled and rotated, and cropped, skewed and smoothed, hit tests agree with the painted alpha at every device pixel clear of the outline and crop edge. The vectorizer reports its mean difference and the share of pixels off by more than 32 against UI screenshots and corpus SVGs; tracked, not gated.
 
-## Batch 9: rendering performance
+## Batch 9: rendering performance (done)
 
-- **Viewport culling:** `replayDocument` takes a visible rect and replays only ops whose paint box meets it, found through the scene's spatial index.
+- **A renderer:** `Renderer` binds a scene to a canvas and listens to `scene.onChange`, which reports each op added, changed or removed with the index box it had and has.
 - **Redrawing only what changed:**
-  1. Collect the paint boxes a change touched: where the moved object was and where it is now, shadows and blur included.
-  2. Clip the canvas to their union and clear it there.
-  3. Replay, in drawing order, only the ops that meet that area.
-  - Everything outside the area stays as it was.
-  - Composite operations that affect pixels outside the op (`copy`, `destination-in` and similar) force a full redraw.
-- **Layers while dragging:** cache what's below the dragged object and what's above it as two bitmaps. Each frame then draws three things: the lower bitmap, the moving object, and the upper bitmap.
-- **Spatial index for unbounded boards:** the current index is one uniform grid of 128-unit cells, with ops spanning more than 64 cells kept on a list every query checks. It is cheap to update, which matters most when many objects move at once. It degrades in two cases. When a board zoomed to 1% has thousands of large objects, they all land on that list. When a board zoomed to 400% packs thousands of tiny objects into one cell, a query scans them all. Its coordinates are also bounded.
-  - Replace it with a hierarchical grid: several levels with cell sizes a power of 4 apart, and each op stored at the level where it covers at most four cells. Updates stay constant time, any size of object finds its level, and cell keys are hashed, so the world has no edge.
-  - Use the group tree on top of it. A group's bounds are the union of its children's, so a query that misses a group skips everything inside it, and moving a group updates only its own box and its ancestors'. Top-level objects (groups or loose ops) go in the grid, and queries descend into groups.
-  - Drawing order needs no structure: candidates are few and are sorted by their index in the document.
-  - **Gate:** the benchmark adds boards spanning a 1% to 400% zoom range, with clusters of tiny objects and fields of huge ones, and a step that moves 1,000 objects at once.
-- **Level of detail:** text whose font is under a few device pixels is drawn as gray bars per line ("greeking") or skipped. Ops smaller than half a device pixel are skipped. Large images are drawn from downscaled copies at low zoom.
-- **Gate:** a benchmark of a drag on a 10,000-op board stays under a 16 ms frame at the 99th percentile. A pixel check confirms that partial redraws match a full redraw.
+  1. Each change marks where the op was and where it is as damaged, in device pixels, grown by its shadow (offset and blur) and by `blur()` and `drop-shadow()` filters.
+  2. Damaged boxes are merged when that adds little area, split so none overlap, and rounded out to whole pixels. Past half the canvas, everything is redrawn.
+  3. The ops whose box meets the damage, found through the index, are replayed in drawing order onto a scratch canvas the size of the target, and the damaged rects are copied over. Chromium rasterizes a path differently under a clip (by up to a whole pixel at edges), so ops are not replayed under a clip to the damage.
+  - Composite operations that change pixels outside the op (`copy`, `source-in`, `source-out`, `destination-in`, `destination-atop`) are replayed in every redraw, and changing one, or an op with a filter that can't be bounded, redraws everything.
+- **Viewport culling:** a full render replays only ops whose box meets the view.
+- **Layers while dragging:** `lift(ids)` renders everything below the lifted ops and everything above them into two cached layers. Each frame then composites, in the damaged rects only, the lower layer, the lifted ops and any ops between them, and the upper layer. Changes to other ops redraw their layer in place, so text that re-wraps around the dragged shape keeps working. Layers are refused when the upper one holds a clear or an op not composited `source-over`, which a cached layer can't reproduce, and dropped when a lifted op is removed.
+- **Pans:** a view change by whole pixels moves the canvas's pixels and redraws the uncovered strips.
+- **Spatial index for unbounded boards:** the uniform grid is replaced by a hierarchical one. Level k has cells `2^k` times the finest size (1/64 unit by default), and each op sits at the level where its box covers at most 2 x 2 cells. Cell keys are hashed, so the board has no edge. A query visits each nonempty level's cells, or its items when there are fewer of those. A move within the same cells only updates the box, and a translation moves the index box without recomputing it.
+  - Groups keep their own ops and child groups indexed, so finding, moving or removing a group's contents no longer scans the board.
+  - The group-bounds tree on top of the grid was not needed: with groups indexed, moving 1,000 objects takes about 3 ms, and a query visits only nearby cells at every level.
+- **Level of detail (`lod`):** text whose font is under 3 device pixels is drawn as a bar across the middle of its ink box at half alpha; ops under half a device pixel are skipped; images shown at under half their size are drawn from copies halved as often as fits, made once per image.
+- **Gate:**
+  - After 200 random edits and pans of a board holding every pixel fixture (clips, clears, shadows, filters, gradients, patterns, images, text, `destination-in`), partial redraws match a full replay at every pixel away from an anti-aliased edge. Edge pixels differ in a few hundred places in all, where Chromium anti-aliases depending on what else it rasterized in the same pass. After a pan, more edge pixels differ, by up to a whole pixel on hairlines: Chromium anti-aliases differently at another offset, even a whole pixel away.
+  - Dragging tiles with cached layers, with other edits mid-drag, matches a full replay within 2 levels away from edges: compositing a translucent layer rounds once more.
+  - A drag on a 10,000-op board, all in view, stays under a 16 ms frame at the 99th percentile. In headless Chromium, a full replay takes about 140 ms a frame; dragging a shape takes about 1 ms with partial redraws and 0.2 ms with layers, and dragging a translucent panel over a third of the view takes about 6 ms with layers (60 ms without).
+  - The geometry benchmark adds a board from specks to shapes thousands of units across, queried as at 400% and at 1% zoom, and a step that moves 1,000 objects at once, held to 16 ms at the 90th percentile since its tail is garbage collection.
 
 ## Batch 10: tools and demos
 

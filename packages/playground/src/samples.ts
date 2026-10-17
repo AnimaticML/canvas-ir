@@ -436,6 +436,47 @@ const shapes: Sample = {
   },
 };
 
+/** A stress test: 10,000 small shapes to the right of the board, each its own object. Zoom out to see them all. */
+const field: Sample = {
+  name: "10,000 shapes",
+  draw: (ctx) => {
+    let seed = 7;
+    const random = (): number => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed / 2 ** 31;
+    };
+    for (let i = 0; i < 10_000; i++) {
+      ctx.save();
+      ctx.translate(1000 + random() * 3000, random() * 2000);
+      ctx.rotate(random() * Math.PI * 2);
+      ctx.fillStyle = `hsl(${i % 360} 60% 60%)`;
+      ctx.strokeStyle = `hsl(${(i * 7) % 360} 50% 35%)`;
+      ctx.beginPath();
+      switch (i % 4) {
+        case 0:
+          ctx.rect(-12, -8, 24, 16);
+          ctx.fill();
+          break;
+        case 1:
+          ctx.arc(0, 0, 4 + random() * 10, 0, Math.PI * 2);
+          ctx.fill();
+          break;
+        case 2:
+          ctx.lineWidth = 1 + random() * 3;
+          ctx.moveTo(-14, 0);
+          ctx.bezierCurveTo(-6, -16, 6, 16, 14, 0);
+          ctx.stroke();
+          break;
+        case 3:
+          ctx.font = "9px system-ui, sans-serif";
+          ctx.fillText(`#${i}`, -8, 3);
+          break;
+      }
+      ctx.restore();
+    }
+  },
+};
+
 export const samples: readonly Sample[] = [
   { name: "Badge", svg: badge, at: { x: 40, y: 40 } },
   { name: "Chart", svg: chart, at: { x: 600, y: 60 } },
@@ -445,7 +486,8 @@ export const samples: readonly Sample[] = [
   circle,
   controls,
   shapes,
+  field,
 ];
 
 /** The samples on the board at first; the rest are a button away. */
-export const initialSamples: readonly Sample[] = samples.filter((s) => s !== shapes);
+export const initialSamples: readonly Sample[] = samples.filter((s) => s !== shapes && s !== field);

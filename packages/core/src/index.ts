@@ -62,6 +62,7 @@ export type {
   HitTestOptions,
   QueryOptions,
   RectQueryMode,
+  SceneChange,
   SceneOptions,
   Snap,
   SnapKind,
@@ -100,3 +101,5 @@ export type {
 } from "./interaction";
 export { ellipseAxes, svgPathData, toSVG } from "./svg";
 export type { SvgOptions } from "./svg";
+export { Renderer } from "./render";
+export type { LevelOfDetail, RenderStats, RendererOptions, Surface } from "./render";

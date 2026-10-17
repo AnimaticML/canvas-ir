@@ -66,12 +66,13 @@ const percentile = (values: number[], p: number): number => {
 };
 
 const budgets: { name: string; ms: number; actual: number }[] = [];
-const measure = (name: string, budgetMs: number, runs: number, fn: () => void): void => {
+const measure = (name: string, budgetMs: number, runs: number, fn: () => void, at = 0.99): void => {
   const samples = Array.from({ length: runs }, () => time(fn));
   const p99 = percentile(samples, 0.99);
-  budgets.push({ name, ms: budgetMs, actual: p99 });
+  budgets.push({ name, ms: budgetMs, actual: percentile(samples, at) });
   const median = percentile(samples, 0.5);
-  console.log(`${name.padEnd(36)} median ${median.toFixed(3)} ms   p99 ${p99.toFixed(3)} ms   budget ${budgetMs} ms`);
+  const which = at === 0.99 ? "" : ` (at the ${at * 100}th percentile)`;
+  console.log(`${name.padEnd(36)} median ${median.toFixed(3)} ms   p99 ${p99.toFixed(3)} ms   budget ${budgetMs} ms${which}`);
 };
 
 for (const world of WORLDS) {
@@ -106,6 +107,59 @@ for (const world of WORLDS) {
     scene.transform(id, { a: 1, b: 0, c: 0, d: 1, e: 1, f: 0 });
     scene.hitTest(point());
   });
+  console.log("");
+}
+
+// Boards seen from 1% to 400% zoom: a cluster of tiny objects, a field of huge
+// ones, and ordinary ones between, so every level of the index holds something.
+{
+  console.log(`--- ${OPS} ops from tiny to huge`);
+  const ctx = new RecordingContext();
+  for (let i = 0; i < OPS; i++) {
+    ctx.save();
+    if (i % 10 < 5) {
+      // Half are specks under a unit wide, packed into a 200 x 200 cluster.
+      ctx.translate(between(0, 200), between(0, 200));
+      ctx.scale(between(0.05, 0.5), between(0.05, 0.5));
+    } else if (i % 10 < 9) {
+      ctx.translate(between(-50_000, 50_000), between(-50_000, 50_000));
+      ctx.scale(between(0.5, 4), between(0.5, 4));
+    } else {
+      // A tenth are thousands of units across.
+      ctx.translate(between(-500_000, 500_000), between(-500_000, 500_000));
+      ctx.scale(between(50, 2000), between(50, 2000));
+    }
+    ctx.rotate(between(0, Math.PI * 2));
+    ctx.beginPath();
+    ctx.rect(-1, -1, 2, 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  const doc = ctx.getDocument();
+  let scene!: Scene;
+  const buildMs = time(() => {
+    scene = new Scene(doc);
+  });
+  console.log(`building the scene index: ${buildMs.toFixed(1)} ms\n`);
+  budgets.push({ name: "zoom range: building the scene index", ms: 1000, actual: buildMs });
+  for (const op of doc.ops) scene.bounds(op.id);
+  const inCluster = () => ({ x: between(0, 200), y: between(0, 200) });
+  measure("zoom range: hitTest in the cluster", 2, 5000, () => scene.hitTest(inCluster(), { tolerance: 0.25 }));
+  measure("zoom range: viewport at 400%", 4, 1000, () => {
+    const p = inCluster();
+    scene.opsIn({ x: p.x, y: p.y, width: 250, height: 150 });
+  });
+  measure("zoom range: viewport at 1%", 12, 300, () => {
+    scene.opsIn({ x: between(-500_000, 400_000), y: between(-500_000, 400_000), width: 100_000, height: 60_000 });
+  });
+  const ids = doc.ops.map((op) => op.id);
+  const moveThousand = (): void => {
+    const start = Math.floor(between(0, OPS - 1000));
+    for (let i = start; i < start + 1000; i++) scene.transform(ids[i]!, { a: 1, b: 0, c: 0, d: 1, e: 3, f: -2 });
+  };
+  for (let i = 0; i < 20; i++) moveThousand();
+  // Each move allocates a new op, so the tail is garbage collection: this step is held to its 90th percentile.
+  measure("zoom range: move 1,000 objects at once", 16, 300, moveThousand, 0.9);
   console.log("");
 }
 

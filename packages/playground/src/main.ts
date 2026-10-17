@@ -4,6 +4,7 @@ import { Canvg } from "canvg";
 import {
   Components,
   EventRouter,
+  Renderer,
   IDENTITY,
   type Matrix2D,
   RecordingContext,
@@ -30,6 +31,10 @@ import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
+const overlay = document.getElementById("overlay") as HTMLCanvasElement;
+const octx = overlay.getContext("2d")!;
+const renderStats = document.getElementById("render-stats")!;
+const lodOn = document.getElementById("lod-on") as HTMLInputElement;
 const selectionView = document.getElementById("selection")!;
 const logView = document.getElementById("log")!;
 
@@ -63,6 +68,14 @@ let scene = new Scene({ version: 1, ops: [] });
 let liveTexts: LiveText[] = [];
 let view: Matrix2D = IDENTITY;
 let router = new EventRouter(scene);
+let renderer = new Renderer(scene, ctx);
+/** The view and canvas size the renderer last had, so it redraws everything only when they change. */
+let viewKey = "";
+const makeRenderer = (): void => {
+  renderer.dispose();
+  renderer = new Renderer(scene, ctx, { images: (src) => images.get(src), ...(lodOn.checked ? { lod: {} } : {}) });
+  viewKey = "";
+};
 /** Interactive objects (the note, the controls), drawn from their state. */
 let components: Components | null = null;
 /** Selected objects (outermost groups, or single ops picked with Alt), in the order picked. */
@@ -121,14 +134,28 @@ const followMove = (moved: string, dx: number, dy: number): void => {
 const render = (): void => {
   const dpr = window.devicePixelRatio || 1;
   const { width, height } = stage.getBoundingClientRect();
-  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
+  for (const c of [canvas, overlay]) {
+    if (c.width !== Math.round(width * dpr) || c.height !== Math.round(height * dpr)) {
+      c.width = Math.round(width * dpr);
+      c.height = Math.round(height * dpr);
+    }
   }
   const device = multiply({ a: dpr, b: 0, c: 0, d: dpr, e: 0, f: 0 }, view);
+  // The board redraws only what changed since the last frame; selection marks go on the overlay, redrawn whole.
+  const key = `${canvas.width}x${canvas.height} ${Object.values(device).join(",")}`;
+  if (key !== viewKey) {
+    renderer.setView(device, canvas.width, canvas.height);
+    viewKey = key;
+  }
+  const start = performance.now();
+  const stats = renderer.render();
+  if (stats.mode !== "idle") {
+    const ms = performance.now() - start;
+    renderStats.textContent = `${stats.mode} redraw: ${stats.ops} of ${scene.document.ops.length} ops in ${ms.toFixed(1)} ms${stats.rects.length > 0 ? `, ${stats.rects.length} rect${stats.rects.length > 1 ? "s" : ""}` : ""}`;
+  }
+  const ctx = octx;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  replayDocument(ctx, scene.document, { view: device, images: (src) => images.get(src) });
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
 
   // Outlines, drawn in device pixels so they stay thin at any zoom.
   const outline = (id: string, color: string, dash: number[]): void => {
@@ -247,6 +274,7 @@ const dragTo = (total: { x: number; y: number }, snap: boolean): void => {
 
 const wire = (): void => {
   router = new EventRouter(scene, { view, tolerance: 3 });
+  makeRenderer();
   if (components) components.bind(scene, router);
   else {
     components = new Components(scene, router, {
@@ -288,6 +316,8 @@ const wire = (): void => {
       .slice(0, 120)
       .map((a) => a.point);
     drag = { ids, anchors, moved: { x: 0, y: 0 } };
+    // What is below and above the dragged objects is cached, so each frame draws two bitmaps and them.
+    renderer.lift(ids);
     log(`drag ${ids.join(", ")}`);
   });
   router.on("*", "drag", (e) => {
@@ -314,6 +344,7 @@ const wire = (): void => {
       log(`lasso picked ${picked.size}`);
     }
     drag = null;
+    renderer.drop();
     lasso = null;
     snapMark = null;
     panFrom = null;
@@ -469,5 +500,9 @@ document.getElementById("vectorize")!.addEventListener("click", () => {
 });
 document.getElementById("export-json")!.addEventListener("click", () => download("board.json", "application/json", serializeDocument(scene.document)));
 document.getElementById("reset-view")!.addEventListener("click", () => setView(IDENTITY));
+lodOn.addEventListener("change", () => {
+  makeRenderer();
+  render();
+});
 
 for (const sample of initialSamples) await add(sample);

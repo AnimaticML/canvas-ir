@@ -19,6 +19,7 @@ import {
 } from "canvas-ir";
 import { type FixtureEnv, HEIGHT, WIDTH, fixtures } from "./fixtures";
 import "./outline-page";
+import "./render-page";
 import "./text-page";
 import "./vectorize-page";
 

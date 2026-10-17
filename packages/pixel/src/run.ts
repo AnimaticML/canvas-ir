@@ -7,12 +7,15 @@
 // from edges. SVG_DEBUG=<name> writes that drawing's export and both renderings
 // to SVG_DEBUG_DIR. Text layouts must break and place lines as the DOM does, and
 // text decorations must land within a pixel of the DOM's. Traced image
-// outlines must hit-test like the painted alpha away from their edges.
+// outlines must hit-test like the painted alpha away from their edges. Partial
+// redraws must match a full replay away from anti-aliased edges, lifted layers
+// within rounding, and a drag on a 10,000-op board must stay under a 16 ms frame.
 import { chromium } from "playwright-core";
 import { readdir } from "node:fs/promises";
 import type { Comparison, CorpusResult, FixtureResult, GeometryResult, SvgResult } from "./page";
 import { checkDecorations } from "./decorations";
 import type { OutlineResult } from "./outline-page";
+import type { DragBench, RenderCheck } from "./render-page";
 import type { VectorizeReport } from "./vectorize-page";
 import { vectorizeSources } from "./vectorize-sources";
 import type { TextResult } from "./text-page";
@@ -168,6 +171,33 @@ try {
   }
   console.log(`\n${outlines.length - outlinesFailed} of ${outlines.length} image outlines hit-test like the painted alpha\n`);
   failed += outlinesFailed;
+
+  // The renderer: partial redraws and layers against full replays, and a drag on a big board.
+  const renders = await page.evaluate(() => (globalThis as unknown as { runRender: () => Promise<RenderCheck[]> }).runRender());
+  let rendersFailed = 0;
+  for (const r of renders) {
+    const ok = !r.error && r.mismatched === 0 && r.frames > 0;
+    if (!ok) rendersFailed++;
+    const modes = Object.entries(r.modes)
+      .map(([mode, n]) => `${n} ${mode}`)
+      .join(", ");
+    const pans = r.panned ? `; after ${r.panned.frames} pans, ${r.panned.edgePixels} edge pixels, by up to ${r.panned.maxDelta}` : "";
+    const detail = `${r.frames} frames: ${modes}; ${r.edgePixels} edge pixels differed, by up to ${r.maxDelta}${pans}${r.mismatched ? `; ${r.mismatched} frames differ away from edges` : ""}`;
+    console.log(`${ok ? "pass" : "FAIL"}  render: ${r.name}  (${detail})`);
+    if (r.error) console.log(`      ${r.error}`);
+  }
+  const drags = await page.evaluate(() => (globalThis as unknown as { runDragBench: () => DragBench[] }).runDragBench());
+  for (const d of drags) {
+    // Full replay is the baseline, not gated.
+    const gated = !d.mode.endsWith("full replay") && !(d.mode.startsWith("a panel") && d.mode.endsWith("partial"));
+    const ok = !gated || d.p99 < 16;
+    if (!ok) rendersFailed++;
+    console.log(
+      `${gated ? (ok ? "pass" : "FAIL") : "info"}  drag on 10,000 ops: ${d.mode}  (median ${d.median.toFixed(1)} ms, p99 ${d.p99.toFixed(1)} ms, ${Math.round(d.opsPerFrame)} ops a frame)`,
+    );
+  }
+  console.log(`\n${renders.length + drags.length - rendersFailed} of ${renders.length + drags.length} render checks pass\n`);
+  failed += rendersFailed;
 
   // Decorations: underline, line-through and overline land within a pixel of the DOM's.
   const decorations = await checkDecorations(browser);

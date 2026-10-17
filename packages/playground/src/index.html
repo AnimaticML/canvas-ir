@@ -103,6 +103,9 @@
         width: 100%;
         height: 100%;
       }
+      #stage #overlay {
+        pointer-events: none;
+      }
       aside {
         display: flex;
         flex-direction: column;
@@ -171,7 +174,7 @@
       <button id="reset-view">Reset view</button>
     </header>
     <main>
-      <div id="stage"><canvas id="board"></canvas></div>
+      <div id="stage"><canvas id="board"></canvas><canvas id="overlay"></canvas></div>
       <aside>
         <section>
           <h2>Selection</h2>
@@ -189,6 +192,14 @@
             <label><input type="checkbox" id="snap-text" /> Text</label>
           </div>
           <p class="hint">Text laid out around what you drag is never a target, since it moves as you drag.</p>
+        </section>
+        <section>
+          <h2>Rendering</h2>
+          <pre id="render-stats">Nothing drawn yet.</pre>
+          <div class="controls">
+            <label><input type="checkbox" id="lod-on" /> Simplify what is too small to see</label>
+          </div>
+          <p class="hint">Only what changed is redrawn. While you drag, what lies below and above is cached as two layers. Add 10,000 shapes and zoom out to try it on a big board; small text turns into gray bars and specks are skipped when simplifying.</p>
         </section>
         <section>
           <h2>Add an SVG</h2>
