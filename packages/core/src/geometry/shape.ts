@@ -130,7 +130,8 @@ export const buildUnclipped = (op: Op, tolerance: number): Shape => {
   if (inverse === null) return emptyShape(op);
 
   switch (op.kind) {
-    case "clear": {
+    case "clear":
+    case "embed": {
       const { x, y, width, height } = op.rect;
       if (width === 0 || height === 0) return emptyShape(op);
       const ring = [
@@ -223,6 +224,7 @@ export const shapeContains = (shape: Shape, p: Point, tolerance: number): boolea
   if (shape.silhouette) return insideFill(p, shape.rings, "nonzero") || (tolerance > 0 && shape.rings.some((ring) => distanceToRing(p, ring) <= tolerance));
   switch (shape.op.kind) {
     case "clear":
+    case "embed":
     case "image":
     case "text":
       return inConvex(p, shape.rings[0]!) || (tolerance > 0 && distanceToRing(p, shape.rings[0]!) <= tolerance);

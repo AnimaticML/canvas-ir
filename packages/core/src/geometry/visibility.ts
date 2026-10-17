@@ -14,7 +14,7 @@ export const paintIsTransparent = (paint: Paint): boolean => {
  * it clears what is under a transparent paint, so it counts as visible.
  */
 export const opIsInvisible = (op: Op): boolean => {
-  if (op.kind === "clear") return false;
+  if (op.kind === "clear" || op.kind === "embed") return false;
   if (op.compositing.globalAlpha === 0) return true;
   if (op.compositing.globalCompositeOperation === "copy") return false;
   switch (op.kind) {

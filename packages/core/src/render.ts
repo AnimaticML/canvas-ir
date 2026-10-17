@@ -105,7 +105,7 @@ const filterLength = (value: string): number | null => {
  * lengths, ignore the transform, so they are device pixels already.
  */
 const effectReach = (op: Op): ((b: Box) => Box) | null => {
-  if (op.kind === "clear") return (b) => b;
+  if (op.kind === "clear" || op.kind === "embed") return (b) => b;
   const { shadowColor, shadowBlur, shadowOffsetX, shadowOffsetY, filter } = op.compositing;
   const steps: ((b: Box) => Box)[] = [];
   const shadow = (dx: number, dy: number, blur: number) => (b: Box) => union(b, expandBox({ minX: b.minX + dx, minY: b.minY + dy, maxX: b.maxX + dx, maxY: b.maxY + dy }, blur * 2));
@@ -401,7 +401,7 @@ export class Renderer {
 
   /** Whether an op above the lifted ones can live in the cached upper layer. */
   private layerable(op: Op): boolean {
-    return op.kind !== "clear" && op.compositing.globalCompositeOperation === "source-over";
+    return op.kind !== "clear" && op.kind !== "embed" && op.compositing.globalCompositeOperation === "source-over";
   }
 
   /**
@@ -555,7 +555,7 @@ export class Renderer {
   }
 
   private tooSmall(op: Op, box: Box): boolean {
-    if (!this.lod || op.kind === "clear") return false;
+    if (!this.lod || op.kind === "clear" || op.kind === "embed") return false;
     const below = this.lod.skipBelow ?? 0.5;
     if (below <= 0) return false;
     // The box has the bleed added on each side.
@@ -577,13 +577,13 @@ export class Renderer {
   private classify(op: Op): void {
     this.effects.delete(op.id);
     this.unbounded.delete(op.id);
-    if (op.kind !== "clear" && UNBOUNDED.has(op.compositing.globalCompositeOperation)) {
+    if (op.kind !== "clear" && op.kind !== "embed" && UNBOUNDED.has(op.compositing.globalCompositeOperation)) {
       this.unbounded.add(op.id);
       return;
     }
     const reach = effectReach(op);
     if (reach === null) this.unbounded.add(op.id);
-    else if (op.kind !== "clear" && (op.compositing.filter !== "none" || (op.compositing.shadowColor && (parseColor(op.compositing.shadowColor)?.a ?? 1) > 0))) {
+    else if (op.kind !== "clear" && op.kind !== "embed" && (op.compositing.filter !== "none" || (op.compositing.shadowColor && (parseColor(op.compositing.shadowColor)?.a ?? 1) > 0))) {
       // Only ops whose effect actually reaches past their box need the slow path.
       const probe = { minX: 0, minY: 0, maxX: 1, maxY: 1 };
       const grown = reach(probe);

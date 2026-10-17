@@ -225,6 +225,7 @@ export const toSVG = (document: IRDocument, options: SvgOptions = {}): string =>
       case "text":
         return textElement(op, paint, tag);
       case "clear":
+      case "embed":
         return "";
     }
   };
@@ -339,7 +340,7 @@ export const toSVG = (document: IRDocument, options: SvgOptions = {}): string =>
     }
   };
   for (const op of document.ops) {
-    if (op.kind === "clear") {
+    if (op.kind === "clear" || op.kind === "embed") {
       closeGroups(0);
       const { x, y, width: w, height: h } = op.rect;
       if (w === 0 || h === 0) continue;
@@ -347,6 +348,18 @@ export const toSVG = (document: IRDocument, options: SvgOptions = {}): string =>
       const hole = (op.clip ?? []).reduceRight((acc, cp) => `<g clip-path="url(#${clipRef(cp)})">${acc}</g>`, `<rect${matrixAttr(op.transform)} x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" fill="#000"/>`);
       defs.push(`<mask id="${id}" maskUnits="userSpaceOnUse" x="-1e7" y="-1e7" width="2e7" height="2e7"><rect x="-1e7" y="-1e7" width="2e7" height="2e7" fill="#fff"/>${hole}</mask>`);
       body = `<g mask="url(#${id})">${body}</g>`;
+      // An embed's element goes in the hole: HTML or a page as an iframe, anything else as an empty placeholder carrying its content.
+      if (op.kind === "embed") {
+        const { html, src } = op.content;
+        const frame =
+          typeof html === "string"
+            ? `<iframe xmlns="http://www.w3.org/1999/xhtml" srcdoc="${escapeXml(html)}" style="border:0;width:100%;height:100%"></iframe>`
+            : typeof src === "string"
+              ? `<iframe xmlns="http://www.w3.org/1999/xhtml" src="${escapeXml(src)}" style="border:0;width:100%;height:100%"></iframe>`
+              : "";
+        const element = `<foreignObject data-op="${escapeXml(op.id)}" data-embed="${escapeXml(JSON.stringify(op.content))}"${matrixAttr(op.transform)} x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}">${frame}</foreignObject>`;
+        body += (op.clip ?? []).reduceRight((acc, cp) => `<g clip-path="url(#${clipRef(cp)})">${acc}</g>`, element);
+      }
       continue;
     }
     const chain = chainOf(op.group);

@@ -10,6 +10,8 @@ export { IDENTITY, applyToPoint, invert, multiply } from "./math";
 export type {
   ArcSegment,
   ClearOp,
+  EmbedOp,
+  HoleOp,
   ClipPath,
   ColorStop,
   Compositing,
@@ -103,3 +105,6 @@ export { ellipseAxes, svgPathData, toSVG } from "./svg";
 export type { SvgOptions } from "./svg";
 export { Renderer } from "./render";
 export type { LevelOfDetail, RenderStats, RendererOptions, Surface } from "./render";
+export { type Morph, type MorphOptions, keyByMeta, mixColors, morph } from "./morph";
+export { EmbedLayer, type EmbedLayerOptions } from "./embed";
+export { AccessibilityLayer, type AccessibilityLayerOptions, type AccessibleNode, accessibilityTree } from "./accessibility";

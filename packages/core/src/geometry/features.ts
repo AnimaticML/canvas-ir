@@ -150,6 +150,7 @@ export const opAnchors = (op: Op, shape: Shape): Anchor[] => {
       anchors = [...pathAnchors(op.path, op.kind === "fill"), ...boxAnchors(shape.geometryBox)];
       break;
     case "image":
+    case "embed":
     case "clear": {
       // An outlined image still snaps by its box; its silhouette is snapped to as an outline.
       const ring = op.kind === "image" && shape.silhouette ? imageRing(op) : shape.rings[0];

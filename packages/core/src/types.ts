@@ -238,6 +238,24 @@ export interface ClearOp {
   readonly group?: string;
 }
 
+/**
+ * An extension: a place for an HTML element (a video, a form, a WebGL or 3D
+ * canvas) in the drawing order. Replayed onto a canvas it cuts a hole the size
+ * of `rect`, like `clearRect`, so the element can sit beneath the canvas and
+ * show through it: what was drawn before is covered by the element, what is
+ * drawn after paints over it. `content` says what to put there; the host
+ * decides how (see `EmbedLayer`).
+ */
+export interface EmbedOp {
+  readonly kind: "embed";
+  readonly id: string;
+  readonly transform: Matrix2D;
+  readonly rect: Rect;
+  readonly content: { readonly [key: string]: JsonValue };
+  readonly clip?: readonly ClipPath[];
+  readonly group?: string;
+}
+
 export type ImageSmoothingQuality = "low" | "medium" | "high";
 
 /** `drawImage`, normalized to its nine-argument form: `source` within the image, drawn into `dest`. */
@@ -296,7 +314,10 @@ export interface TextOp extends OpBase {
   readonly metrics: TextMeasure;
 }
 
-export type Op = FillOp | StrokeOp | ClearOp | ImageOp | TextOp;
+export type Op = FillOp | StrokeOp | ClearOp | ImageOp | TextOp | EmbedOp;
+
+/** Ops that cut a hole rather than paint: they have no compositing. */
+export type HoleOp = ClearOp | EmbedOp;
 
 export interface IRDocument {
   readonly version: 1;

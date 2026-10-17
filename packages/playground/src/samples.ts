@@ -1,4 +1,6 @@
 import { type LiveTextOptions, type RichText, type TextRun, drawTextLayout, layoutText } from "@canvas-ir/text";
+import { chartJs, d3Chart } from "./charts";
+import { embedSample } from "./embeds";
 import { type ComponentHandle, type ComponentSpec, type RecordingContext, applyToPoint, invert } from "canvas-ir";
 
 /**
@@ -267,7 +269,7 @@ const controls: Sample = {
       id: knobId,
       parent: panel,
       state: { value: knobValue(8) },
-      meta: { source: "knob" },
+      meta: ({ value }) => ({ source: "knob", role: "slider", label: "Margin", value: Math.round(value * 24), min: 0, max: 24 }),
       cursor: (_s, ui) => (ui.pressed ? "grabbing" : "grab"),
       draw: (c, { value }, ui) => {
         const start = 0.75 * Math.PI;
@@ -334,7 +336,7 @@ const controls: Sample = {
       id: sliderId,
       parent: panel,
       state: { value: 0.25 },
-      meta: { source: "slider" },
+      meta: ({ value }) => ({ source: "slider", role: "slider", label: "Text size", value: sizeAt(value), min: 12, max: 20 }),
       cursor: "pointer",
       draw: (c, { value }, ui) => {
         // A transparent grip taller than the track, so the thin track is easy to hit.
@@ -377,7 +379,7 @@ const controls: Sample = {
       id: unique("button"),
       parent: panel,
       state: { resets: 0 },
-      meta: { source: "button" },
+      meta: { source: "button", role: "button", label: "Reset" },
       cursor: "pointer",
       draw: (c, _s, ui) => {
         c.fillStyle = ui.pressed ? "#1d4ed8" : ui.hovered ? "#3b82f6" : "#2563eb";
@@ -486,8 +488,11 @@ export const samples: readonly Sample[] = [
   circle,
   controls,
   shapes,
+  d3Chart,
+  chartJs,
+  embedSample,
   field,
 ];
 
 /** The samples on the board at first; the rest are a button away. */
-export const initialSamples: readonly Sample[] = samples.filter((s) => s !== shapes && s !== field);
+export const initialSamples: readonly Sample[] = samples.filter((s) => s !== shapes && s !== field && s !== d3Chart && s !== chartJs && s !== embedSample);

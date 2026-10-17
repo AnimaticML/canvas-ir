@@ -162,6 +162,7 @@ const op = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("fill"), ...base, fillRule, paint, path: pathGeometry }).strict(),
   z.object({ kind: z.literal("stroke"), ...base, stroke: strokeStyle, path: pathGeometry }).strict(),
   z.object({ kind: z.literal("clear"), id: z.string(), transform: matrix, rect, clip, group }).strict(),
+  z.object({ kind: z.literal("embed"), id: z.string(), transform: matrix, rect, content: z.record(jsonValue), clip, group }).strict(),
   z
     .object({
       kind: z.literal("image"),

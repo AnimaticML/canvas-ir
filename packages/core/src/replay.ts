@@ -233,7 +233,7 @@ export const replayOp = (target: ReplayTarget, op: Op, options: ReplayOptions = 
   let paint: unknown = null;
   if (op.kind === "fill" || op.kind === "text") paint = toPaint(target, op.paint, options);
   if (op.kind === "stroke") paint = toPaint(target, op.stroke.paint, options);
-  if (op.kind !== "clear" && op.kind !== "image" && paint === null) return;
+  if (op.kind !== "clear" && op.kind !== "embed" && op.kind !== "image" && paint === null) return;
   const image = op.kind === "image" ? options.images?.(op.image.src) : undefined;
   if (op.kind === "image" && (image === undefined || image === null)) return;
 
@@ -243,6 +243,12 @@ export const replayOp = (target: ReplayTarget, op: Op, options: ReplayOptions = 
     case "clear":
       setMatrix(target, transform);
       target.clearRect(op.rect.x, op.rect.y, op.rect.width, op.rect.height);
+      break;
+    case "embed":
+      setMatrix(target, transform);
+      // A recorder records the embed itself; a canvas gets the hole the element shows through.
+      if (hasEmbeds(target)) target.embed(op.rect.x, op.rect.y, op.rect.width, op.rect.height, op.content as { [key: string]: JsonValue });
+      else target.clearRect(op.rect.x, op.rect.y, op.rect.width, op.rect.height);
       break;
     case "fill":
       applyCompositing(target, op.compositing);
@@ -284,6 +290,9 @@ export const replayOp = (target: ReplayTarget, op: Op, options: ReplayOptions = 
   }
   target.restore();
 };
+
+const hasEmbeds = (target: unknown): target is { embed(x: number, y: number, w: number, h: number, content: { [key: string]: JsonValue }): string } =>
+  typeof (target as { embed?: unknown }).embed === "function";
 
 interface GroupTarget {
   beginGroup(options: { id?: string; meta?: { [key: string]: JsonValue } }): string;

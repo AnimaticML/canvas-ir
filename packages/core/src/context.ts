@@ -163,7 +163,20 @@ export interface RecordingContextOptions {
    * nothing. Defaults to the element's `src` and natural size.
    */
   readonly describeImage?: (image: unknown) => ImageRef | null;
+  /**
+   * Keeps, for each op, the stack line of the call that drew it, for devtools
+   * (see `getSources`). Off by default: it costs a stack capture per call.
+   */
+  readonly captureSource?: boolean;
 }
+
+/** The caller's frame from a stack captured one call below it, in V8 ("at f (file:1:2)") or Firefox/Safari ("f@file:1:2") form. */
+const callerFrame = (stack: string | undefined): string | null => {
+  const lines = (stack ?? "").split("\n").filter((line) => line.trim() !== "" && !/^\w*Error\b/.test(line));
+  // lines[0] is the wrapper that captured the stack.
+  const line = lines[1];
+  return line === undefined ? null : line.trim().replace(/^at /, "");
+};
 
 /** The default image description: an `<img>`-like object's `src` and natural size. */
 export const describeImageElement = (image: unknown): ImageRef | null => {
@@ -246,10 +259,61 @@ export class RecordingContext {
   private readonly measurer: (text: string, style: TextStyle) => TextMeasure;
   private readonly describeImage: (image: unknown) => ImageRef | null;
 
+  /** Op id to a stack captured where it was drawn, with `captureSource`; read lazily, since formatting a stack costs more than capturing it. */
+  private sources = new Map<string, Error>();
+  /** The stack of the outermost method call in progress, with `captureSource`. */
+  private callSite: Error | null = null;
+
   constructor(options: RecordingContextOptions = {}) {
     this.canvas = { width: options.width ?? 300, height: options.height ?? 150 };
     this.measurer = options.measureText ?? measureWithCanvas;
     this.describeImage = options.describeImage ?? describeImageElement;
+    // Every method called from outside goes through a wrapper one frame deep, so
+    // its caller is the next stack line, minified or not; calls the recorder makes
+    // on itself skip the wrapper and keep the outer call site.
+    if (options.captureSource) {
+      const wrapped = new Map<PropertyKey, (...args: unknown[]) => unknown>();
+      return new Proxy(this, {
+        get: (target, key) => {
+          const value: unknown = Reflect.get(target, key, target);
+          if (typeof value !== "function" || key === "constructor") return value;
+          let wrapper = wrapped.get(key);
+          if (!wrapper) {
+            const method = value as (...args: unknown[]) => unknown;
+            wrapper = function captureCallSite(...args: unknown[]): unknown {
+              const outer = target.callSite === null;
+              if (outer) {
+                // Two frames are enough (the wrapper and its caller); V8 reads this limit, other engines ignore it.
+                const limit = (Error as { stackTraceLimit?: number | undefined }).stackTraceLimit;
+                (Error as { stackTraceLimit?: number | undefined }).stackTraceLimit = 2;
+                target.callSite = new Error();
+                (Error as { stackTraceLimit?: number | undefined }).stackTraceLimit = limit;
+              }
+              try {
+                return method.apply(target, args);
+              } finally {
+                if (outer) target.callSite = null;
+              }
+            };
+            wrapped.set(key, wrapper);
+          }
+          return wrapper;
+        },
+      });
+    }
+  }
+
+  /**
+   * With `captureSource`, the stack line of the call that drew each op, by op
+   * id, such as "drawBadge (app.js:12:7)". Empty otherwise.
+   */
+  getSources(): ReadonlyMap<string, string> {
+    const out = new Map<string, string>();
+    for (const [id, error] of this.sources) {
+      const line = callerFrame(error.stack);
+      if (line !== null) out.set(id, line);
+    }
+    return out;
   }
 
   getDocument(): IRDocument {
@@ -300,6 +364,7 @@ export class RecordingContext {
   /** Like the spec's `reset()`: clears the drawing, the path, the state stack and all state. */
   reset(): void {
     this.ops = [];
+    this.sources = new Map();
     this.nextId = 0;
     this.groups = [];
     this.groupStack = [];
@@ -690,14 +755,37 @@ export class RecordingContext {
   clearRect(x: number, y: number, w: number, h: number): void {
     if (!allFinite(x, y, w, h)) return;
     const clip = this.state.clip;
+    const id = this.newId();
+    if (this.callSite !== null) this.sources.set(id, this.callSite);
     this.ops.push({
       kind: "clear",
-      id: this.newId(),
+      id,
       transform: this.state.transform,
       rect: { x, y, width: w, height: h },
       ...(clip.length > 0 ? { clip } : {}),
       ...this.groupField(),
     });
+  }
+
+  /**
+   * An extension: reserves `rect`, in the current transform and clip, for an
+   * HTML element described by `content` (see `EmbedOp`). Returns the op id.
+   */
+  embed(x: number, y: number, w: number, h: number, content: { [key: string]: JsonValue }): string {
+    if (!allFinite(x, y, w, h)) throw new TypeError("embed() needs a finite rectangle");
+    const clip = this.state.clip;
+    const id = this.newId();
+    if (this.callSite !== null) this.sources.set(id, this.callSite);
+    this.ops.push({
+      kind: "embed",
+      id,
+      transform: this.state.transform,
+      rect: { x, y, width: w, height: h },
+      content: structuredClone(content),
+      ...(clip.length > 0 ? { clip } : {}),
+      ...this.groupField(),
+    });
+    return id;
   }
 
   // --- Paints ---
@@ -821,8 +909,10 @@ export class RecordingContext {
   /** The fields every painting op shares. */
   private opBase(): { id: string; transform: Matrix2D; compositing: Compositing; clip?: readonly ClipPath[]; group?: string } {
     const clip = this.state.clip;
+    const id = this.newId();
+    if (this.callSite !== null) this.sources.set(id, this.callSite);
     return {
-      id: this.newId(),
+      id,
       transform: this.state.transform,
       compositing: this.compositing(),
       ...(clip.length > 0 ? { clip } : {}),

@@ -18,6 +18,7 @@ All five phases: recording, the IR, serialization and replay; geometry queries; 
 | Replay onto any real 2D context; validated JSON round trip | |
 | A renderer that redraws only what changed, culls what is out of view, caches layers while dragging and simplifies what is too small to see | |
 | Groups, an event router with capture and bubbling, components drawn from state, SVG export | |
+| Morphing between drawings; HTML and WebGL elements placed in drawing order; an accessibility tree | |
 | Rich text layout: paragraphs, headings, lists, mixed fonts, decorations, links, any-shaped containers, obstacles, bidi, caret and selection | |
 | Geometry: exact bounds, hit tests, rect and lasso queries, closest point, intersections, anchors, snapping, outline offsetting, moving ops | |
 
@@ -106,7 +107,7 @@ canvas.style.cursor = components.cursor ?? "";
 
 Handlers run in capture, before the board's own listeners, so a knob that stops its drags keeps them from moving it. Presses, drags and keys keep reaching a component that redraws mid-gesture under new op ids. A group whose meta has `hitArea: true` makes transparent shapes hit targets (a slider's grip); one with `snap: false` is never snapped to, and `snap` also takes a `filter`.
 
-`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a link that highlights on hover, in a circle, and flowing around a shape that re-lays it out as you drag it), a knob, a slider and a button built as components that change the wrapped text, and canvas shapes on one board, with snapping settings, hover and selection outlines, dragging, zoom and pan, and SVG and JSON export. It renders through `Renderer` and shows what each frame redrew; a button adds 10,000 shapes to try it on a big board. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
+`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a link that highlights on hover, in a circle, and flowing around a shape that re-lays it out as you drag it), a knob, a slider and a button built as components that change the wrapped text, canvas shapes, D3 and Chart.js charts, a day-to-night morph, an HTML form and a WebGL cube embedded on the board, and pen, rectangle, ellipse and text tools, on one board, with snapping settings, hover and selection outlines, dragging, zoom and pan, SVG and JSON export, a Devtools panel and an accessibility tree. It renders through `Renderer` and shows what each frame redrew; a button adds 10,000 shapes to try it on a big board. Run it with `bun run --cwd packages/playground dev`, or build one self-contained file with `bun run --cwd packages/playground build`.
 
 ## Rendering
 
@@ -129,6 +130,27 @@ renderer.drop();
 - What is too small to see is simplified by default: text under 3 device pixels becomes a bar, ops under half a pixel are skipped, and images shown at under half size are drawn from halved copies. `lod: false` draws everything as a full replay does; `lod: { textBelow, skipBelow, images }` tunes it.
 
 The scene's index is a hierarchical grid: each op sits at the level where its box covers at most 2 x 2 cells, so specks and huge shapes alike are found quickly at any zoom, and moving one is constant time. Groups keep their ops indexed, so moving or removing a group touches only its own ops.
+
+## Tools and demos
+
+- **Where each op came from:** `new RecordingContext({ captureSource: true })` keeps the stack line of the call that drew each op; `getSources()` maps op ids to lines such as `drawBadge (app.js:12:7)`. The playground's Devtools panel lists ops with them, shows an op's state and steps through the drawing.
+- **Morph:** `morph(from, to).at(t)` blends two drawings, pairing ops by id or, with `keyByMeta("name")`, by a name on their groups. Transforms turn rather than squash, colors blend in OKLab, paths become matching cubics, and what has no partner fades.
+
+```ts
+const m = morph(day, night, { key: keyByMeta("name") });
+scene.replaceGroup("scene", m.at(0.4));
+```
+
+- **Embeds:** `ctx.embed(x, y, w, h, { type: "video" })` reserves a place in drawing order for an HTML element. On a canvas it cuts a hole; `EmbedLayer` puts your element beneath the canvas in that hole, so shapes drawn later cover it and earlier ones don't, and lets the pointer through to it.
+
+```ts
+const layer = new EmbedLayer(scene, container, canvas, { create: (op) => makeElement(op.content) });
+layer.setView(view); // world to CSS pixels
+router.on("*", "enter", (e) => e.op?.kind === "embed" && layer.passThrough(e.op.id));
+```
+
+- **Accessibility:** give groups `role` and `label` meta (`{ role: "button", label: "Save" }`, or `{ role: "slider", value, min, max }`). `accessibilityTree(scene)` reads them with the text drawn; `AccessibilityLayer` mirrors the tree as DOM over the canvas for screen readers and the keyboard, and `router.focusOn(id)` sends keys to what Tab reached.
+- **Charts:** D3 and Chart.js draw into the recorder unchanged (see `packages/playground/src/charts.ts`); every bar and point is an object you can hover and select.
 
 ## Images
 

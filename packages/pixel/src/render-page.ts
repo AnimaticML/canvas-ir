@@ -73,6 +73,8 @@ const fixtureBoard = async (): Promise<RecordingContext> => {
     ctx.translate((i % COLUMNS) * (WIDTH + 10), Math.floor(i / COLUMNS) * (HEIGHT + 10));
     ctx.beginGroup({ id: `tile-${i}`, meta: { name: fixture.name } });
     fixture.draw(ctx as unknown as CanvasRenderingContext2D, fixtureEnv);
+    // Some tiles hold an embed: a hole each render must cut the same way, over the tile's drawing and under nothing.
+    if (i % 7 === 3) ctx.embed(30, 25, 90, 55, { type: "pixel check" });
     ctx.endGroup();
     ctx.restore();
   });

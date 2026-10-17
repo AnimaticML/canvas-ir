@@ -34,8 +34,8 @@ export interface ComponentSpec<S> {
   readonly state: S;
   /** A group to put the component in. */
   readonly parent?: string;
-  /** Extra meta for the component's group. */
-  readonly meta?: { readonly [key: string]: JsonValue };
+  /** Extra meta for the component's group, or a function of its state, such as an accessible `role`, `label` and `value`. */
+  readonly meta?: { readonly [key: string]: JsonValue } | ((state: S) => { readonly [key: string]: JsonValue });
   /** Where to draw it. Default identity. */
   readonly transform?: Matrix2D;
   /** The CSS cursor while it's hovered, or a function of its state; null for no preference. */
@@ -70,7 +70,7 @@ interface Mounted {
 }
 
 const IDLE: ComponentUi = { hovered: false, pressed: false, focused: false, hoveredParts: [] };
-const ROUTED: readonly RouterEventType[] = ["down", "up", "click", "dragstart", "drag", "dragend", "wheel", "keydown", "keyup"];
+const ROUTED: readonly RouterEventType[] = ["down", "up", "click", "dragstart", "drag", "dragend", "wheel", "keydown", "keyup", "focus"];
 
 /**
  * Interactive objects drawn from state. Each component owns a group: it is
@@ -184,7 +184,8 @@ export class Components {
     for (const m of list) {
       const { spec } = m;
       const recorder = new RecordingContext(this.options.recorder);
-      recorder.beginGroup({ id: spec.id, meta: { ...spec.meta, component: true } });
+      const meta = typeof spec.meta === "function" ? spec.meta(m.state) : spec.meta;
+      recorder.beginGroup({ id: spec.id, meta: { ...meta, component: true } });
       const t = m.transform;
       recorder.setTransform(t.a, t.b, t.c, t.d, t.e, t.f);
       spec.draw(recorder, m.state, m.ui);
@@ -254,6 +255,7 @@ export class Components {
           const hit = this.on(e.path);
           if (type === "down") this.setUi((m) => ({ pressed: hit.includes(m), focused: hit.includes(m) }));
           if (type === "up") this.setUi(() => ({ pressed: false }));
+          if (type === "focus") this.setUi((m) => ({ focused: hit.includes(m) }));
           // Innermost first, like bubbling; a handler that stops propagation keeps the event from outer components too.
           let stopped = false;
           const event: RouterEvent = {

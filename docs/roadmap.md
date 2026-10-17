@@ -1,6 +1,6 @@
 # CanvasIR: roadmap after phase 5
 
-Phases 1 to 5 in [design.md](design.md) are done. These are the next batches, in order. Each batch, like each phase, is done when its gate passes in CI.
+Phases 1 to 5 in [design.md](design.md) are done. These are the batches since, in order. Each batch, like each phase, is done when its gate passes in CI.
 
 ## Where the document lives
 
@@ -73,24 +73,21 @@ What the library needs for that is incremental updates by group, not an undo sta
   - A drag on a 10,000-op board, all in view, stays under a 16 ms frame at the 99th percentile. In headless Chromium, a full replay takes about 140 ms a frame; dragging a shape takes about 1 ms with partial redraws and 0.2 ms with layers, and dragging a translucent panel over a third of the view takes about 6 ms with layers (60 ms without).
   - The geometry benchmark adds a board from specks to shapes thousands of units across, queried as at 400% and at 1% zoom, and a step that moves 1,000 objects at once, held to 16 ms at the 90th percentile since its tail is garbage collection.
 
-## Batch 10: tools and demos
+## Batch 10: tools and demos (done)
 
-- **Devtools panel:**
-  - Lists ops and groups, steps through drawing op by op, highlights the hovered op, and shows its state.
-  - With `captureSource: true`, the recorder keeps a stack line per op, so a clicked shape leads to the code that drew it.
-- **Drawing tool:** pen, rectangle, ellipse and text tools in the playground that create ops interactively through a recording context. It's a test bed for snapping and selection.
-- **Interactive charts from unchanged libraries:** D3 drawing to canvas, and Chart.js, recorded as is. Every bar, point and label becomes a hoverable, clickable object with no help from the library.
-- **Morph between two drawings:**
-  - **Matching:** ops are matched by id, or by group meta keys when ids differ.
-  - **Transforms:** decomposed into translation, rotation, scale and skew, and interpolated.
-  - **Colors:** interpolated in a perceptual space.
-  - **Paths:** lowered to cubic Béziers, resampled to the same segment count, given aligned starting points, and interpolated point by point.
-  - **Unmatched ops:** fade in or out.
-- **Embedded HTML and 3D elements with correct overlap:** an `embed` op marks where a DOM element (a video player, an iframe, a WebGL canvas) sits in drawing order, with its shape, transform and clip.
-  - The elements sit in the page beneath the one board canvas, positioned with the CSS transform of the op's matrix times the view.
-  - Replaying an `embed` op cuts a hole in what was drawn below it (a `destination-out` fill of its shape), and everything drawn after it paints over the element normally. The element then appears in its place in drawing order, under shapes and shadows drawn above it, with no second canvas.
-  - Pointer events go to the canvas. When the router finds an `embed` op topmost under the pointer, the canvas lets events through (`pointer-events: none`) until the pointer leaves it.
-  - Limits: the hole's edge is anti-aliased like any fill, and where the element is itself transparent the page shows through instead of the canvas content below it.
-- **Accessibility tree (optional):** a visually hidden, structured DOM tree for screen readers: groups become regions or list items named from their meta, and text blocks become their paragraphs, headings and lists in reading order. It isn't positioned or zoomed. It changes only when the document does.
+- **Devtools:** `captureSource: true` makes the recorder keep, for each op, the stack line of the call that drew it (`getSources()`). Methods go through a wrapper one frame deep, so the caller is found the same way in a minified bundle, and the stack is formatted only when read. The playground's Devtools panel lists every op in drawing order with that line, filters by kind, id, group, sample or source, highlights the op clicked or Alt-clicked on the board and shows its full state (transform, compositing, clip, paint, path), and steps through the drawing op by op.
+- **Drawing tools:** pen, rectangle, ellipse and text tools in the playground (keys P, R, O, T, and V to select), recording each new shape as its own group and swapping it into the scene. Corners snap like a drag does, Shift makes squares and circles, and the pen thins the freehand points and fits as few cubic curves as stay within a screen pixel.
+- **Charts from unchanged libraries:** D3's scales and shape generators (`line`, `area`, `pie`, `arc`) draw onto the recorder as their context. Chart.js draws into a recorder handed to it as a canvas through its `BasicPlatform`, with `Path2D` pointed at `RecordingPath2D` while it draws, and the drawing is replayed onto the board at its place. Hovering a point or slice shows the datum on its group's meta; hovering a Chart.js bar or point asks the live chart which element is under the pointer.
+- **Morph:** `morph(from, to, { key })` pairs ops by id, or with `keyByMeta(field)` by a name on their groups, and `at(t)` builds each frame.
+  - Transforms are decomposed into move, turn, scale and skew, and turn the short way, so a rotated shape turns instead of squashing.
+  - Colors, gradient stops and shadow colors blend in OKLab, premultiplied, and a transparent end takes the other's hue (`mixColors`). A color against a gradient blends as a flat gradient.
+  - Paths are rewritten as cubics in each op's own drawing space, the longest pieces split until both sides have as many, and a closed pair starts and runs where the two line up best. A missing subpath grows from or shrinks to the other's center.
+  - Unpaired ops fade out or in where they were in drawing order; pairs that can't blend (a fill and a stroke, different text) cross-fade. The playground morphs a day scene into a night scene drawn apart.
+- **Embeds:** `ctx.embed(x, y, w, h, content)` records an `embed` op: a place in drawing order for an HTML element. Replayed onto a canvas it clears its rect, in its transform and clip, like `clearRect`; replayed into a recorder it records itself. Hit tests treat it as opaque, covering what was drawn before it. SVG export cuts the same hole and puts the element in a `foreignObject` (an `iframe` for `html` or `src` content).
+  - `EmbedLayer` puts each element beneath the canvas with the CSS transform of the view times the op's transform (and its clip as a CSS `clip-path`), one pixel larger than the hole so its anti-aliased edge shows no seam. What is drawn after an embed covers its element and what was drawn before is covered by it, with one canvas.
+  - The canvas takes the pointer; `passThrough(id)` lets events through to an element while the pointer is over it, until it leaves or moves onto something drawn over it. An iframe keeps its events, so only leaving it counts there.
+  - The playground embeds a real HTML form and a WebGL cube, with a sticker drawn over both.
+- **Accessibility:** `accessibilityTree(scene)` reads groups' `role`, `label`, `value`, `min` and `max` meta and the text drawn, in drawing order; a group of text alone continues the paragraph around it, and a control's text names it when it has no label. `AccessibilityLayer` mirrors the tree as transparent DOM elements placed over the board, so screen readers read it, Tab reaches the controls with a visible focus ring, arrows reach them through `router.focusOn` and Enter presses them. Components can make their meta a function of state, so a slider reports its value.
+- **Gate:** morph, embeds, source capture and the accessibility tree have unit tests. The renderer's pixel checks run with embeds on the board: partial redraws cut the same holes a full replay does, away from anti-aliased edges.
 
 Not planned: WebGL or PDF backends, pixel access (`getImageData` and friends), and paints made by another context.

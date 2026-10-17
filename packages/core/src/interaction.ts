@@ -13,7 +13,8 @@ export type RouterEventType =
   | "dragend"
   | "wheel"
   | "keydown"
-  | "keyup";
+  | "keyup"
+  | "focus";
 
 /** What the host passes in from its DOM event, in the canvas element's pixels. */
 export interface PointerInput {
@@ -232,6 +233,17 @@ export class EventRouter {
   wheel(input: WheelInput): void {
     const screen = { x: input.x, y: input.y };
     this.dispatch("wheel", this.pick(screen).target, input, screen);
+  }
+
+  /**
+   * Moves key focus to an op or group without a press, as when the keyboard
+   * tabs to it through an accessibility tree; null takes focus away. A `focus`
+   * event goes to it (bubbling through its groups) so components can show it.
+   */
+  focusOn(id: string | null): void {
+    this.focus = id;
+    this.focusPath = id === null ? [] : [id, ...this.scene.groupChain(id)];
+    this.dispatch("focus", id, { key: "" }, null, {}, this.focusPath);
   }
 
   keyDown(input: KeyInput): void {

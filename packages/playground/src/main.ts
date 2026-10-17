@@ -2,7 +2,10 @@
 // and made interactive through the scene and the event router.
 import { Canvg } from "canvg";
 import {
+  AccessibilityLayer,
+  type AccessibleNode,
   Components,
+  EmbedLayer,
   EventRouter,
   Renderer,
   IDENTITY,
@@ -26,6 +29,11 @@ import {
 } from "canvas-ir";
 import { vectorize } from "@canvas-ir/vectorize";
 import { LiveText } from "@canvas-ir/text";
+import { datumAt } from "./charts";
+import { Devtools } from "./devtools";
+import { createEmbed, destroyEmbed } from "./embeds";
+import { MORPH_ID, dayToNight } from "./morph-demo";
+import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 
 const stage = document.getElementById("stage")!;
@@ -43,7 +51,10 @@ const images = new Map<string, CanvasImageSource>();
 const imageIds = new Map<unknown, string>();
 // Each image's traced silhouette, so hit tests, snapping and text wrap follow its opaque pixels.
 const outlines = new Map<unknown, Point[][]>();
+/** Op id to the line of code that drew it, for devtools. */
+const sources = new Map<string, string>();
 const recorderOptions: RecordingContextOptions = {
+  captureSource: true,
   describeImage: (img) => {
     const source = img as { src?: string; width?: number; height?: number; naturalWidth?: number; naturalHeight?: number };
     const width = source.naturalWidth ?? source.width ?? 0;
@@ -69,6 +80,27 @@ let liveTexts: LiveText[] = [];
 let view: Matrix2D = IDENTITY;
 let router = new EventRouter(scene);
 let renderer = new Renderer(scene, ctx);
+// HTML and WebGL elements of embed ops, beneath the board.
+const embeds = new EmbedLayer(scene, stage, canvas, { create: createEmbed, destroy: destroyEmbed });
+// What screen readers read and Tab reaches: a DOM mirror of the board's roles and text.
+const a11yView = document.getElementById("a11y-tree")!;
+const outlineOf = (nodes: readonly AccessibleNode[], depth = 0): string[] =>
+  nodes.flatMap((n) => [`${"  ".repeat(depth)}${n.role}${n.label ? ` "${n.label.length > 48 ? `${n.label.slice(0, 47)}…` : n.label}"` : ""}${n.value !== undefined ? ` = ${n.value}` : ""}`, ...outlineOf(n.children, depth + 1)]);
+const a11y = new AccessibilityLayer(scene, stage, {
+  onFocus: (id) => router.focusOn(id),
+  // Enter or Space presses the control where it is drawn, as a click would.
+  onActivate: (id) => {
+    const b = scene.bounds(id);
+    if (!b) return;
+    const p = applyToPoint(view, b.x + b.width / 2, b.y + b.height / 2);
+    router.pointerDown({ x: p.x, y: p.y, button: 0 });
+    router.pointerUp({ x: p.x, y: p.y, button: 0 });
+  },
+  onChange: (tree) => {
+    const lines = outlineOf(tree);
+    a11yView.textContent = lines.length > 60 ? `${lines.slice(0, 60).join("\n")}\n… ${lines.length - 60} more` : lines.join("\n");
+  },
+});
 /** The view and canvas size the renderer last had, so it redraws everything only when they change. */
 let viewKey = "";
 const makeRenderer = (): void => {
@@ -81,6 +113,20 @@ let components: Components | null = null;
 /** Selected objects (outermost groups, or single ops picked with Alt), in the order picked. */
 let selected: string[] = [];
 let hovered: string | null = null;
+/** The op under the pointer and its groups, innermost first, for chart tooltips. */
+let hoverPath: readonly string[] = [];
+const tooltip = document.createElement("div");
+tooltip.className = "tooltip";
+tooltip.hidden = true;
+stage.append(tooltip);
+const showTooltip = (screen: { x: number; y: number }): void => {
+  const text = hoverPath.length > 0 && !tools.drawing ? datumAt(scene, hoverPath, router.toWorld(screen)) : null;
+  tooltip.hidden = text === null;
+  if (text === null) return;
+  tooltip.textContent = text;
+  tooltip.style.left = `${screen.x + 14}px`;
+  tooltip.style.top = `${screen.y + 14}px`;
+};
 /** While dragging objects: what moves, their snap anchors where the drag began, and how far they've moved. */
 let drag: { ids: string[]; anchors: { x: number; y: number }[]; moved: { x: number; y: number } } | null = null;
 /** The snap target shown while dragging. */
@@ -131,6 +177,7 @@ const followMove = (moved: string, dx: number, dy: number): void => {
   }
 };
 
+let stepped = false;
 const render = (): void => {
   const dpr = window.devicePixelRatio || 1;
   const { width, height } = stage.getBoundingClientRect();
@@ -145,10 +192,18 @@ const render = (): void => {
   const key = `${canvas.width}x${canvas.height} ${Object.values(device).join(",")}`;
   if (key !== viewKey) {
     renderer.setView(device, canvas.width, canvas.height);
+    embeds.setView(view);
+    a11y.setView(view);
     viewKey = key;
   }
   const start = performance.now();
-  const stats = renderer.render();
+  // While devtools steps through the ops, it draws the board itself; the renderer starts over afterwards.
+  if (devtools.drawBoard(canvas.getContext("2d")!, device)) stepped = true;
+  else if (stepped) {
+    stepped = false;
+    renderer.invalidate();
+  }
+  const stats = stepped ? ({ mode: "idle", ops: 0, rects: [] } as const) : renderer.render();
   if (stats.mode !== "idle") {
     const ms = performance.now() - start;
     renderStats.textContent = `${stats.mode} redraw: ${stats.ops} of ${scene.document.ops.length} ops in ${ms.toFixed(1)} ms${stats.rects.length > 0 ? `, ${stats.rects.length} rect${stats.rects.length > 1 ? "s" : ""}` : ""}`;
@@ -192,6 +247,8 @@ const render = (): void => {
     ctx.lineWidth = dpr;
     ctx.stroke();
   }
+  devtools.preview(octx, device, dpr);
+  tools.preview(octx, device, dpr);
   if (snapMark) {
     const q = applyToPoint(device, snapMark.x, snapMark.y);
     const r = 6 * dpr;
@@ -216,6 +273,7 @@ const showSelection = (): void => {
       : selected.length === 1
         ? describe(selected[0]!)
         : `${selected.length} objects\n${selected.join(", ")}`;
+  if (selected.length === 1) devtools.show(selected[0]!);
 };
 
 const select = (ids: string[]): void => {
@@ -274,6 +332,9 @@ const dragTo = (total: { x: number; y: number }, snap: boolean): void => {
 
 const wire = (): void => {
   router = new EventRouter(scene, { view, tolerance: 3 });
+  devtools.attach(scene);
+  embeds.setScene(scene);
+  a11y.setScene(scene);
   makeRenderer();
   if (components) components.bind(scene, router);
   else {
@@ -286,12 +347,16 @@ const wire = (): void => {
     });
   }
   router.on("*", "enter", (e) => {
+    hoverPath = e.path;
+    // Over an embed, the pointer goes to its element (a form, a WebGL view); with Alt held, the board keeps it, to drag the embed.
+    if (e.op?.kind === "embed" && !drag && !tools.drawing && !("altKey" in e.input && e.input.altKey)) embeds.passThrough(e.op.id);
     hovered = objectOf(e);
     render();
   });
   router.on("*", "leave", () => {
     // An enter for whatever is under the pointer now follows, if anything is.
     hovered = null;
+    hoverPath = [];
     render();
   });
   router.on("*", "click", (e) => {
@@ -378,11 +443,23 @@ const pointer = (e: PointerEvent) => ({ ...point(e), button: e.button, altKey: e
 
 canvas.addEventListener("pointerdown", (e) => {
   canvas.setPointerCapture(e.pointerId);
+  // A drawing tool takes the press; the select tool hands it to the router.
+  if (tools.down(point(e), e.shiftKey)) return;
   router.pointerDown(pointer(e));
 });
-canvas.addEventListener("pointermove", (e) => router.pointerMove(pointer(e)));
-canvas.addEventListener("pointerup", (e) => router.pointerUp(pointer(e)));
-canvas.addEventListener("pointerleave", (e) => router.pointerLeave(pointer(e)));
+canvas.addEventListener("pointermove", (e) => {
+  if (tools.drawing) tools.move(point(e), e.shiftKey);
+  else router.pointerMove(pointer(e));
+  showTooltip(point(e));
+});
+canvas.addEventListener("pointerup", (e) => {
+  if (tools.drawing) tools.up();
+  else router.pointerUp(pointer(e));
+});
+canvas.addEventListener("pointerleave", (e) => {
+  router.pointerLeave(pointer(e));
+  tooltip.hidden = true;
+});
 canvas.addEventListener(
   "wheel",
   (e) => {
@@ -393,11 +470,73 @@ canvas.addEventListener(
   },
   { passive: false },
 );
+const TOOL_KEYS: Record<string, ToolName> = { v: "select", p: "pen", r: "rect", o: "ellipse", t: "text" };
+const useTool = (name: ToolName): void => {
+  tools.cancel();
+  tools.current = name;
+  document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach((b) => b.classList.toggle("active", b.dataset["tool"] === name));
+  canvas.style.cursor = name === "select" ? "" : name === "text" ? "text" : "crosshair";
+  render();
+};
+document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach((b) => b.addEventListener("click", () => useTool(b.dataset["tool"] as ToolName)));
+const styleInput = (id: string, set: (value: string) => void): void => {
+  const input = document.getElementById(id) as HTMLInputElement;
+  input.addEventListener("input", () => set(input.value));
+};
+styleInput("tool-fill", (v) => (tools.style.fill = v));
+styleInput("tool-stroke", (v) => (tools.style.stroke = v));
+styleInput("tool-width", (v) => (tools.style.lineWidth = Number(v)));
 window.addEventListener("keydown", (e) => {
-  if (e.target instanceof HTMLTextAreaElement) return;
+  if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+  const tool = TOOL_KEYS[e.key.toLowerCase()];
+  if (tool && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    useTool(tool);
+    return;
+  }
+  if (e.key === "Escape" && tools.current !== "select") {
+    useTool("select");
+    return;
+  }
   router.keyDown({ key: e.key, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey });
 });
 new ResizeObserver(render).observe(stage);
+
+const tools = new Tools({
+  scene: () => scene,
+  toWorld: (screen) => router.toWorld(screen),
+  pixel: () => 1 / Math.hypot(view.a, view.b),
+  snap: (world) => {
+    const kinds = snapKinds();
+    if (!snapOn.checked || kinds.length === 0) return null;
+    const found = scene.snap(world, { radius: Number(snapRadius.value) / Math.hypot(view.a, view.b), kinds });
+    return found ? { point: found.point, kind: found.kind } : null;
+  },
+  commit: (id, draw) => {
+    const recorder = new RecordingContext(recorderOptions);
+    recorder.beginGroup({ id, meta: { source: "drawn" } });
+    draw(recorder);
+    recorder.endGroup();
+    const drawn = recorder.getSources();
+    const doc = recorder.getDocument();
+    scene.replaceGroup(id, doc).forEach((opId, i) => {
+      const source = drawn.get(doc.ops[i]!.id);
+      if (source !== undefined) sources.set(opId, source);
+    });
+    select([id]);
+  },
+  recorder: recorderOptions,
+  stage,
+  redraw: () => render(),
+  log: (line) => log(line),
+});
+
+const devtools = new Devtools({
+  scene: () => scene,
+  sources,
+  select: (id) => select([id]),
+  redraw: () => render(),
+  images: (src) => images.get(src),
+});
 
 /** Texts that flow around shapes: the ones the controls change. */
 const wrapped = (): LiveText[] => liveTexts.filter((l) => (l.settings.obstacles?.length ?? 0) > 0);
@@ -420,6 +559,7 @@ const hooks: ControlHooks = {
 /** Draws more onto the board: the current document is replayed into a new recorder, then the sample is drawn after it. */
 const add = async (sample: Sample): Promise<void> => {
   const recorder = new RecordingContext(recorderOptions);
+  const before = scene.document.ops;
   replayDocument(recorder, scene.document, { images: (src) => images.get(src) });
   if ("svg" in sample) {
     recorder.beginGroup({ meta: { source: sample.name } });
@@ -435,7 +575,18 @@ const add = async (sample: Sample): Promise<void> => {
     recorder.endGroup();
   }
   const drawn = "svg" in sample ? undefined : sample.draw(recorder, hooks);
-  scene = new Scene(recorder.getDocument());
+  // Replayed ops keep the source of the op they copy; new ones get the recorder's.
+  const document = recorder.getDocument();
+  const recorded = recorder.getSources();
+  const kept = new Map<string, string>();
+  document.ops.forEach((op, i) => {
+    const old = i < before.length && before.length <= document.ops.length ? before[i] : undefined;
+    const source = old ? sources.get(old.id) : recorded.get(op.id);
+    if (source !== undefined) kept.set(op.id, source);
+  });
+  sources.clear();
+  for (const [id, source] of kept) sources.set(id, source);
+  scene = new Scene(document);
   wire();
   // Texts and components already on the board were replayed with it; bind them to the new scene.
   liveTexts = liveTexts.map((l) => new LiveText(scene, l.settings));
@@ -447,7 +598,18 @@ const add = async (sample: Sample): Promise<void> => {
   for (const spec of drawn?.components ?? []) components!.mount(spec);
   log(`added ${sample.name}; the board has ${scene.document.ops.length} ops`);
   render();
+  // Bring what was added into sight, unless it is too big to (the 10,000 shapes).
+  let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+  for (const op of scene.document.ops.slice(before.length)) {
+    const b = scene.bounds(op.id);
+    if (!b) continue;
+    box = box
+      ? { minX: Math.min(box.minX, b.x), minY: Math.min(box.minY, b.y), maxX: Math.max(box.maxX, b.x + b.width), maxY: Math.max(box.maxY, b.y + b.height) }
+      : { minX: b.x, minY: b.y, maxX: b.x + b.width, maxY: b.y + b.height };
+  }
+  if (box && box.maxX - box.minX < 1500 && !initial) reveal({ x: box.minX, y: box.minY, width: box.maxX - box.minX, height: box.maxY - box.minY });
 };
+let initial = true;
 
 const download = (name: string, type: string, text: string): void => {
   const a = document.createElement("a");
@@ -500,9 +662,49 @@ document.getElementById("vectorize")!.addEventListener("click", () => {
 });
 document.getElementById("export-json")!.addEventListener("click", () => download("board.json", "application/json", serializeDocument(scene.document)));
 document.getElementById("reset-view")!.addEventListener("click", () => setView(IDENTITY));
+
+/** Pans so a world rect is in sight, keeping the zoom, when it isn't already. */
+const reveal = (b: { x: number; y: number; width: number; height: number }): void => {
+  const { width, height } = stage.getBoundingClientRect();
+  const p = applyToPoint(view, b.x, b.y);
+  const q = applyToPoint(view, b.x + b.width, b.y + b.height);
+  if (p.x >= 0 && p.y >= 0 && q.x <= width && q.y <= height) return;
+  setView({ ...view, e: view.e + width / 2 - (p.x + q.x) / 2, f: view.f + height / 2 - (p.y + q.y) / 2 });
+};
+
+// The morph demo: day and night drawn apart, blended by the slider.
+const morphSlider = document.getElementById("morph-t") as HTMLInputElement;
+const morphTo = (t: number): void => {
+  const fresh = scene.getGroup(MORPH_ID) === undefined;
+  scene.replaceGroup(MORPH_ID, dayToNight().at(t));
+  if (fresh) {
+    const m = dayToNight();
+    log(`morph demo: ${m.paired} ops paired by their groups' names, ${m.removed} fading out, ${m.added} fading in`);
+    reveal(scene.bounds(MORPH_ID)!);
+  }
+  render();
+};
+morphSlider.addEventListener("input", () => morphTo(Number(morphSlider.value)));
+let playing = 0;
+document.getElementById("morph-play")!.addEventListener("click", () => {
+  const start = performance.now();
+  const from = Number(morphSlider.value) < 0.5 ? 0 : 1;
+  const run = ++playing;
+  const frame = (now: number): void => {
+    if (run !== playing) return;
+    const k = Math.min(1, (now - start) / 1600);
+    const eased = k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
+    const t = from === 0 ? eased : 1 - eased;
+    morphSlider.value = String(t);
+    morphTo(t);
+    if (k < 1) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+});
 lodOn.addEventListener("change", () => {
   makeRenderer();
   render();
 });
 
 for (const sample of initialSamples) await add(sample);
+initial = false;

@@ -312,7 +312,7 @@ export class Scene {
 
   /**
    * Ops whose painted area contains the point, topmost first. A `clearRect`
-   * covering the point hides everything drawn before it. Invisible ops are
+   * or an embed covering the point hides everything drawn before it. Invisible ops are
    * skipped, unless they are in a group whose meta has `hitArea: true`: a
    * transparent shape there is a deliberate target, such as a slider's grip.
    */
@@ -327,6 +327,11 @@ export class Scene {
       if (entry.op.kind === "clear") {
         if (shapeContains(shape, point, 0)) break;
         continue;
+      }
+      // An embed's element covers what was drawn before it.
+      if (entry.op.kind === "embed" && shapeContains(shape, point, 0)) {
+        hits.push({ id: entry.op.id, op: entry.op, groups: this.groupChain(entry.op.id) });
+        break;
       }
       if (!options.includeInvisible && opIsInvisible(entry.op) && !this.flagged(entry.op.id, "hitArea", true)) continue;
       if (shapeContains(shape, point, tolerance)) hits.push({ id: entry.op.id, op: entry.op, groups: this.groupChain(entry.op.id) });

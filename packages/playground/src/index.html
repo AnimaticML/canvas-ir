@@ -106,6 +106,121 @@
       #stage #overlay {
         pointer-events: none;
       }
+      .tools {
+        display: inline-flex;
+        gap: 4px;
+        align-items: center;
+        margin-right: 8px;
+      }
+      .tools button.active {
+        background: var(--accent);
+        color: white;
+      }
+      .tools input[type="range"] {
+        width: 70px;
+      }
+      .tooltip {
+        position: absolute;
+        pointer-events: none;
+        background: #111827;
+        color: white;
+        font: 12px system-ui, sans-serif;
+        padding: 4px 8px;
+        border-radius: 4px;
+        white-space: pre;
+        z-index: 3;
+      }
+      .tooltip[hidden] {
+        display: none;
+      }
+      .text-editor {
+        position: absolute;
+        font: 18px system-ui, sans-serif;
+        min-width: 160px;
+        min-height: 28px;
+        border: 1px dashed var(--accent);
+        background: transparent;
+        resize: none;
+        outline: none;
+        z-index: 2;
+      }
+      .canvas-ir-a11y :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+        border-radius: 4px;
+      }
+      #a11y-tree {
+        max-height: 200px;
+        overflow: auto;
+        font-size: 11px;
+      }
+      #devtools summary {
+        cursor: pointer;
+      }
+      #devtools summary h2 {
+        display: inline;
+      }
+      #op-filter {
+        width: 100%;
+        margin: 8px 0 4px;
+      }
+      #devtools .step {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      #devtools .step input {
+        flex: 1;
+      }
+      #op-list {
+        max-height: 260px;
+        overflow: auto;
+        font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        margin: 6px 0;
+      }
+      .op-row {
+        display: grid;
+        grid-template-columns: 3.5em 4.5em minmax(0, 1fr) minmax(0, 1.3fr);
+        gap: 6px;
+        padding: 2px 6px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .op-row span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .op-row:hover {
+        background: var(--border);
+      }
+      .op-row.on {
+        background: var(--accent);
+        color: white;
+      }
+      .op-row.dim {
+        opacity: 0.4;
+      }
+      .op-row .n,
+      .op-row .src {
+        color: var(--muted);
+      }
+      .op-row.on .n,
+      .op-row.on .src {
+        color: inherit;
+      }
+      .op-more {
+        padding: 4px 6px;
+        color: var(--muted);
+      }
+      #op-detail {
+        max-height: 240px;
+        overflow: auto;
+        font-size: 11px;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
       aside {
         display: flex;
         flex-direction: column;
@@ -166,6 +281,16 @@
   <body>
     <header>
       <h1>CanvasIR Playground</h1>
+      <span class="tools">
+        <button data-tool="select" class="active" title="Select (V)">Select</button>
+        <button data-tool="pen" title="Pen (P)">Pen</button>
+        <button data-tool="rect" title="Rectangle (R)">Rectangle</button>
+        <button data-tool="ellipse" title="Ellipse (O)">Ellipse</button>
+        <button data-tool="text" title="Text (T)">Text</button>
+        <input type="color" id="tool-fill" value="#fde68a" title="Fill" />
+        <input type="color" id="tool-stroke" value="#1f2937" title="Stroke and text" />
+        <input type="range" id="tool-width" min="1" max="16" value="3" title="Line width" />
+      </span>
       <span id="samples"></span>
       <span class="spacer"></span>
       <button id="vectorize">Vectorize image</button>
@@ -200,6 +325,29 @@
             <label><input type="checkbox" id="lod-on" checked /> Simplify what is too small to see</label>
           </div>
           <p class="hint">Only what changed is redrawn. While you drag, what lies below and above is cached as two layers. Add 10,000 shapes and zoom out to try it on a big board; small text turns into gray bars and specks are skipped unless you turn simplifying off.</p>
+        </section>
+        <section>
+          <h2>Accessibility</h2>
+          <pre id="a11y-tree"></pre>
+          <p class="hint">Groups name their role and label in their meta; text is read as drawn. The tree is mirrored as DOM over the board for screen readers, so Tab reaches the knob, slider and Reset button, arrows turn them, and Enter presses.</p>
+        </section>
+        <section>
+          <h2>Morph</h2>
+          <div class="controls">
+            <label>Day <input type="range" id="morph-t" min="0" max="1" step="0.001" value="0" /> Night</label>
+            <button id="morph-play">Play</button>
+          </div>
+          <p class="hint">Two drawings recorded apart, paired part by part through their group names. Shapes become cubics with matching counts, transforms turn rather than squash, colors blend in OKLab, and parts with no partner (the cloud, the star) fade.</p>
+        </section>
+        <section>
+          <details id="devtools">
+            <summary><h2>Devtools</h2></summary>
+            <input type="search" id="op-filter" placeholder="Filter by kind, id, group or source" />
+            <label class="step">Step <input type="range" id="op-step" min="0" max="0" value="0" /></label>
+            <div id="op-step-label" class="hint"></div>
+            <div id="op-list"></div>
+            <pre id="op-detail"></pre>
+          </details>
         </section>
         <section>
           <h2>Add an SVG</h2>
