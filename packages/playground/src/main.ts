@@ -33,6 +33,7 @@ import { datumAt } from "./charts";
 import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
 import { MORPH_ID, dayToNight, morphControls } from "./morph-demo";
+import { PELICAN_ID, POSES_PER_TURN, Ride, rideButton } from "./pelican";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 
@@ -690,6 +691,49 @@ morphButton.addEventListener("click", () => {
   reveal({ ...b, height: b.height + 70 });
 });
 samplesBar.insertBefore(morphButton, samplesBar.lastElementChild);
+
+// The pelican on its bicycle: poses drawn an eighth of a pedal turn apart, morphed into every frame between.
+const PELICAN_AT = { x: 640, y: 990 };
+const ride = new Ride(PELICAN_AT);
+let position = 0;
+let riding = 0;
+const rideTo = (p: number): void => {
+  position = p;
+  scene.replaceGroup(PELICAN_ID, ride.frame(p));
+  render();
+};
+const stopRiding = (): void => {
+  riding++;
+  components?.get<{ riding: boolean }>("pelican-ride")?.setState({ riding: false });
+};
+const startRiding = (): void => {
+  const run = ++riding;
+  components?.get<{ riding: boolean }>("pelican-ride")?.setState({ riding: true });
+  let last = performance.now();
+  const frame = (now: number): void => {
+    // Stop when this run was stopped or the pelican was deleted.
+    if (run !== riding || scene.getGroup(PELICAN_ID) === undefined) return;
+    // A pedal turn every 1.1 s.
+    rideTo(position + ((now - last) / 1100) * POSES_PER_TURN);
+    last = now;
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+};
+const pelicanButton = document.createElement("button");
+pelicanButton.textContent = "+ Pelican";
+pelicanButton.addEventListener("click", () => {
+  if (scene.getGroup(PELICAN_ID) === undefined) rideTo(0);
+  if (!components!.get("pelican-ride")) {
+    components!.mount(rideButton(PELICAN_AT, () => (components?.get<{ riding: boolean }>("pelican-ride")?.state.riding ? stopRiding() : startRiding())));
+  }
+  const b = scene.bounds(PELICAN_ID)!;
+  reveal({ ...b, height: b.height + 50 });
+  startRiding();
+  const stats = ride.stats;
+  if (stats) log(`pelican: each frame morphs ${stats.paired} ops between two drawn poses`);
+});
+samplesBar.insertBefore(pelicanButton, samplesBar.firstElementChild);
 lodOn.addEventListener("change", () => {
   makeRenderer();
   render();
