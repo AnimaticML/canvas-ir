@@ -52,6 +52,11 @@ What the library needs for that is incremental updates by group, not an undo sta
   - Everything outside the area stays as it was.
   - Composite operations that affect pixels outside the op (`copy`, `destination-in` and similar) force a full redraw.
 - **Layers while dragging:** cache what's below the dragged object and what's above it as two bitmaps. Each frame then draws three things: the lower bitmap, the moving object, and the upper bitmap.
+- **Spatial index for unbounded boards:** the current index is one uniform grid of 128-unit cells, with ops spanning more than 64 cells kept on a list every query checks. It is cheap to update, which matters most when many objects move at once. It degrades in two cases. When a board zoomed to 1% has thousands of large objects, they all land on that list. When a board zoomed to 400% packs thousands of tiny objects into one cell, a query scans them all. Its coordinates are also bounded.
+  - Replace it with a hierarchical grid: several levels with cell sizes a power of 4 apart, and each op stored at the level where it covers at most four cells. Updates stay constant time, any size of object finds its level, and cell keys are hashed, so the world has no edge.
+  - Use the group tree on top of it. A group's bounds are the union of its children's, so a query that misses a group skips everything inside it, and moving a group updates only its own box and its ancestors'. Top-level objects (groups or loose ops) go in the grid, and queries descend into groups.
+  - Drawing order needs no structure: candidates are few and are sorted by their index in the document.
+  - **Gate:** the benchmark adds boards spanning a 1% to 400% zoom range, with clusters of tiny objects and fields of huge ones, and a step that moves 1,000 objects at once.
 - **Level of detail:** text whose font is under a few device pixels is drawn as gray bars per line ("greeking") or skipped. Ops smaller than half a device pixel are skipped. Large images are drawn from downscaled copies at low zoom.
 - **Gate:** a benchmark of a drag on a 10,000-op board stays under a 16 ms frame at the 99th percentile. A pixel check confirms that partial redraws match a full redraw.
 
@@ -68,9 +73,11 @@ What the library needs for that is incremental updates by group, not an undo sta
   - **Colors:** interpolated in a perceptual space.
   - **Paths:** lowered to cubic Béziers, resampled to the same segment count, given aligned starting points, and interpolated point by point.
   - **Unmatched ops:** fade in or out.
-- **Accessibility mirror (optional, measured before adopting):**
-  - A visually hidden DOM tree with groups as regions and text ops as text, so screen readers and find-in-page work. It's laid out but never painted visibly.
-  - It mirrors only what's near the viewport, through the spatial index, and is rebuilt after pans and zooms settle, so its cost tracks what's on screen, not the board's size.
-  - If it costs too much, it stays an opt-in for documents that need it.
+- **Embedded HTML and 3D elements with correct overlap:** an `embed` op marks where a DOM element (a video player, an iframe, a WebGL canvas) sits in drawing order, with its shape, transform and clip.
+  - The elements sit in the page beneath the one board canvas, positioned with the CSS transform of the op's matrix times the view.
+  - Replaying an `embed` op cuts a hole in what was drawn below it (a `destination-out` fill of its shape), and everything drawn after it paints over the element normally. The element then appears in its place in drawing order, under shapes and shadows drawn above it, with no second canvas.
+  - Pointer events go to the canvas. When the router finds an `embed` op topmost under the pointer, the canvas lets events through (`pointer-events: none`) until the pointer leaves it.
+  - Limits: the hole's edge is anti-aliased like any fill, and where the element is itself transparent the page shows through instead of the canvas content below it.
+- **Accessibility tree (optional):** a visually hidden, structured DOM tree for screen readers: groups become regions or list items named from their meta, and text blocks become their paragraphs, headings and lists in reading order. It isn't positioned or zoomed. It changes only when the document does.
 
 Not planned: WebGL or PDF backends, pixel access (`getImageData` and friends), and paints made by another context.
