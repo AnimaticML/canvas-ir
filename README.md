@@ -126,7 +126,7 @@ renderer.drop();
 - `lift(ids)` caches everything below and above the lifted ops as two layers, so a drag frame draws a bitmap, the lifted ops and another bitmap, in the damaged area only. Layers aren't used when something above isn't composited `source-over`.
 - A pan by whole pixels moves the canvas's pixels and redraws the uncovered strips. Any other view change redraws everything.
 - `copy`, `destination-in` and the other composite operations that clear outside their shape, and filters it can't bound, make a change redraw everything.
-- `lod: {}` simplifies what is too small to see: text under 3 device pixels becomes a bar, ops under half a pixel are skipped, and images shown at under half size are drawn from halved copies.
+- What is too small to see is simplified by default: text under 3 device pixels becomes a bar, ops under half a pixel are skipped, and images shown at under half size are drawn from halved copies. `lod: false` draws everything as a full replay does; `lod: { textBelow, skipBelow, images }` tunes it.
 
 The scene's index is a hierarchical grid: each op sits at the level where its box covers at most 2 x 2 cells, so specks and huge shapes alike are found quickly at any zoom, and moving one is constant time. Groups keep their ops indexed, so moving or removing a group touches only its own ops.
 

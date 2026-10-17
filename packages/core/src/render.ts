@@ -25,8 +25,8 @@ export interface RendererOptions {
   readonly images?: (src: string) => unknown;
   /** A CSS color painted under everything. Default none: the canvas stays transparent where nothing is drawn. */
   readonly background?: string;
-  /** Simplify what is too small to see. Off unless given. */
-  readonly lod?: LevelOfDetail;
+  /** Simplify what is too small to see. On by default; `false` draws everything exactly as a full replay does. */
+  readonly lod?: LevelOfDetail | false;
   /** Makes an offscreen surface, for layers and downscaled images. Default an `OffscreenCanvas` where there is one. */
   readonly createSurface?: (width: number, height: number) => Surface | null;
   /** When the changed area is more than this share of the canvas, everything is redrawn instead. Default 0.5. */
@@ -229,6 +229,7 @@ export class Renderer {
   private scratchSurface: Surface | null = null;
   private scratchSize = "";
   private readonly makeSurface: (width: number, height: number) => Surface | null;
+  private readonly lod: LevelOfDetail | null;
   private readonly unlisten: () => void;
 
   constructor(
@@ -237,6 +238,7 @@ export class Renderer {
     private readonly options: RendererOptions = {},
   ) {
     this.makeSurface = options.createSurface ?? surfaceLike(target);
+    this.lod = options.lod === false ? null : (options.lod ?? {});
     for (const op of scene.document.ops) this.classify(op);
     this.unlisten = scene.onChange((change) => this.changed(change));
   }
@@ -495,7 +497,7 @@ export class Renderer {
   }
 
   private replay(target: ReplayTarget, op: Op): void {
-    const lod = this.options.lod;
+    const lod = this.lod;
     const images = this.options.images;
     const opts = { view: this.view, ...(images ? { images } : {}) };
     if (lod && op.kind === "text" && (lod.textBelow ?? 3) > 0) {
@@ -553,8 +555,9 @@ export class Renderer {
   }
 
   private tooSmall(op: Op, box: Box): boolean {
-    const below = this.options.lod?.skipBelow ?? 0.5;
-    if (!this.options.lod || below <= 0 || op.kind === "clear") return false;
+    if (!this.lod || op.kind === "clear") return false;
+    const below = this.lod.skipBelow ?? 0.5;
+    if (below <= 0) return false;
     // The box has the bleed added on each side.
     return box.maxX - box.minX - 2 * BLEED < below && box.maxY - box.minY - 2 * BLEED < below;
   }

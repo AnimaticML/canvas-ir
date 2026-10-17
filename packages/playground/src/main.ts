@@ -73,7 +73,7 @@ let renderer = new Renderer(scene, ctx);
 let viewKey = "";
 const makeRenderer = (): void => {
   renderer.dispose();
-  renderer = new Renderer(scene, ctx, { images: (src) => images.get(src), ...(lodOn.checked ? { lod: {} } : {}) });
+  renderer = new Renderer(scene, ctx, { images: (src) => images.get(src), ...(lodOn.checked ? {} : { lod: false }) });
   viewKey = "";
 };
 /** Interactive objects (the note, the controls), drawn from their state. */

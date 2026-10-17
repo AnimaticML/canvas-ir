@@ -186,13 +186,13 @@ describe("renderer", () => {
     ctx.fillRect(120, 50, 20, 20);
     const scene = new Scene(ctx.getDocument());
     const out = target();
-    const renderer = new Renderer(scene, out, { lod: {} });
+    const renderer = new Renderer(scene, out);
     // At 20%, the text is 2 px tall.
     renderer.setView({ a: 0.2, b: 0, c: 0, d: 0.2, e: 0, f: 0 }, 200, 100);
     renderer.render();
     expect(painted(out).map((op) => op.kind)).toEqual(["fill", "fill"]);
     const plain = target();
-    const exact = new Renderer(scene, plain);
+    const exact = new Renderer(scene, plain, { lod: false });
     exact.setView({ a: 0.2, b: 0, c: 0, d: 0.2, e: 0, f: 0 }, 200, 100);
     exact.render();
     expect(painted(plain).map((op) => op.kind)).toEqual(["text", "fill", "fill"]);

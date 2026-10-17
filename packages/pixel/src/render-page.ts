@@ -199,7 +199,7 @@ const checkPartial = async (): Promise<RenderCheck> => {
   seed = 11;
   const scene = new Scene((await fixtureBoard()).getDocument());
   const { ours, full } = canvasPair();
-  const renderer = new Renderer(scene, ours, { images: (src) => imagesById.get(src), background: BACKGROUND });
+  const renderer = new Renderer(scene, ours, { images: (src) => imagesById.get(src), background: BACKGROUND, lod: false });
   renderer.setView(VIEW, CANVAS.width, CANVAS.height);
   const modes: Record<string, number> = {};
   let mismatched = 0;
@@ -247,7 +247,7 @@ const checkLayers = async (): Promise<RenderCheck> => {
   seed = 23;
   const scene = new Scene((await fixtureBoard()).getDocument());
   const { ours, full } = canvasPair();
-  const renderer = new Renderer(scene, ours, { images: (src) => imagesById.get(src), background: BACKGROUND });
+  const renderer = new Renderer(scene, ours, { images: (src) => imagesById.get(src), background: BACKGROUND, lod: false });
   renderer.setView(VIEW, CANVAS.width, CANVAS.height);
   renderer.render();
   const modes: Record<string, number> = {};
@@ -359,7 +359,7 @@ const percentile = (values: number[], p: number): number => {
       }
       const canvas = new OffscreenCanvas(size.width, size.height);
       const ctx = canvas.getContext("2d")!;
-      const renderer = new Renderer(scene, ctx, { background: BACKGROUND });
+      const renderer = new Renderer(scene, ctx, { background: BACKGROUND, lod: false });
       renderer.setView(view, size.width, size.height);
       renderer.render();
       if (mode === "layers") {
