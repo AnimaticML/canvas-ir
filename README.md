@@ -2,7 +2,7 @@
 
 CanvasIR is a stand-in for `CanvasRenderingContext2D` that records drawing instead of painting it. Code that draws to a canvas (an SVG-to-canvas renderer, a chart library, your own shapes, a text layout) can draw into it unchanged. The result is a typed, JSON-safe document that geometry queries, transforms, rendering and interaction can all work from, without a browser.
 
-Design: [docs/design.md](docs/design.md).
+Design: [docs/design.md](docs/design.md). What comes next: [docs/roadmap.md](docs/roadmap.md).
 
 ## Status
 
