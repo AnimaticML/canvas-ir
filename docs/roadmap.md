@@ -98,4 +98,10 @@ What the library needs for that is incremental updates by group, not an undo sta
 - **Playground:** a physics sandbox (crates, balls and stars falling over a ramp, pegs and a curved bowl, dragged on a mouse joint, with a Drop button drawn on the board) and a d3-force graph of 108 nodes drawn once and moved, with only the edges redrawn per tick (about 4 ms a tick placed and drawn).
 - **Pelican Ride (`dist/game.html`):** the pelican's drawing split into parts (rider, wheels, wing). The bicycle is a planck frame on two sprung wheel joints, the rear one driven; the rider is a clip of eight poses per crank turn, its time read off the rear wheel's turn, so the feet stay on the pedals at any speed; the wing is a clip of grip, up and down, unfolding, flapping and folding back. Flapping lifts and levels the bike while stamina lasts; fish over the lakes refill it. The camera moves in whole device pixels, so the renderer scrolls what it drew and redraws strips.
 
+## Batch 12: regions and palettes (done)
+
+- **Regions:** `labelRegions` (4- or 8-connected, deterministic ids, bounds, neighbours with shared border lengths) and `traceRegion`, tracing within the region's bounds; `traceMask` takes `bounds` to visit only a box.
+- **Shared borders:** `traceBorders` splits the boundaries at junctions, simplifies or fits each border once and hands it to both sides, so regions tile. Junctions and frame points stay put; borders that would cross or flip the turning order at a junction fall back to exact. Below 0.5 pixels of tolerance every pixel's center stays in its region.
+- **Vectorize:** a fixed `palette` with stable ids, nearest by OKLab; `colors` and `indices`, the index map the fills trace; `layout: "regions"`, one fill per area from shared borders, with `minArea` merging specks into their longest-bordered neighbour.
+
 Not planned: WebGL or PDF backends, pixel access (`getImageData` and friends), and paints made by another context.

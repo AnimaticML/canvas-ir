@@ -1,4 +1,4 @@
-import { formatColor, parseColor } from "./color";
+import { formatColor, parseColor, srgbToOklab } from "./color";
 import { arcSweep, ellipseFrame } from "./geometry/flatten";
 import { IDENTITY, applyToPoint, invert, multiply } from "./math";
 import type {
@@ -121,10 +121,6 @@ const lerpMatrix = (m: Matrix2D, n: Matrix2D, t: number): Matrix2D => {
 
 type Lab = readonly [number, number, number, number];
 
-const toLinear = (c: number): number => {
-  const v = c / 255;
-  return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-};
 const fromLinear = (v: number): number => {
   const c = v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055;
   return Math.max(0, Math.min(255, Math.round(c * 255)));
@@ -134,18 +130,7 @@ const fromLinear = (v: number): number => {
 const toOklab = (color: string): Lab | null => {
   const rgba = parseColor(color);
   if (!rgba) return null;
-  const r = toLinear(rgba.r);
-  const g = toLinear(rgba.g);
-  const b = toLinear(rgba.b);
-  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
-  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
-  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-  return [
-    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
-    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
-    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
-    rgba.a,
-  ];
+  return [...srgbToOklab(rgba.r, rgba.g, rgba.b), rgba.a];
 };
 
 const fromOklab = ([L, A, B, alpha]: Lab): string => {

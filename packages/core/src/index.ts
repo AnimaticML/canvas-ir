@@ -124,3 +124,19 @@ export {
   motionAt,
   pose,
 } from "./timeline";
+export { parseColor, srgbToOklab } from "./color";
+export { type PixelBox, type TraceMaskOptions } from "./geometry/trace";
+export {
+  type Border,
+  type BorderOptions,
+  type BorderUse,
+  type LabelOptions,
+  type Region,
+  type RegionMap,
+  type RegionOutlines,
+  labelRegions,
+  regionRings,
+  traceBorders,
+  traceRegion,
+  traceRegionPath,
+} from "./geometry/regions";

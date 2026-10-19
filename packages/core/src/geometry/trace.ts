@@ -16,24 +16,49 @@ export interface TraceOptions {
   readonly minArea?: number;
 }
 
+/** A rectangle of whole pixels. */
+export interface PixelBox {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface TraceMaskOptions {
+  /**
+   * Only pixels in this box are visited, and pixels outside it count as
+   * outside: what tracing one region within its bounding box needs, without
+   * scanning the image. The rings stay in the image's pixel space.
+   */
+  readonly bounds?: PixelBox;
+}
+
 /**
  * Traces the edges of a set of pixels (`inside(x, y)`) into closed rings in
  * pixel space, along pixel boundaries: the nonzero fill of the rings is exactly
  * the set. Outer edges run clockwise on screen and holes counterclockwise.
  */
-export const traceMask = (width: number, height: number, inside: (x: number, y: number) => boolean): Point[][] => {
-  const W = width + 1;
+export const traceMask = (width: number, height: number, inside: (x: number, y: number) => boolean, options: TraceMaskOptions = {}): Point[][] => {
+  const b = options.bounds;
+  const x0 = Math.max(0, b?.x ?? 0);
+  const y0 = Math.max(0, b?.y ?? 0);
+  const x1 = Math.min(width, b ? b.x + b.width : width);
+  const y1 = Math.min(height, b ? b.y + b.height : height);
+  if (x1 <= x0 || y1 <= y0) return [];
+  // Vertices are keyed within the box, so a small region's keys stay small.
+  const W = x1 - x0 + 1;
+  const key = (x: number, y: number): number => (y - y0) * W + (x - x0);
   // Directed boundary edges, keyed by start vertex; a vertex where two regions touch corners has two.
   const out = new Map<number, number[]>();
-  const add = (x0: number, y0: number, x1: number, y1: number): void => {
-    const from = y0 * W + x0;
+  const add = (ax: number, ay: number, bx: number, by: number): void => {
+    const from = key(ax, ay);
     const list = out.get(from);
-    if (list) list.push(y1 * W + x1);
-    else out.set(from, [y1 * W + x1]);
+    if (list) list.push(key(bx, by));
+    else out.set(from, [key(bx, by)]);
   };
-  const at = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < width && y < height && inside(x, y);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
+  const at = (x: number, y: number): boolean => x >= x0 && y >= y0 && x < x1 && y < y1 && inside(x, y);
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
       if (!inside(x, y)) continue;
       if (!at(x, y - 1)) add(x, y, x + 1, y);
       if (!at(x + 1, y)) add(x + 1, y, x + 1, y + 1);
@@ -49,7 +74,7 @@ export const traceMask = (width: number, height: number, inside: (x: number, y: 
       const ring: Point[] = [];
       let v = start;
       do {
-        ring.push({ x: v % W, y: Math.floor(v / W) });
+        ring.push({ x: (v % W) + x0, y: Math.floor(v / W) + y0 });
         const next = out.get(v)!;
         v = next.pop()!;
       } while (v !== start);

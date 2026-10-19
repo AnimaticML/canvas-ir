@@ -22,6 +22,7 @@ All five phases: recording, the IR, serialization and replay; geometry queries; 
 | Live transforms, a Flash-style timeline (clips, motion tweens, labels, frame scripts), 2D physics with planck.js | |
 | Rich text layout: paragraphs, headings, lists, mixed fonts, decorations, links, any-shaped containers, obstacles, bidi, caret and selection | |
 | Geometry: exact bounds, hit tests, rect and lasso queries, closest point, intersections, anchors, snapping, outline offsetting, moving ops | |
+| Connected regions of a labeled image, traced with shared borders that tile it; vectorizing to a fixed palette with its index map | |
 
 Unsupported calls throw `UnsupportedCanvasCallError` rather than silently drawing nothing.
 
@@ -185,6 +186,12 @@ const recorder = new RecordingContext({
 ```
 
 `@canvas-ir/vectorize` is an experiment for flat art and UI screenshots: `vectorize(imageData)` picks a small palette (folding anti-aliased blends of two palette colors into them), traces each color's pixels, and returns a document of fills, largest first, so smaller regions sit on top and larger ones need no holes for them. `curves: true` fits cubic Béziers to the outlines instead of polygons, keeping sharp corners. The pixel run reports how close the replay comes to each source, in both modes; it isn't gated.
+
+For paint-by-number style work it takes a fixed palette and gives back its index map. `palette: [{ id, color }]` assigns every opaque pixel to the nearest color by OKLab distance, adds none and keeps the ids and order (`colors` lists each with its pixel count, unused ones too); `indices` is each pixel's index into `colors`, -1 for transparent, and is what the fills trace. `layout: "regions"` draws each 4-connected area as its own fill, holes kept, with `{ region, color, colorId, pixels }` meta and the `regions` map; `minArea` there folds smaller areas into the neighbour they share the longest border with, in `indices` too.
+
+## Regions
+
+`labelRegions(width, height, values, { connectivity: 4 | 8, empty })` splits a labeled image (palette indices, say) into connected regions: a label per pixel, and per region its value, area, bounds and neighbours with the length of each shared border, ids in scan order so the same values give the same ids. `traceRegion(map, id)` traces one region within its bounds, holes included; `traceMask(width, height, inside, { bounds })` does the same for any mask, visiting only the box. `traceBorders(map, { tolerance, curves, cornerAngle })` traces all regions at once: each border between two regions is found, simplified or fitted with curves once and walked forwards by one and backwards by the other, so filling every region (`traceRegionPath(ctx, outlines, id)`, or `regionRings` for points) leaves no gap and no overlap. Junctions and the image's frame stay on the pixel lattice, and a border that would cross another, or turn a region inside out at a junction, goes back to the exact pixel edges. With `tolerance` below 0.5 every pixel's center also stays in its own region; 0 keeps every border exact.
 
 ## Curves
 
