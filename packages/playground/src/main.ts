@@ -36,6 +36,7 @@ import { MORPH_ID, dayToNight, morphControls } from "./morph-demo";
 import { PELICAN_ID, POSES_PER_TURN, Ride, rideButton } from "./pelican";
 import { PHYSICS_ID, type Sandbox, createSandbox, sandboxButton } from "./physics-demo";
 import { GRAPH_ID, type ForceGraph, createGraph, graphButton } from "./graph-demo";
+import { PAINT_ID, type PaintDemo, paintComponent, preparePaint } from "./paint-demo";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 
@@ -837,6 +838,23 @@ graphButtonEl.addEventListener("click", () => {
   reveal({ ...b, height: b.height + 50 });
 });
 samplesBar.insertBefore(graphButtonEl, physicsButton.nextSibling);
+
+// Paint by numbers: a painting vectorized to a fixed palette, as regions with shared borders.
+let paint: PaintDemo | null = null;
+const paintButton = document.createElement("button");
+paintButton.textContent = "+ Paint by numbers";
+paintButton.addEventListener("click", () => {
+  if (!components!.get(PAINT_ID)) {
+    paint ??= preparePaint();
+    components!.mount(paintComponent(paint));
+    const { result, outlines, ms } = paint;
+    log(
+      `paint by numbers: ${result.regions!.regions.length} regions from ${result.colors.filter((c) => c.pixels > 0).length} of ${result.colors.length} palette colors, ${outlines.borders.length} shared borders (vectorize ${ms.vectorize.toFixed(1)} ms, borders ${ms.borders.toFixed(1)} ms)`,
+    );
+  }
+  reveal(scene.bounds(PAINT_ID)!);
+});
+samplesBar.insertBefore(paintButton, graphButtonEl.nextSibling);
 lodOn.addEventListener("change", () => {
   makeRenderer();
   render();
