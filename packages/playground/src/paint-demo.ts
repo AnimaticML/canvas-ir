@@ -1,5 +1,6 @@
-// Paint by numbers: a small painting is rasterized, matched to a fixed
-// palette by @canvas-ir/vectorize, and split into 4-connected regions whose
+// Paint by numbers: a small painting (or a picture of yours) is rasterized,
+// matched to a palette by @canvas-ir/vectorize (a fixed one for the painting,
+// k-means clusters for a photo) and split into 4-connected regions whose
 // borders are traced once and shared by both sides. The template is drawn
 // from those borders; clicking a region paints it, read off the index map.
 import { type ComponentSpec, RecordingContext, type RegionMap, type RegionOutlines, traceBorders, traceRegionPath } from "canvas-ir";
@@ -9,10 +10,14 @@ export const PAINT_ID = "paint-by-numbers";
 export const PAINT_AT = { x: 40, y: 2300 };
 const W = 240;
 const H = 160;
-/** The template's scale on the board. */
-const S = 2;
-const TEMPLATE = { x: PAINT_AT.x + W + 30, y: PAINT_AT.y + 40 };
-const LEGEND_Y = TEMPLATE.y + H * S + 18;
+/** The previews' width and the template's largest size on the board. */
+const PREVIEW = 240;
+const TEMPLATE_W = 480;
+const TEMPLATE_H = 360;
+const TEMPLATE = { x: PAINT_AT.x + PREVIEW + 30, y: PAINT_AT.y + 40 };
+/** A photo is scaled down to this many pixels on its longer side before vectorizing. */
+const PHOTO_SIDE = 320;
+const COUNTS = [6, 10, 16, 24];
 
 const PALETTE: PaletteColor[] = [
   { id: "1", color: "#bfdbfe" },
@@ -88,25 +93,56 @@ const drawSource = (c: CanvasRenderingContext2D | OffscreenCanvasRenderingContex
 export interface PaintState {
   /** Region ids painted so far. */
   readonly painted: readonly number[];
+  /** For a photo: how many colors to cluster it into. */
+  readonly colors: number;
+}
+
+/** What to paint: the built-in painting, with its fixed palette, or a picture scaled down to vectorize. */
+export interface PaintSource {
+  readonly name: string;
+  readonly canvas: OffscreenCanvas;
+  /** A fixed palette; without one the colors are clustered from the picture. */
+  readonly palette?: readonly PaletteColor[];
 }
 
 export interface PaintDemo {
   readonly result: VectorizeResult;
   readonly outlines: RegionOutlines;
-  /** Drawing ms: vectorizing (rasterized painting to regions and fills), and tracing the template's borders. */
+  readonly minArea: number;
+  /** Vectorizing (pixels to palette, regions and fills) and tracing the template's borders, in ms. */
   readonly ms: { vectorize: number; borders: number };
 }
 
-/** Rasterizes the painting and vectorizes it to the fixed palette, as regions. */
-export const preparePaint = (): PaintDemo => {
+/** The built-in painting, rasterized. */
+export const paintingSource = (): PaintSource => {
   const canvas = new OffscreenCanvas(W, H);
+  drawSource(canvas.getContext("2d")!);
+  return { name: "The painting", canvas, palette: PALETTE };
+};
+
+/** A picture, scaled down to at most PHOTO_SIDE pixels on its longer side. */
+export const pictureSource = (name: string, image: CanvasImageSource & { width: number; height: number }): PaintSource => {
+  const scale = Math.min(1, PHOTO_SIDE / Math.max(image.width, image.height));
+  const canvas = new OffscreenCanvas(Math.max(1, Math.round(image.width * scale)), Math.max(1, Math.round(image.height * scale)));
   const c = canvas.getContext("2d")!;
-  drawSource(c);
+  c.imageSmoothingQuality = "high";
+  // A slight blur first takes out grain that would otherwise speckle every region.
+  c.filter = "blur(0.7px)";
+  c.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return { name, canvas };
+};
+
+/** Vectorizes a source as regions: the fixed palette as is, or `colors` k-means clusters, smoothed, with specks merged. */
+export const preparePaint = (source: PaintSource, colors: number): PaintDemo => {
+  const { width, height } = source.canvas;
+  const pixels = source.canvas.getContext("2d")!.getImageData(0, 0, width, height);
+  const minArea = source.palette ? 24 : Math.max(24, Math.round(width * height * 0.0008));
+  const common = { layout: "regions", minArea, tolerance: 0.75, curves: true } as const;
   const t0 = performance.now();
-  const result = vectorize(c.getImageData(0, 0, W, H), { palette: PALETTE, layout: "regions", minArea: 24, tolerance: 0.75, curves: true });
+  const result = vectorize(pixels, source.palette ? { ...common, palette: source.palette } : { ...common, quantize: "kmeans", maxColors: colors, smooth: 3 });
   const t1 = performance.now();
   const outlines = traceBorders(result.regions!, { tolerance: 0.75, curves: true });
-  return { result, outlines, ms: { vectorize: t1 - t0, borders: performance.now() - t1 } };
+  return { result, outlines, minArea, ms: { vectorize: t1 - t0, borders: performance.now() - t1 } };
 };
 
 /** Where to put each region's number: its pixel farthest from any other region (a chamfer distance), and how far that is. */
@@ -138,43 +174,52 @@ const labelSpots = (map: RegionMap): { x: number; y: number; d: number }[] => {
   return spots;
 };
 
-/** The painting, the template and the palette, as one component: clicks paint regions, picked by the index map. */
-export const paintComponent = (demo: PaintDemo): ComponentSpec<PaintState> => {
-  const { result, outlines } = demo;
-  const map = result.regions!;
-  const spots = labelSpots(map);
-  const swatch = (k: number): { x: number; y: number } => ({ x: TEMPLATE.x + (k % 6) * 80, y: LEGEND_Y + Math.floor(k / 6) * 30 });
-  const regionAt = (x: number, y: number): number => {
-    const px = Math.floor((x - TEMPLATE.x) / S);
-    const py = Math.floor((y - TEMPLATE.y) / S);
-    return px < 0 || py < 0 || px >= W || py >= H ? -1 : map.labels[py * W + px]!;
-  };
-  const colorAt = (x: number, y: number): number => {
-    for (let k = 0; k < result.colors.length; k++) {
-      const s = swatch(k);
-      if (x >= s.x && x < s.x + 72 && y >= s.y && y < s.y + 24) return k;
+/** The picture, its regions, the template and the palette, as one component: clicks paint regions, picked by the index map. */
+export const paintComponent = (source: PaintSource): ComponentSpec<PaintState> => {
+  const { width: w, height: h } = source.canvas;
+  const S = Math.min(TEMPLATE_W / w, TEMPLATE_H / h);
+  const P = PREVIEW / w;
+  const legendY = TEMPLATE.y + h * S + 18;
+  const prepared = new Map<number, { demo: PaintDemo; spots: { x: number; y: number; d: number }[] }>();
+  const get = (colors: number) => {
+    const key = source.palette ? 0 : colors;
+    let entry = prepared.get(key);
+    if (!entry) {
+      const demo = preparePaint(source, colors);
+      entry = { demo, spots: labelSpots(demo.result.regions!) };
+      prepared.set(key, entry);
     }
-    return -1;
+    return entry;
   };
-  const fills = (c: RecordingContext, painted: ReadonlySet<number> | null): void => {
-    for (const region of map.regions) {
-      c.fillStyle = painted && !painted.has(region.id) ? "#ffffff" : result.colors[region.value]!.color;
-      c.beginPath();
-      traceRegionPath(c, outlines, region.id);
-      c.fill();
-    }
-  };
-  const used = result.colors.filter((c) => c.pixels > 0).length;
+  const swatch = (k: number): { x: number; y: number } => ({ x: TEMPLATE.x + (k % 6) * 80, y: legendY + Math.floor(k / 6) * 30 });
+  const chip = (i: number): { x: number; y: number } => ({ x: PAINT_AT.x + i * 44, y: PAINT_AT.y + 40 + 2 * h * P + 102 });
+  const inside = (x: number, y: number, b: { x: number; y: number }, bw: number, bh: number): boolean => x >= b.x && x < b.x + bw && y >= b.y && y < b.y + bh;
   return {
     id: PAINT_ID,
-    state: { painted: [] },
+    state: { painted: [], colors: 16 },
     meta: { source: "paint by numbers", role: "img", label: "Paint by numbers: click a region or a palette color" },
     cursor: "pointer",
-    draw: (c, { painted }) => {
+    draw: (c, { painted, colors }) => {
+      const { demo, spots } = get(colors);
+      const { result, outlines } = demo;
+      const map = result.regions!;
       const done = new Set(painted);
+      const fills = (only: ReadonlySet<number> | null): void => {
+        for (const region of map.regions) {
+          c.fillStyle = only && !only.has(region.id) ? "#ffffff" : result.colors[region.value]!.color;
+          c.beginPath();
+          traceRegionPath(c, outlines, region.id);
+          c.fill();
+        }
+      };
+      const used = result.colors.filter((k) => k.pixels > 0).length;
+      // A fixed palette's own ids; clustered colors are numbered in order.
+      const label = (k: number): string => (source.palette ? result.colors[k]!.id : String(k + 1));
+      const left = PAINT_AT.y + 40 + 2 * h * P + 140;
+      const right = legendY + Math.ceil(result.colors.length / 6) * 30 + 10;
       c.fillStyle = "#f8fafc";
       c.beginPath();
-      c.roundRect(PAINT_AT.x - 16, PAINT_AT.y - 16, W + 30 + W * S + 32, LEGEND_Y + 70 - PAINT_AT.y, 12);
+      c.roundRect(PAINT_AT.x - 16, PAINT_AT.y - 16, PREVIEW + 30 + TEMPLATE_W + 32, Math.max(left, right) - PAINT_AT.y + 16, 12);
       c.fill();
       c.font = "600 13px system-ui, sans-serif";
       c.fillStyle = "#475569";
@@ -182,29 +227,43 @@ export const paintComponent = (demo: PaintDemo): ComponentSpec<PaintState> => {
       c.fillText("Paint by numbers: click a region, or a color to fill all of its regions", PAINT_AT.x, PAINT_AT.y);
       c.font = "11px system-ui, sans-serif";
       c.fillStyle = "#64748b";
-      c.fillText("The painting", PAINT_AT.x, PAINT_AT.y + 24);
-      c.fillText(`Vectorized to ${used} of ${result.colors.length} fixed colors`, PAINT_AT.x, PAINT_AT.y + 24 + H + 22);
-      // The painting itself, then its regions as fills.
+      c.fillText(`${source.name}, ${w}×${h}`, PAINT_AT.x, PAINT_AT.y + 24);
+      c.fillText(source.palette ? `Vectorized to ${used} of ${result.colors.length} fixed colors` : `Vectorized to ${used} clustered colors`, PAINT_AT.x, PAINT_AT.y + 24 + h * P + 22);
+      // The picture itself, then its regions as fills.
+      c.drawImage(source.canvas, PAINT_AT.x, PAINT_AT.y + 40, w * P, h * P);
       c.save();
-      c.translate(PAINT_AT.x, PAINT_AT.y + 40);
-      drawSource(c);
-      c.restore();
-      c.save();
-      c.translate(PAINT_AT.x, PAINT_AT.y + 40 + H + 22);
-      fills(c, null);
+      c.translate(PAINT_AT.x, PAINT_AT.y + 40 + h * P + 22);
+      c.scale(P, P);
+      fills(null);
       c.restore();
       c.fillStyle = "#64748b";
-      const y = PAINT_AT.y + 40 + 2 * H + 30;
+      const y = PAINT_AT.y + 40 + 2 * h * P + 30;
       c.fillText(`${map.regions.length} regions, ${outlines.borders.length} shared borders`, PAINT_AT.x, y);
-      c.fillText(`Areas under 24 px merged; ${demo.ms.vectorize.toFixed(0)} ms`, PAINT_AT.x, y + 16);
+      c.fillText(`Areas under ${demo.minArea} px merged; ${demo.ms.vectorize.toFixed(0)} ms`, PAINT_AT.x, y + 16);
       c.fillText(`${painted.length} of ${map.regions.length} painted`, PAINT_AT.x, y + 32);
+      if (!source.palette) {
+        c.fillText("Colors:", PAINT_AT.x, y + 54);
+        COUNTS.forEach((n, i) => {
+          const b = chip(i);
+          c.fillStyle = n === colors ? "#475569" : "#e2e8f0";
+          c.beginPath();
+          c.roundRect(b.x, b.y, 38, 24, 12);
+          c.fill();
+          c.fillStyle = n === colors ? "#ffffff" : "#334155";
+          c.textAlign = "center";
+          c.textBaseline = "middle";
+          c.fillText(String(n), b.x + 19, b.y + 12);
+          c.textAlign = "start";
+          c.textBaseline = "top";
+        });
+      }
       // The template: regions from the shared borders, outlined, numbered.
       c.save();
       c.translate(TEMPLATE.x, TEMPLATE.y);
       c.scale(S, S);
-      fills(c, done);
+      fills(done);
       c.strokeStyle = "#94a3b8";
-      c.lineWidth = 0.5;
+      c.lineWidth = 1 / S;
       c.lineJoin = "round";
       for (const region of map.regions) {
         c.beginPath();
@@ -216,9 +275,11 @@ export const paintComponent = (demo: PaintDemo): ComponentSpec<PaintState> => {
       c.textBaseline = "middle";
       for (const region of map.regions) {
         const spot = spots[region.id]!;
-        if (done.has(region.id) || spot.d < 2) continue;
-        c.font = `${Math.min(7, Math.max(3.5, spot.d * 0.9))}px system-ui, sans-serif`;
-        c.fillText(result.colors[region.value]!.id, spot.x, spot.y);
+        // Numbers a few screen pixels high, as big as the region allows.
+        const size = Math.min(14, spot.d * S * 0.9) / S;
+        if (done.has(region.id) || size * S < 5) continue;
+        c.font = `${size}px system-ui, sans-serif`;
+        c.fillText(label(region.value), spot.x, spot.y);
       }
       c.restore();
       c.textAlign = "start";
@@ -235,7 +296,7 @@ export const paintComponent = (demo: PaintDemo): ComponentSpec<PaintState> => {
         c.fillStyle = color.pixels > 0 ? "#334155" : "#94a3b8";
         c.font = "600 12px system-ui, sans-serif";
         c.textBaseline = "middle";
-        c.fillText(color.id, s.x + 30, s.y + 8);
+        c.fillText(label(k), s.x + 30, s.y + 8);
         c.font = "10px system-ui, sans-serif";
         c.fillText(color.pixels > 0 ? `${color.pixels} px` : "unused", s.x + 30, s.y + 19);
       });
@@ -244,13 +305,24 @@ export const paintComponent = (demo: PaintDemo): ComponentSpec<PaintState> => {
       dragstart: (e) => e.stopPropagation(),
       click: (e, component) => {
         e.stopPropagation();
-        const { painted } = component.state;
-        const region = regionAt(e.point.x, e.point.y);
+        const { painted, colors } = component.state;
+        const { x, y } = e.point;
+        if (!source.palette) {
+          const i = COUNTS.findIndex((_, i) => inside(x, y, chip(i), 38, 24));
+          if (i >= 0) {
+            component.setState({ colors: COUNTS[i]!, painted: [] });
+            return;
+          }
+        }
+        const map = get(colors).demo.result.regions!;
+        const px = Math.floor((x - TEMPLATE.x) / S);
+        const py = Math.floor((y - TEMPLATE.y) / S);
+        const region = px < 0 || py < 0 || px >= w || py >= h ? -1 : map.labels[py * w + px]!;
         if (region >= 0) {
           component.setState({ painted: painted.includes(region) ? painted.filter((r) => r !== region) : [...painted, region] });
           return;
         }
-        const k = colorAt(e.point.x, e.point.y);
+        const k = get(colors).demo.result.colors.findIndex((_, k) => inside(x, y, swatch(k), 72, 24));
         if (k < 0) return;
         const all = map.regions.filter((r) => r.value === k).map((r) => r.id);
         const filled = all.every((r) => painted.includes(r));

@@ -124,4 +124,24 @@ describe("vectorize", () => {
     expect(result.colors[result.indices[4 * 120 + 4]!]!.color).toBe("#ffffff");
     expect(result.colors[result.indices[24 * 120 + 40]!]!.color).toBe("#2563eb");
   });
+
+  test("photos: kmeans finds the colors under the noise, and smoothing settles it into few regions", () => {
+    const image = card();
+    let seed = 5;
+    const random = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < image.data.length; i += 4) for (let c = 0; c < 3; c++) image.data[i + c] = image.data[i + c]! + Math.round((random() - 0.5) * 50);
+    // Frequency picks among thousands of rare noisy shades; clusters average them back.
+    const result = vectorize(image, { quantize: "kmeans", maxColors: 3, layout: "regions", smooth: 2, minArea: 12 });
+    const rgb = (hex: string): number[] => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+    const near = (hex: string, target: number[]): boolean => rgb(hex).every((v, i) => Math.abs(v - target[i]!) < 12);
+    expect(result.colors).toHaveLength(3);
+    expect(near(result.colors[0]!.color, [255, 255, 255]) || near(result.colors[0]!.color, [242, 242, 242])).toBe(true);
+    expect(result.colors.some((c) => near(c.color, [37, 99, 235]))).toBe(true);
+    expect(result.colors.some((c) => near(c.color, [220, 38, 38]))).toBe(true);
+    // Background, button, label bar, dot.
+    expect(result.regions!.regions).toHaveLength(4);
+    const rough = vectorize(image, { quantize: "kmeans", maxColors: 3, layout: "regions" });
+    expect(rough.regions!.regions.length).toBeGreaterThanOrEqual(4);
+    expect(vectorize(image, { quantize: "kmeans", maxColors: 3 }).colors.map((c) => c.color)).toEqual(result.colors.map((c) => c.color));
+  });
 });

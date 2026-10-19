@@ -102,6 +102,7 @@ What the library needs for that is incremental updates by group, not an undo sta
 
 - **Regions:** `labelRegions` (4- or 8-connected, deterministic ids, bounds, neighbours with shared border lengths) and `traceRegion`, tracing within the region's bounds; `traceMask` takes `bounds` to visit only a box.
 - **Shared borders:** `traceBorders` splits the boundaries at junctions, simplifies or fits each border once and hands it to both sides, so regions tile. Junctions and frame points stay put; borders that would cross or flip the turning order at a junction fall back to exact. Below 0.5 pixels of tolerance every pixel's center stays in its region.
-- **Vectorize:** a fixed `palette` with stable ids, nearest by OKLab; `colors` and `indices`, the index map the fills trace; `layout: "regions"`, one fill per area from shared borders, with `minArea` merging specks into their longest-bordered neighbour.
+- **Vectorize:** a fixed `palette` with stable ids, nearest by OKLab; `colors` and `indices`, the index map the fills trace; `layout: "regions"`, one fill per area from shared borders, with `minArea` merging specks into their longest-bordered neighbour. For photos, `quantize: "kmeans"` (deterministic seeds, weighted by pixel count) and `smooth`, a majority filter over the index map.
+- **Playground:** paint by numbers, from the built-in painting with a fixed palette or a picture of yours clustered into 6 to 24 colors; numbers sit at each region's point farthest from its edges, and clicks pick regions from the index map.
 
 Not planned: WebGL or PDF backends, pixel access (`getImageData` and friends), and paints made by another context.

@@ -36,7 +36,7 @@ import { MORPH_ID, dayToNight, morphControls } from "./morph-demo";
 import { PELICAN_ID, POSES_PER_TURN, Ride, rideButton } from "./pelican";
 import { PHYSICS_ID, type Sandbox, createSandbox, sandboxButton } from "./physics-demo";
 import { GRAPH_ID, type ForceGraph, createGraph, graphButton } from "./graph-demo";
-import { PAINT_ID, type PaintDemo, paintComponent, preparePaint } from "./paint-demo";
+import { PAINT_ID, type PaintSource, paintComponent, paintingSource, pictureSource } from "./paint-demo";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 
@@ -839,21 +839,35 @@ graphButtonEl.addEventListener("click", () => {
 });
 samplesBar.insertBefore(graphButtonEl, physicsButton.nextSibling);
 
-// Paint by numbers: a painting vectorized to a fixed palette, as regions with shared borders.
-let paint: PaintDemo | null = null;
+// Paint by numbers: a painting, or a picture of yours, vectorized into regions with shared borders.
+const showPaint = (source: PaintSource): void => {
+  if (components!.get(PAINT_ID)) components!.unmount(PAINT_ID);
+  const t0 = performance.now();
+  components!.mount(paintComponent(source));
+  log(`paint by numbers: ${source.name}, ${source.canvas.width}×${source.canvas.height}, vectorized and drawn in ${(performance.now() - t0).toFixed(0)} ms`);
+  reveal(scene.bounds(PAINT_ID)!);
+};
 const paintButton = document.createElement("button");
 paintButton.textContent = "+ Paint by numbers";
-paintButton.addEventListener("click", () => {
-  if (!components!.get(PAINT_ID)) {
-    paint ??= preparePaint();
-    components!.mount(paintComponent(paint));
-    const { result, outlines, ms } = paint;
-    log(
-      `paint by numbers: ${result.regions!.regions.length} regions from ${result.colors.filter((c) => c.pixels > 0).length} of ${result.colors.length} palette colors, ${outlines.borders.length} shared borders (vectorize ${ms.vectorize.toFixed(1)} ms, borders ${ms.borders.toFixed(1)} ms)`,
-    );
-  }
-  reveal(scene.bounds(PAINT_ID)!);
+paintButton.addEventListener("click", () => showPaint(paintingSource()));
+const pictureInput = document.createElement("input");
+pictureInput.type = "file";
+pictureInput.accept = "image/*";
+pictureInput.hidden = true;
+pictureInput.addEventListener("change", () => {
+  const file = pictureInput.files?.[0];
+  pictureInput.value = "";
+  if (!file) return;
+  createImageBitmap(file)
+    .then((bitmap) => showPaint(pictureSource(file.name, bitmap)))
+    .catch((error) => log(`could not read ${file.name}: ${error}`));
 });
+const pictureButton = document.createElement("button");
+pictureButton.textContent = "Paint my image…";
+pictureButton.title = "Turn a picture of yours into paint by numbers";
+pictureButton.addEventListener("click", () => pictureInput.click());
+samplesBar.insertBefore(pictureButton, paintButton.nextSibling);
+samplesBar.insertBefore(pictureInput, pictureButton);
 samplesBar.insertBefore(paintButton, graphButtonEl.nextSibling);
 lodOn.addEventListener("change", () => {
   makeRenderer();

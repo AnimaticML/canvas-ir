@@ -45,6 +45,18 @@ export interface VectorizeOptions {
    * neighbour they share the longest border with, in `indices` too.
    */
   readonly layout?: "layers" | "regions";
+  /**
+   * How a palette is picked when none is given. `"frequency"` (default): the
+   * most common colors, for flat art. `"kmeans"`: `maxColors` clusters in
+   * OKLab, each the average of its pixels, for photos and gradients.
+   */
+  readonly quantize?: "frequency" | "kmeans";
+  /**
+   * Passes of a 3×3 majority filter over the index map before tracing: a pixel
+   * most of whose neighbours took another color takes it too, so noise and
+   * ragged edges settle while real edges stay. Default 0.
+   */
+  readonly smooth?: number;
   /** Most palette colors. Default 32. */
   readonly maxColors?: number;
   /** A color needs this share of the opaque pixels, and at least 12 pixels, to join the palette. Default 0.0005. */
@@ -150,6 +162,99 @@ const choosePalette = (counts: Map<number, number>, opaque: number, options: Req
 const oklab = (c: number): readonly [number, number, number] => srgbToOklab(c >> 16, (c >> 8) & 255, c & 255);
 const lab2 = (a: readonly number[], b: readonly number[]): number => (a[0]! - b[0]!) ** 2 + (a[1]! - b[1]!) ** 2 + (a[2]! - b[2]!) ** 2;
 
+/**
+ * A palette of up to `k` colors by k-means over the image's colors in OKLab,
+ * weighted by how often each occurs. Seeds are picked farthest first from the
+ * most common color, so the same image gives the same palette. Each color is
+ * the average (in sRGB) of the pixels nearest it; most common first.
+ */
+const clusterPalette = (counts: Map<number, number>, k: number): number[] => {
+  const colors = [...counts.keys()];
+  const weights = colors.map((c) => counts.get(c)!);
+  const labs = colors.map(oklab);
+  if (colors.length <= k) return colors.map((c, i) => ({ c, w: weights[i]! })).sort((a, b) => b.w - a.w).map(({ c }) => c);
+  let first = 0;
+  for (let i = 1; i < colors.length; i++) if (weights[i]! > weights[first]!) first = i;
+  const centers: number[][] = [[...labs[first]!]];
+  const near = labs.map((l) => lab2(l, centers[0]!));
+  while (centers.length < k) {
+    let best = -1;
+    let score = 0;
+    for (let i = 0; i < colors.length; i++) {
+      const v = near[i]! * Math.sqrt(weights[i]!);
+      if (v > score) {
+        score = v;
+        best = i;
+      }
+    }
+    if (best < 0) break;
+    centers.push([...labs[best]!]);
+    for (let i = 0; i < colors.length; i++) near[i] = Math.min(near[i]!, lab2(labs[i]!, labs[best]!));
+  }
+  const member = new Int32Array(colors.length).fill(-1);
+  for (let round = 0; round < 24; round++) {
+    let moved = false;
+    for (let i = 0; i < colors.length; i++) {
+      let j = 0;
+      for (let m = 1; m < centers.length; m++) if (lab2(labs[i]!, centers[m]!) < lab2(labs[i]!, centers[j]!)) j = m;
+      if (member[i] !== j) {
+        member[i] = j;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+    const sums = centers.map(() => [0, 0, 0, 0]);
+    for (let i = 0; i < colors.length; i++) {
+      const s = sums[member[i]!]!;
+      const w = weights[i]!;
+      s[0]! += labs[i]![0]! * w;
+      s[1]! += labs[i]![1]! * w;
+      s[2]! += labs[i]![2]! * w;
+      s[3]! += w;
+    }
+    sums.forEach((s, j) => {
+      if (s[3]! > 0) centers[j] = [s[0]! / s[3]!, s[1]! / s[3]!, s[2]! / s[3]!];
+    });
+  }
+  const rgb = centers.map(() => [0, 0, 0, 0]);
+  for (let i = 0; i < colors.length; i++) {
+    const s = rgb[member[i]!]!;
+    const c = colors[i]!;
+    const w = weights[i]!;
+    s[0]! += (c >> 16) * w;
+    s[1]! += ((c >> 8) & 255) * w;
+    s[2]! += (c & 255) * w;
+    s[3]! += w;
+  }
+  return rgb
+    .filter((s) => s[3]! > 0)
+    .sort((a, b) => b[3]! - a[3]!)
+    .map((s) => (Math.round(s[0]! / s[3]!) << 16) | (Math.round(s[1]! / s[3]!) << 8) | Math.round(s[2]! / s[3]!));
+};
+
+/** One pass of a 3×3 majority filter: a pixel takes the index at least five of its nine pixels share. Left-out pixels stay out. */
+const majority = (width: number, height: number, indices: Int16Array): void => {
+  const before = indices.slice();
+  const tally = new Map<number, number>();
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const own = before[y * width + x]!;
+      if (own < 0) continue;
+      tally.clear();
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const v = before[ny * width + nx]!;
+          if (v >= 0) tally.set(v, (tally.get(v) ?? 0) + 1);
+        }
+      }
+      for (const [v, n] of tally) if (n >= 5 && v !== own) indices[y * width + x] = v;
+    }
+  }
+};
+
 /** Folds areas smaller than `minArea` into the neighbour each shares the longest border with, until none is left (or none can go). */
 const mergeSmall = (width: number, height: number, indices: Int16Array, minArea: number): RegionMap => {
   for (let round = 0; ; round++) {
@@ -188,6 +293,8 @@ const mergeSmall = (width: number, height: number, indices: Int16Array, minArea:
 export const vectorize = (image: PixelData, options: VectorizeOptions = {}): VectorizeResult => {
   const o: Required<Omit<VectorizeOptions, "palette">> = {
     layout: options.layout ?? "layers",
+    quantize: options.quantize ?? "frequency",
+    smooth: options.smooth ?? 0,
     maxColors: options.maxColors ?? 32,
     minShare: options.minShare ?? 0.0005,
     mergeDistance: options.mergeDistance ?? 12,
@@ -215,7 +322,9 @@ export const vectorize = (image: PixelData, options: VectorizeOptions = {}): Vec
         if (!c) throw new Error(`vectorize: palette color ${JSON.stringify(color)} is not a color`);
         return (Math.round(c.r) << 16) | (Math.round(c.g) << 8) | Math.round(c.b);
       })
-    : choosePalette(counts, opaque, o);
+    : o.quantize === "kmeans"
+      ? clusterPalette(counts, o.maxColors)
+      : choosePalette(counts, opaque, o);
   const ids = fixed ? fixed.map((c) => c.id) : palette.map(hex);
   if (new Set(ids).size !== ids.length) throw new Error("vectorize: palette ids must be unique");
   // Every opaque pixel takes its nearest palette color, by OKLab; a fringe pixel goes to whichever side it is closer to.
@@ -234,6 +343,7 @@ export const vectorize = (image: PixelData, options: VectorizeOptions = {}): Vec
     }
     assigned[i] = k;
   }
+  for (let pass = 0; pass < o.smooth; pass++) majority(width, height, assigned);
   const regions = o.layout === "regions" ? mergeSmall(width, height, assigned, o.minArea) : undefined;
   const sizes = new Array<number>(palette.length).fill(0);
   for (let i = 0; i < n; i++) if (assigned[i]! >= 0) sizes[assigned[i]!]!++;
