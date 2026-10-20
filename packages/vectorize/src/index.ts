@@ -52,9 +52,10 @@ export interface VectorizeOptions {
    */
   readonly quantize?: "frequency" | "kmeans";
   /**
-   * Passes of a 3×3 majority filter over the index map before tracing: a pixel
-   * most of whose neighbours took another color takes it too, so noise and
-   * ragged edges settle while real edges stay. Default 0.
+   * Smooths the index map before tracing, over this radius in pixels: each
+   * pixel takes the color most of its surroundings (weighted by a Gaussian)
+   * took, so noise, ragged bands and slivers thinner than about the radius
+   * settle into smooth shapes while edges between flat colors stay. Default 0.
    */
   readonly smooth?: number;
   /** Most palette colors. Default 32. */
@@ -232,27 +233,57 @@ const clusterPalette = (counts: Map<number, number>, k: number): number[] => {
     .map((s) => (Math.round(s[0]! / s[3]!) << 16) | (Math.round(s[1]! / s[3]!) << 8) | Math.round(s[2]! / s[3]!));
 };
 
-/** One pass of a 3×3 majority filter: a pixel takes the index at least five of its nine pixels share. Left-out pixels stay out. */
-const majority = (width: number, height: number, indices: Int16Array): void => {
-  const before = indices.slice();
-  const tally = new Map<number, number>();
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const own = before[y * width + x]!;
-      if (own < 0) continue;
-      tally.clear();
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-          const v = before[ny * width + nx]!;
-          if (v >= 0) tally.set(v, (tally.get(v) ?? 0) + 1);
+/**
+ * A smooth mode filter: each color's pixels are blurred (a Gaussian with
+ * sigma `radius / 2`, cut at `radius`) and every pixel takes the color that
+ * is strongest there. Borders settle into smooth curves, as a pen would draw
+ * them, and specks and slivers thinner than about the radius go; edges
+ * between flat colors stay where they are. Left-out pixels stay out.
+ */
+const modeFilter = (width: number, height: number, indices: Int16Array, colors: number, radius: number): void => {
+  const r = Math.max(1, Math.round(radius));
+  const sigma = Math.max(0.5, radius / 2);
+  const kernel = Array.from({ length: 2 * r + 1 }, (_, i) => Math.exp(-((i - r) ** 2) / (2 * sigma * sigma)));
+  const n = width * height;
+  const best = new Float32Array(n);
+  const winner = indices.slice();
+  const field = new Float32Array(n);
+  const row = new Float32Array(n);
+  for (let k = 0; k < colors; k++) {
+    let any = false;
+    for (let i = 0; i < n; i++) {
+      field[i] = indices[i] === k ? 1 : 0;
+      if (field[i]) any = true;
+    }
+    if (!any) continue;
+    // Separable: along rows into `row`, then down columns into `field`.
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        let v = 0;
+        for (let d = -r; d <= r; d++) {
+          const xx = x + d;
+          if (xx >= 0 && xx < width) v += field[y * width + xx]! * kernel[d + r]!;
+        }
+        row[y * width + x] = v;
+      }
+    }
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        if (indices[i]! < 0) continue;
+        let v = 0;
+        for (let d = -r; d <= r; d++) {
+          const yy = y + d;
+          if (yy >= 0 && yy < height) v += row[yy * width + x]! * kernel[d + r]!;
+        }
+        if (v > best[i]!) {
+          best[i] = v;
+          winner[i] = k;
         }
       }
-      for (const [v, n] of tally) if (n >= 5 && v !== own) indices[y * width + x] = v;
     }
   }
+  indices.set(winner);
 };
 
 /** Folds areas smaller than `minArea` into the neighbour each shares the longest border with, until none is left (or none can go). */
@@ -343,7 +374,7 @@ export const vectorize = (image: PixelData, options: VectorizeOptions = {}): Vec
     }
     assigned[i] = k;
   }
-  for (let pass = 0; pass < o.smooth; pass++) majority(width, height, assigned);
+  if (o.smooth > 0) modeFilter(width, height, assigned, palette.length, o.smooth);
   const regions = o.layout === "regions" ? mergeSmall(width, height, assigned, o.minArea) : undefined;
   const sizes = new Array<number>(palette.length).fill(0);
   for (let i = 0; i < n; i++) if (assigned[i]! >= 0) sizes[assigned[i]!]!++;
