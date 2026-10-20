@@ -139,7 +139,7 @@ export interface Border {
   readonly closed: boolean;
   /** The exact border, along pixel edges, every corner kept. A closed border repeats no point. */
   readonly exact: readonly Point[];
-  /** The border simplified to within the tolerance, its ends (junctions) kept where they are; exact where simplifying would cross another border. */
+  /** The border simplified to within the tolerance, its ends (junctions) kept where they are; less smooth (down to exact) where simplifying would cross another border. */
   readonly points: readonly Point[];
   /** With curves: the border as cubic pieces, ends kept. */
   readonly pieces?: readonly CubicPiece[];
@@ -171,8 +171,8 @@ export interface RegionOutlines {
  * regions found, simplified and fitted once and shared by both, so filling
  * every region leaves no gap and no overlap along the borders. Junctions stay
  * on the pixel lattice. Where a simplified or curved border would cross
- * another (two running within the tolerance of each other), both go back to
- * the exact pixel edges, so the outlines never tangle. With a tolerance below
+ * another (two running within the tolerance of each other), both are smoothed
+ * less, in steps down to the exact pixel edges, so the outlines never tangle. With a tolerance below
  * 0.5 every pixel's center also stays inside its own region; above that, thin
  * parts of small regions may lose a pixel or two to their neighbours.
  */
@@ -207,8 +207,17 @@ export const traceBorders = (map: RegionMap, options: BorderOptions = {}): Regio
   // Where a border meets or leaves the image's frame, and the frame's corners, stay put, so the picture keeps its edges.
   const onFrame = (p: Point): boolean => p.x === 0 || p.y === 0 || p.x === w || p.y === h;
   const alongFrame = (p: Point, q: Point): boolean => (p.x === q.x && (p.x === 0 || p.x === w)) || (p.y === q.y && (p.y === 0 || p.y === h));
-  const smooth = (exact: readonly Point[], closed: boolean): { points: Point[]; pieces?: CubicPiece[] } => {
-    if (tolerance <= 0 && !options.curves) return { points: collinear(exact, closed) };
+  /**
+   * A border smoothed at a level: 0 as asked; 1 at half the tolerance; 2 cutting
+   * every pixel corner (the midpoints of the pixel edges, so a staircase becomes
+   * a slope), with curves if asked; 3 the same without curves; 4 the exact
+   * pixel edges. Higher levels are for
+   * borders that crossed a neighbour at the level before.
+   */
+  const smooth = (exact: readonly Point[], closed: boolean, level = 0): { points: Point[]; pieces?: CubicPiece[] } => {
+    if ((tolerance <= 0 && !options.curves) || level >= 4) return { points: collinear(exact, closed) };
+    const tol = level === 0 ? tolerance : level === 1 ? tolerance / 2 : Math.min(tolerance, 0.3);
+    const curves = options.curves && level < 3;
     const n = exact.length;
     const anchor = (i: number): boolean => {
       const p = exact[i]!;
@@ -218,10 +227,21 @@ export const traceBorders = (map: RegionMap, options: BorderOptions = {}): Regio
       return !prev || !next || !alongFrame(prev, p) || !alongFrame(p, next) || (prev.x !== next.x && prev.y !== next.y);
     };
     const anchors = exact.map((_, i) => i).filter(anchor);
-    const fit = (pts: readonly Point[], ring: boolean): { points: Point[]; pieces: CubicPiece[] | undefined } => {
-      const points = tolerance <= 0 ? collinear(pts, ring) : ring ? simplifyRing(pts, tolerance) : simplifyPolyline(pts, tolerance);
-      // The pixel edges themselves, corners found a few pixels each way, so a staircase reads as a curve.
-      const pieces = options.curves ? fitCurve(collinear(pts, ring), tolerance + 0.5, { closed: ring, cornerAngle: options.cornerAngle ?? 50, cornerWindow: 3 }) : undefined;
+    const fit = (edges: readonly Point[], ring: boolean): { points: Point[]; pieces: CubicPiece[] | undefined } => {
+      // Each pixel edge's midpoint, the ends kept: corners cut by at most half a pixel.
+      const mid = edges.slice(0, ring ? edges.length : edges.length - 1).map((p, i) => {
+        const q = edges[(i + 1) % edges.length]!;
+        return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+      });
+      const cut = ring ? mid : [edges[0]!, ...mid, edges.at(-1)!];
+      const pts = level >= 2 ? cut : edges;
+      const points = tol <= 0 ? collinear(pts, ring) : ring ? simplifyRing(pts, tol) : simplifyPolyline(pts, tol);
+      // Long borders: the pixel edges themselves, corners found a few pixels each way, so a staircase reads as a curve.
+      // Short ones, a few pixels between junctions, have no room to find corners: their cut corners are fitted.
+      const short = edges.length <= 12;
+      const pieces = curves
+        ? fitCurve(level >= 2 || short ? cut : collinear(edges, ring), level >= 2 ? tol : short ? tol + 0.25 : tol + 0.5, { closed: ring, cornerAngle: options.cornerAngle ?? 50, cornerWindow: short ? 1 : 3 })
+        : undefined;
       return { points, pieces };
     };
     if (closed && anchors.length === 0) {
@@ -240,7 +260,7 @@ export const traceBorders = (map: RegionMap, options: BorderOptions = {}): Regio
       if (part.pieces) pieces.push(...part.pieces);
     }
     if (closed) points.pop();
-    return options.curves ? { points, pieces } : { points };
+    return curves ? { points, pieces } : { points };
   };
   const visited = new Uint8Array(H + (w + 1) * h);
   const borders: Border[] = [];
@@ -292,7 +312,7 @@ export const traceBorders = (map: RegionMap, options: BorderOptions = {}): Regio
     const left = dx === 1 ? label(a.x, a.y - 1) : dx === -1 ? label(a.x - 1, a.y) : dy === 1 ? label(a.x, a.y) : label(a.x - 1, a.y - 1);
     borders.push({ id: borders.length, left, right, closed, exact, ...smooth(exact, closed) });
   }
-  if (tolerance > 0 || options.curves) untangle(borders);
+  if (tolerance > 0 || options.curves) untangle(borders, smooth);
 
   // Each region's rings: its borders, oriented so it is on their right, chained end to start.
   const uses = map.regions.map(() => [] as BorderUse[]);
@@ -384,14 +404,16 @@ const crosses = (a: Point, b: Point, c: Point, d: Point): boolean => {
 };
 
 /**
- * Puts back, exactly along the pixel edges, every simplified or curved border
- * that crosses another border or itself, until none do. Exact borders never
- * cross, so this ends; it leaves borders in tight places exact and the rest
- * smooth.
+ * Steps every border that crosses another border or itself, or turns a
+ * region inside out at a junction, down a smoothing level (half the tolerance,
+ * then pixel corners cut, curved and then straight, then the exact pixel edges) until none do. Exact
+ * borders never cross, so this ends; borders in tight places end up a little
+ * less smooth and the rest stay as asked.
  */
-const untangle = (borders: Border[]): void => {
+const untangle = (borders: Border[], smooth: (exact: readonly Point[], closed: boolean, level: number) => { points: Point[]; pieces?: CubicPiece[] }): void => {
   const CELL = 8;
-  for (let round = 0; round < 16; round++) {
+  const levels = new Uint8Array(borders.length);
+  for (let round = 0; round < 64; round++) {
     const grid = new Map<number, { border: number; i: number }[]>();
     const lines = borders.map(drawnSegments);
     const cellsOf = (a: Point, b: Point): number[] => {
@@ -453,16 +475,15 @@ const untangle = (borders: Border[]): void => {
       if (descents !== 1) for (const l of list) bad.add(l.border);
     }
     if (bad.size === 0) return;
+    let changed = false;
     for (const id of bad) {
+      if (levels[id]! >= 4) continue;
       const border = borders[id]!;
-      const points = collinear(border.exact, border.closed);
-      if (points.length === border.points.length && !border.pieces) {
-        bad.delete(id);
-        continue;
-      }
-      borders[id] = { id, left: border.left, right: border.right, closed: border.closed, exact: border.exact, points };
+      levels[id]!++;
+      borders[id] = { id, left: border.left, right: border.right, closed: border.closed, exact: border.exact, ...smooth(border.exact, border.closed, levels[id]!) };
+      changed = true;
     }
-    if (bad.size === 0) return;
+    if (!changed) return;
   }
 };
 

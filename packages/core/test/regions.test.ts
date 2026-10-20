@@ -166,6 +166,21 @@ describe("shared borders", () => {
     }
   });
 
+  test("borders that would cross are smoothed less, not dropped to pixel staircases", () => {
+    let seed = 3;
+    const random = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const width = 160;
+    const height = 120;
+    const values = new Int32Array(width * height);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) values[y * width + x] = Math.floor((Math.sin(x / 9 + random() * 0.6) + Math.cos(y / 7 + x / 13) + 2) * 2);
+    const map = labelRegions(width, height, values);
+    const outlines = traceBorders(map, { tolerance: 0.75, curves: true });
+    // Borders keep curves, at worst with their pixel corners cut; hardly any is left a staircase.
+    expect(outlines.borders.filter((b) => !b.pieces).length).toBeLessThan(outlines.borders.length / 500);
+    const rings = map.regions.map((r) => regionRings(outlines, r.id));
+    for (const p of sample(width, height, 1000)) expect(rings.filter((r) => winding(r, p) !== 0).length).toBe(1);
+  });
+
   test("each border separates two regions, and both walk it", () => {
     const { width, height, values } = blobs();
     const map = labelRegions(width, height, values);
