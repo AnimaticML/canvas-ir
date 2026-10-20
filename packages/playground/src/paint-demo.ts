@@ -204,12 +204,19 @@ export const paintComponent = (source: PaintSource): ComponentSpec<PaintState> =
       const { result, outlines } = demo;
       const map = result.regions!;
       const done = new Set(painted);
-      const fills = (only: ReadonlySet<number> | null): void => {
+      const fills = (only: ReadonlySet<number> | null, scale: number): void => {
         for (const region of map.regions) {
-          c.fillStyle = only && !only.has(region.id) ? "#ffffff" : result.colors[region.value]!.color;
+          const paint = !only || only.has(region.id);
+          c.fillStyle = paint ? result.colors[region.value]!.color : "#ffffff";
           c.beginPath();
           traceRegionPath(c, outlines, region.id);
           c.fill();
+          // Anti-aliasing leaves a faint seam where two fills meet; a hairline of the region's own color closes it.
+          if (paint) {
+            c.strokeStyle = c.fillStyle;
+            c.lineWidth = 1 / scale;
+            c.stroke();
+          }
         }
       };
       const used = result.colors.filter((k) => k.pixels > 0).length;
@@ -234,7 +241,7 @@ export const paintComponent = (source: PaintSource): ComponentSpec<PaintState> =
       c.save();
       c.translate(PAINT_AT.x, PAINT_AT.y + 40 + h * P + 22);
       c.scale(P, P);
-      fills(null);
+      fills(null, P);
       c.restore();
       c.fillStyle = "#64748b";
       const y = PAINT_AT.y + 40 + 2 * h * P + 30;
@@ -261,15 +268,24 @@ export const paintComponent = (source: PaintSource): ComponentSpec<PaintState> =
       c.save();
       c.translate(TEMPLATE.x, TEMPLATE.y);
       c.scale(S, S);
-      fills(done);
+      fills(done, S);
+      // Borders still to paint on at least one side; between two painted regions the line goes.
       c.strokeStyle = "#94a3b8";
       c.lineWidth = 1 / S;
       c.lineJoin = "round";
-      for (const region of map.regions) {
-        c.beginPath();
-        traceRegionPath(c, outlines, region.id);
-        c.stroke();
+      c.beginPath();
+      for (const border of outlines.borders) {
+        const open = (r: number): boolean => r >= 0 && !done.has(r);
+        if (!open(border.left) && !open(border.right)) continue;
+        if (border.pieces && border.pieces.length > 0) {
+          c.moveTo(border.pieces[0]!.from.x, border.pieces[0]!.from.y);
+          for (const p of border.pieces) c.bezierCurveTo(p.c1.x, p.c1.y, p.c2.x, p.c2.y, p.to.x, p.to.y);
+        } else {
+          border.points.forEach((p, i) => (i === 0 ? c.moveTo(p.x, p.y) : c.lineTo(p.x, p.y)));
+          if (border.closed) c.closePath();
+        }
       }
+      c.stroke();
       c.fillStyle = "#475569";
       c.textAlign = "center";
       c.textBaseline = "middle";
