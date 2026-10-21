@@ -224,6 +224,18 @@ export class EventRouter {
     }
   }
 
+  /** Cancel a host gesture without synthesizing a click (multi-touch, capture loss). */
+  pointerCancel(): void {
+    const press = this.press;
+    this.press = null;
+    if (press) {
+      const input = { x: press.startScreen.x, y: press.startScreen.y };
+      this.dispatch("up", press.target, input, press.startScreen, {}, press.path);
+      this.updateHover([], input);
+    }
+    this.lastPointer = null;
+  }
+
   /** The pointer left the host element: everything hovered is left. */
   pointerLeave(input: PointerInput): void {
     this.lastPointer = null;
