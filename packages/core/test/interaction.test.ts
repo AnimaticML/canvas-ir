@@ -187,3 +187,25 @@ describe("event router", () => {
     expect(log).toEqual(["down@*:-"]);
   });
 });
+
+describe("pointer cancellation", () => {
+  test("cancels a press without a click and permits the next press", () => {
+    const scene = new Scene(drawing());
+    const router = new EventRouter(scene);
+    const events: string[] = [];
+    router.on("badge", "up", () => events.push("up"));
+    router.on("badge", "click", () => events.push("click"));
+    router.pointerDown({ x: 50, y: 50 });
+    router.pointerCancel();
+    router.pointerUp({ x: 50, y: 50 });
+    expect(events.filter(e => e === "click")).toHaveLength(0);
+    expect(events).toContain("up");
+    router.pointerDown({ x: 50, y: 50 });
+    router.pointerUp({ x: 50, y: 50 });
+    expect(events.filter(e => e === "click")).toHaveLength(1);
+  });
+  test("cancellation is safe when no pointer is pressed", () => {
+    const router = new EventRouter(new Scene(drawing()));
+    expect(() => {router.pointerCancel();router.pointerCancel();}).not.toThrow();
+  });
+});
