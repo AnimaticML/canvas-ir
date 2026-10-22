@@ -109,14 +109,26 @@ export const removeMicroLoops = (input: readonly CubicPiece[], size: number, clo
         const width = Math.max(...points.map(p => p.x)) - Math.min(...points.map(p => p.x));
         const height = Math.max(...points.map(p => p.y)) - Math.min(...points.map(p => p.y));
         if (Math.max(width, height) > size || Math.max(width, height) < 1e-6) continue;
-        // A wholly microscopic window can become a straight connector rather
-        // than leaving a near-cusp immediately beside the removed crossing.
-        // Large curves are split exactly; their unaffected portions stay intact.
+        // Preserve both end tangents, including at shared junctions. A straight
+        // shortcut changes their turning order and can force neighboring waves
+        // through the topology guard's coarse fallback.
         const window = pieces.slice(i, j + 1);
         let replacement: CubicPiece[];
         if (span(window.flatMap(curveExtent)) <= size && Math.hypot(pieces[i]!.from.x - pieces[j]!.to.x, pieces[i]!.from.y - pieces[j]!.to.y) > 1e-8) {
-          const from = pieces[i]!.from, to = pieces[j]!.to;
-          replacement = [...pieces.slice(0, i), { from, c1: from, c2: to, to }, ...pieces.slice(j + 1)];
+          const first = pieces[i]!, last = pieces[j]!, from = first.from, to = last.to;
+          const chord = Math.hypot(to.x - from.x, to.y - from.y);
+          const direction = (a: Point, b: Point, fallback: Point): Point => {
+            const length = Math.hypot(b.x - a.x, b.y - a.y);
+            return length > 1e-10 ? { x: (b.x - a.x) / length, y: (b.y - a.y) / length } : fallback;
+          };
+          const fallback = { x: (to.x - from.x) / chord, y: (to.y - from.y) / chord };
+          const incoming = direction(from, first.c1, direction(from, first.c2, fallback));
+          const outgoing = direction(last.c2, to, direction(last.c1, to, fallback));
+          const handle = chord / 4;
+          const connector = { from, c1: { x: from.x + incoming.x * handle, y: from.y + incoming.y * handle },
+            c2: { x: to.x - outgoing.x * handle, y: to.y - outgoing.y * handle }, to };
+          if (selfCrossing(connector).length) continue;
+          replacement = [...pieces.slice(0, i), connector, ...pieces.slice(j + 1)];
         } else {
           const prefix = split(pieces[i]!, t)[0], suffix = split(pieces[j]!, u)[1];
           const join = mix(prefix.to, suffix.from, 0.5);

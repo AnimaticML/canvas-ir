@@ -291,9 +291,18 @@ self-intersections inside a cubic or across up to four neighboring pieces.
 Single-cubic loops are solved analytically; crossings between pieces use
 curvature-bounded sampling followed by Newton refinement. Only loops fitting
 inside the requested size are removed. If the entire intersecting window is
-microscopic it becomes a straight connector; otherwise the unaffected portions
+microscopic it becomes a tangent-preserving curved connector; otherwise the unaffected portions
 are kept by exact Bézier splitting. Open endpoints stay fixed, regular tiny
 holes and long narrow shapes are not removed, and closed-ring winding and at
 least half its signed area are retained. This is independent of smoothing and
 `detourSize`, disabled by default. Shared-border intersection guards still run.
 The standalone helper is `removeMicroLoops`.
+
+`traceBorders(..., { curves: true, localFallback: true })` limits topology
+fallback to source-anchored curve groups. An intersection near a junction no
+longer coarsens a distant wave on the same shared border. Artificial joins keep
+the original tangent directions where curved fitting is safe; exact pixel edges
+remain the final local fallback. Default false preserves existing behavior.
+Microscopic loop connectors preserve incoming and outgoing tangents rather than
+replacing the entire window with a straight chord. Canonical labels and shared
+border/ring IDs remain unchanged.
