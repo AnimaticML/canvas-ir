@@ -269,3 +269,19 @@ bun run test:pixel   # needs Chromium; set CHROMIUM_PATH if Playwright can't fin
 ```
 
 `packages/core` is the library, `packages/text` the text layout layer on top of it, `packages/physics` the physics layer, `packages/vectorize` the vectorizer experiment, `packages/pixel` holds the browser checks, and `packages/playground` is a demo app that depends on both libraries. After changing a text fixture, run `bun run --cwd packages/pixel capture-text` to capture its measurements and layout from Chromium for the Bun tests. Tooling depends on the libraries, never the reverse. `SVG_DEBUG=<drawing name>` on the pixel run writes that drawing's SVG export and both renderings to `SVG_DEBUG_DIR`.
+
+### Optional short-detour cleanup for shared borders
+
+`traceBorders(map, { curves: true, tolerance: 1.2, cornerAngle: 90,
+ detourSize: 2.5 })` can remove tiny hairpins before curve fitting. The default
+`detourSize: 0` retains existing behavior. A shortcut requires a neck no wider
+than the requested size, an excursion bounded by four times that size, and a
+path length bounded by twelve times the size. Long thin limbs or strokes are
+not removed merely because they are narrow. Junction endpoints stay fixed;
+closed rings retain winding and at least half their area. Both regions use the
+same modified border. Existing intersection/junction checks reduce the cleanup
+or return to exact edges where necessary. Canonical labels and region IDs are
+unchanged; applications should hit-test the resulting paths when selecting
+what is visibly painted. Cleanup intentionally permits more displacement than
+the ordinary fitting tolerance. `simplifyDetours` exposes the polyline operation
+separately, without a region topology guarantee.

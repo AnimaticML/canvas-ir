@@ -3,7 +3,7 @@
 // and used forwards by one region and backwards by the other, so neighbours
 // never open a gap or overlap where they meet.
 import type { Point } from "../types";
-import { type CubicPiece, type CurveTarget, fitCurve, isStraight, simplifyPolyline } from "./curves";
+import { type CubicPiece, type CurveTarget, fitCurve, isStraight, simplifyDetours, simplifyPolyline } from "./curves";
 import { type PixelBox, simplifyRing, traceMask } from "./trace";
 
 export interface Region {
@@ -139,7 +139,7 @@ export interface Border {
   readonly closed: boolean;
   /** The exact border, along pixel edges, every corner kept. A closed border repeats no point. */
   readonly exact: readonly Point[];
-  /** The border simplified to within the tolerance, its ends (junctions) kept where they are; less smooth (down to exact) where simplifying would cross another border. */
+  /** The border simplified to within the tolerance (after optional detour cleanup), its ends (junctions) kept where they are; less smooth (down to exact) where simplifying would cross another border. */
   readonly points: readonly Point[];
   /** With curves: the border as cubic pieces, ends kept. */
   readonly pieces?: readonly CubicPiece[];
@@ -152,6 +152,12 @@ export interface BorderUse {
 }
 
 export interface BorderOptions {
+  /** Optional local hairpin cleanup in image units, default 0 (disabled).
+   * A neck at most this wide may be shortcut only if its whole excursion fits
+   * within four times this size. Junctions and long thin features stay fixed.
+   * The extra deviation can exceed `tolerance`; crossing guards still apply.
+   */
+  readonly detourSize?: number;
   /** How far, in pixels, a simplified border may stray from the pixel edges. Default 0.75; 0 keeps them exact. */
   readonly tolerance?: number;
   /** Also fit cubic curves to each border, within `tolerance + 0.5`. Default false. */
@@ -215,7 +221,7 @@ export const traceBorders = (map: RegionMap, options: BorderOptions = {}): Regio
    * borders that crossed a neighbour at the level before.
    */
   const smooth = (exact: readonly Point[], closed: boolean, level = 0): { points: Point[]; pieces?: CubicPiece[] } => {
-    if ((tolerance <= 0 && !options.curves) || level >= 4) return { points: collinear(exact, closed) };
+    if ((tolerance <= 0 && !options.curves && !((options.detourSize ?? 0) > 0)) || level >= 4) return { points: collinear(exact, closed) };
     const tol = level === 0 ? tolerance : level === 1 ? tolerance / 2 : Math.min(tolerance, 0.3);
     const curves = options.curves && level < 3;
     const n = exact.length;
@@ -227,7 +233,9 @@ export const traceBorders = (map: RegionMap, options: BorderOptions = {}): Regio
       return !prev || !next || !alongFrame(prev, p) || !alongFrame(p, next) || (prev.x !== next.x && prev.y !== next.y);
     };
     const anchors = exact.map((_, i) => i).filter(anchor);
-    const fit = (edges: readonly Point[], ring: boolean): { points: Point[]; pieces: CubicPiece[] | undefined } => {
+    const fit = (original: readonly Point[], ring: boolean): { points: Point[]; pieces: CubicPiece[] | undefined } => {
+      const detour = level < 2 ? (options.detourSize ?? 0) / (level === 1 ? 2 : 1) : 0;
+      const edges = detour > 0 ? simplifyDetours(original, detour, ring) : original;
       // Each pixel edge's midpoint, the ends kept: corners cut by at most half a pixel.
       const mid = edges.slice(0, ring ? edges.length : edges.length - 1).map((p, i) => {
         const q = edges[(i + 1) % edges.length]!;
@@ -312,7 +320,7 @@ export const traceBorders = (map: RegionMap, options: BorderOptions = {}): Regio
     const left = dx === 1 ? label(a.x, a.y - 1) : dx === -1 ? label(a.x - 1, a.y) : dy === 1 ? label(a.x, a.y) : label(a.x - 1, a.y - 1);
     borders.push({ id: borders.length, left, right, closed, exact, ...smooth(exact, closed) });
   }
-  if (tolerance > 0 || options.curves) untangle(borders, smooth);
+  if (tolerance > 0 || options.curves || (options.detourSize ?? 0) > 0) untangle(borders, smooth);
 
   // Each region's rings: its borders, oriented so it is on their right, chained end to start.
   const uses = map.regions.map(() => [] as BorderUse[]);

@@ -79,6 +79,7 @@ export {
   isStraight,
   pieceAt,
   simplifyPolyline,
+  simplifyDetours,
   smoothPolyline,
   traceCurve,
 } from "./geometry/curves";
