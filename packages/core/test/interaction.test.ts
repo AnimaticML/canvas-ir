@@ -198,14 +198,32 @@ describe("pointer cancellation", () => {
     router.pointerDown({ x: 50, y: 50 });
     router.pointerCancel();
     router.pointerUp({ x: 50, y: 50 });
-    expect(events.filter(e => e === "click")).toHaveLength(0);
+    expect(events.filter((e) => e === "click")).toHaveLength(0);
     expect(events).toContain("up");
     router.pointerDown({ x: 50, y: 50 });
     router.pointerUp({ x: 50, y: 50 });
-    expect(events.filter(e => e === "click")).toHaveLength(1);
+    expect(events.filter((e) => e === "click")).toHaveLength(1);
   });
   test("cancellation is safe when no pointer is pressed", () => {
     const router = new EventRouter(new Scene(drawing()));
-    expect(() => {router.pointerCancel();router.pointerCancel();}).not.toThrow();
+    expect(() => {
+      router.pointerCancel();
+      router.pointerCancel();
+    }).not.toThrow();
+  });
+  test("cancelling a drag ends it where it last was, with no click", () => {
+    const scene = new Scene(drawing());
+    const router = new EventRouter(scene);
+    const events: string[] = [];
+    router.on("badge", "dragstart", () => events.push("dragstart"));
+    router.on("badge", "dragend", (e) => events.push(`dragend ${e.total!.x},${e.total!.y}`));
+    router.on("badge", "up", () => events.push("up"));
+    router.on("badge", "click", () => events.push("click"));
+    router.pointerDown({ x: 50, y: 50 });
+    router.pointerMove({ x: 70, y: 60 });
+    router.pointerCancel();
+    expect(events).toEqual(["dragstart", "dragend 20,10", "up"]);
+    router.pointerUp({ x: 70, y: 60 });
+    expect(events).not.toContain("click");
   });
 });

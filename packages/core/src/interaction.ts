@@ -224,14 +224,23 @@ export class EventRouter {
     }
   }
 
-  /** Cancel a host gesture without synthesizing a click (multi-touch, capture loss). */
+  /**
+   * Cancels the gesture under way without a click, as when a second finger
+   * turns a tap into a pinch or the browser fires `pointercancel`. A drag
+   * under way ends (`dragend`, where it last was), the pressed target gets
+   * `up`, and nothing is hovered. Safe to call with nothing pressed.
+   */
   pointerCancel(): void {
     const press = this.press;
     this.press = null;
     if (press) {
-      const input = { x: press.startScreen.x, y: press.startScreen.y };
-      this.dispatch("up", press.target, input, press.startScreen, {}, press.path);
-      this.updateHover([], input);
+      const at = this.lastPointer ?? { x: press.startScreen.x, y: press.startScreen.y };
+      const screen = { x: at.x, y: at.y };
+      if (press.dragging) {
+        this.dispatch("dragend", press.target, at, screen, { delta: { x: 0, y: 0 }, total: sub(press.lastWorld, press.startWorld) }, press.path);
+      }
+      this.dispatch("up", press.target, at, screen, {}, press.path);
+      this.updateHover([], at);
     }
     this.lastPointer = null;
   }

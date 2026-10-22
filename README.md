@@ -75,7 +75,7 @@ const router = new EventRouter(scene, { view }); // view: world to host pixels
 router.on("badge", "drag", (e) => scene.transform("badge", { a: 1, b: 0, c: 0, d: 1, e: e.delta!.x, f: e.delta!.y }));
 router.on("*", "click", (e) => console.log(e.target, e.path)); // op id, then its groups
 canvas.addEventListener("pointerdown", (e) => router.pointerDown({ x: e.offsetX, y: e.offsetY }));
-// ...and pointerMove, pointerUp, pointerLeave, wheel, keyDown, keyUp
+// ...and pointerMove, pointerUp, pointerLeave, pointerCancel (a pinch or pointercancel: no click), wheel, keyDown, keyUp
 
 const svg = toSVG(scene.document, { width: 800, height: 600 });
 ```
