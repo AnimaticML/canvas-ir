@@ -141,3 +141,5 @@ export {
   traceRegion,
   traceRegionPath,
 } from "./geometry/regions";
+
+export { removeMicroLoops } from "./geometry/micro-loops";

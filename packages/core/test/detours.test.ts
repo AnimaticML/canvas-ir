@@ -49,7 +49,7 @@ test("opt-in cleanup still tiles around close borders, junctions and holes",()=>
   }
   const map=labelRegions(width,height,values);
   for(const curves of [false,true]) {
-    const outlines=traceBorders(map,{tolerance:1.2,cornerAngle:90,detourSize:2.5,curves});
+    const outlines=traceBorders(map,{tolerance:1.2,cornerAngle:90,detourSize:2.5,microLoopSize:2.5,curves});
     const ctx=new RecordingContext();
     for(const r of map.regions){ctx.beginGroup({id:`r${r.id}`});ctx.beginPath();traceRegionPath(ctx,outlines,r.id);ctx.fill();ctx.endGroup();}
     const scene=new Scene(ctx.getDocument()); let misses=0;

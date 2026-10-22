@@ -2,6 +2,7 @@
 // border between two regions shared: simplified or fitted with curves once,
 // and used forwards by one region and backwards by the other, so neighbours
 // never open a gap or overlap where they meet.
+import { removeMicroLoops } from "./micro-loops";
 import type { Point } from "../types";
 import { type CubicPiece, type CurveTarget, fitCurve, isStraight, simplifyDetours, simplifyPolyline } from "./curves";
 import { type PixelBox, simplifyRing, traceMask } from "./trace";
@@ -158,6 +159,9 @@ export interface BorderOptions {
    * The extra deviation can exceed `tolerance`; crossing guards still apply.
    */
   readonly detourSize?: number;
+  /** Remove only actual fitted self-intersection loops bounded by this size.
+   * Default 0 (disabled); does not change smoothing tolerance or map labels. */
+  readonly microLoopSize?: number;
   /** How far, in pixels, a simplified border may stray from the pixel edges. Default 0.75; 0 keeps them exact. */
   readonly tolerance?: number;
   /** Also fit cubic curves to each border, within `tolerance + 0.5`. Default false. */
@@ -247,9 +251,10 @@ export const traceBorders = (map: RegionMap, options: BorderOptions = {}): Regio
       // Long borders: the pixel edges themselves, corners found a few pixels each way, so a staircase reads as a curve.
       // Short ones, a few pixels between junctions, have no room to find corners: their cut corners are fitted.
       const short = edges.length <= 12;
-      const pieces = curves
+      const fitted = curves
         ? fitCurve(level >= 2 || short ? cut : collinear(edges, ring), level >= 2 ? tol : short ? tol + 0.25 : tol + 0.5, { closed: ring, cornerAngle: options.cornerAngle ?? 50, cornerWindow: short ? 1 : 3 })
         : undefined;
+      const pieces = fitted && (options.microLoopSize ?? 0) > 0 ? removeMicroLoops(fitted, options.microLoopSize!, ring) : fitted;
       return { points, pieces };
     };
     if (closed && anchors.length === 0) {

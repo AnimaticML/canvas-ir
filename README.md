@@ -285,3 +285,15 @@ unchanged; applications should hit-test the resulting paths when selecting
 what is visibly painted. Cleanup intentionally permits more displacement than
 the ordinary fitting tolerance. `simplifyDetours` exposes the polyline operation
 separately, without a region topology guarantee.
+
+`traceBorders(..., { microLoopSize: 3.25 })` optionally repairs actual fitted
+self-intersections inside a cubic or across up to four neighboring pieces.
+Single-cubic loops are solved analytically; crossings between pieces use
+curvature-bounded sampling followed by Newton refinement. Only loops fitting
+inside the requested size are removed. If the entire intersecting window is
+microscopic it becomes a straight connector; otherwise the unaffected portions
+are kept by exact Bézier splitting. Open endpoints stay fixed, regular tiny
+holes and long narrow shapes are not removed, and closed-ring winding and at
+least half its signed area are retained. This is independent of smoothing and
+`detourSize`, disabled by default. Shared-border intersection guards still run.
+The standalone helper is `removeMicroLoops`.
