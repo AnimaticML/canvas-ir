@@ -58,3 +58,16 @@ test("opt-in cleanup still tiles around close borders, junctions and holes",()=>
     expect(map.regions.length).toBe(4);
   }
 });
+
+test("a pixel-sampled long thin limb is not shortened one local tip at a time",()=>{
+  const sparse=hairpin.map(p=>({...p,y:p.y*4}));
+  const dense: {x:number;y:number}[]=[];
+  for(let i=0;i<sparse.length-1;i++){
+    const a=sparse[i]!,b=sparse[i+1]!,n=Math.max(Math.abs(b.x-a.x),Math.abs(b.y-a.y));
+    for(let k=0;k<n;k++)dense.push({x:a.x+(b.x-a.x)*k/n,y:a.y+(b.y-a.y)*k/n});
+  }
+  dense.push(sparse.at(-1)!);
+  const next=simplifyDetours(dense,2.5);
+  expect(Math.max(...next.map(p=>p.y))).toBe(28);
+  expect(next.some(p=>p.x===10&&p.y===24)).toBe(true);
+});
