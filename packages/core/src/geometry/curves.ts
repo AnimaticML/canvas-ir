@@ -118,7 +118,13 @@ export const simplifyDetours = (points: readonly Point[], size: number, closed =
         y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y);
         if (x1 - x0 > size * 4 || y1 - y0 > size * 4 || travel > size * 12) break;
         const chord = length(sub(p, line[i]!));
-        if (chord <= size && chord > 0 && travel > chord * 3 + size &&
+        // A long thin feature also has a small loop at its tip. Do not shave
+        // successive pieces off it: incoming/outgoing tangents at a legitimate
+        // local detour continue in the same direction, not back along its neck.
+        const before = i > 0 ? line[i - 1] : closed ? line.at(-1) : undefined;
+        const after = j + 1 < line.length ? line[j + 1] : closed ? line[0] : undefined;
+        const continues = !before || !after || dot(unit(sub(line[i]!, before)), unit(sub(after, p))) >= 0.25;
+        if (continues && chord <= size && chord > 0 && travel > chord * 3 + size &&
             Math.max(x1 - x0, y1 - y0) > size &&
             (!closed || out.length + line.length - j >= 4)) end = j;
       }
