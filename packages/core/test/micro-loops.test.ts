@@ -53,10 +53,20 @@ test("a loop straddling a closed border seam is repaired without opening the rin
   for(let i=0;i<next.length;i++)expect(next[i]!.to).toEqual(next[(i+1)%next.length]!.from);
 });
 
-test("only a wholly microscopic intersecting window becomes a simple connector",()=>{
+test("only a wholly microscopic intersecting window becomes a smooth tangent-preserving connector",()=>{
   const next=removeMicroLoops(pair,3.25);
   expect(next).toHaveLength(1);
-  expect(isStraight(next[0]!)).toBe(true);
+  expect(isStraight(next[0]!)).toBe(false);
   expect(next[0]!.from).toEqual(pair[0]!.from);
   expect(next[0]!.to).toEqual(pair[1]!.to);
+});
+
+test("a repaired microscopic window preserves its incoming and outgoing tangent directions",()=>{
+  const next=removeMicroLoops(pair,3.25)[0]!;
+  const cross=(a:{x:number;y:number},b:{x:number;y:number})=>a.x*b.y-a.y*b.x;
+  const a={x:pair[0]!.c1.x-pair[0]!.from.x,y:pair[0]!.c1.y-pair[0]!.from.y};
+  const b={x:pair[1]!.to.x-pair[1]!.c2.x,y:pair[1]!.to.y-pair[1]!.c2.y};
+  expect(Math.abs(cross(a,{x:next.c1.x-next.from.x,y:next.c1.y-next.from.y}))).toBeLessThan(1e-8);
+  expect(Math.abs(cross(b,{x:next.to.x-next.c2.x,y:next.to.y-next.c2.y}))).toBeLessThan(1e-8);
+  expect(crossings([next])).toBe(0);
 });

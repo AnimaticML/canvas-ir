@@ -153,6 +153,9 @@ export interface BorderUse {
 }
 
 export interface BorderOptions {
+  /** Refine only source-anchored curve groups that fail topology checks,
+   * keeping distant wave pieces unchanged. Default false. */
+  readonly localFallback?: boolean;
   /** Optional local hairpin cleanup in image units, default 0 (disabled).
    * A neck at most this wide may be shortcut only if its whole excursion fits
    * within four times this size. Junctions and long thin features stay fixed.
@@ -325,7 +328,10 @@ export const traceBorders = (map: RegionMap, options: BorderOptions = {}): Regio
     const left = dx === 1 ? label(a.x, a.y - 1) : dx === -1 ? label(a.x - 1, a.y) : dy === 1 ? label(a.x, a.y) : label(a.x - 1, a.y - 1);
     borders.push({ id: borders.length, left, right, closed, exact, ...smooth(exact, closed) });
   }
-  if (tolerance > 0 || options.curves || (options.detourSize ?? 0) > 0) untangle(borders, smooth);
+  if (tolerance > 0 || options.curves || (options.detourSize ?? 0) > 0) {
+    if (options.localFallback && options.curves) untangleLocal(borders, smooth);
+    else untangle(borders, smooth);
+  }
 
   // Each region's rings: its borders, oriented so it is on their right, chained end to start.
   const uses = map.regions.map(() => [] as BorderUse[]);
@@ -498,6 +504,94 @@ const untangle = (borders: Border[], smooth: (exact: readonly Point[], closed: b
     }
     if (!changed) return;
   }
+};
+
+/** Split the topology check at existing source-anchored curve joins. The
+ * temporary groups never become region IDs or ring edges: only the failed
+ * groups are re-fitted, then reassembled into the original shared borders. */
+const untangleLocal = (borders: Border[], smooth: (exact: readonly Point[], closed: boolean, level: number) => { points: Point[]; pieces?: CubicPiece[] }): void => {
+  const chunks: Border[] = [], owners: number[][] = borders.map(() => []);
+  const joins = new WeakMap<readonly Point[], { first?: CubicPiece; last?: CubicPiece }>();
+  const key = (p: Point): string => `${p.x},${p.y}`;
+  for (const border of borders) {
+    const pieces = border.pieces;
+    const append = (exact: readonly Point[], closed: boolean, curves?: readonly CubicPiece[], keepStart = false, keepEnd = false): void => {
+      const id = chunks.length;
+      const partial: Border = { id, left: border.left, right: border.right, exact, closed, points: exact, ...(curves ? { pieces: curves } : {}) };
+      const points = curves ? drawnSegments(partial) : [...exact];
+      if (closed && points.length > 1 && key(points[0]!) === key(points.at(-1)!)) points.pop();
+      chunks.push({ ...partial, points }); owners[border.id]!.push(id);
+      if (curves?.length) joins.set(exact, { ...(keepStart ? { first: curves[0]! } : {}), ...(keepEnd ? { last: curves.at(-1)! } : {}) });
+    };
+    if (!pieces?.length) { append(border.exact, border.closed); continue; }
+    const n = border.exact.length, positions = new Map<string, number[]>();
+    border.exact.forEach((p, i) => { const list = positions.get(key(p)) ?? []; list.push(i); positions.set(key(p), list); });
+    const start = positions.get(key(pieces[0]!.from))?.[0];
+    if (start === undefined || (!border.closed && start !== 0)) { append(border.exact, border.closed, pieces); continue; }
+    const groups: { exact: Point[]; curves: CubicPiece[] }[] = [];
+    let cursor = start, consumed = 0, first = 0;
+    const total = border.closed ? n : n - 1;
+    for (let i = 0; i < pieces.length; i++) {
+      const ends = positions.get(key(pieces[i]!.to));
+      if (!ends) continue;
+      let target = -1, step = Infinity;
+      for (const end of ends) {
+        let distance = border.closed ? (end - cursor + n) % n : end - cursor;
+        if (distance === 0 && border.closed && i === pieces.length - 1) distance = total - consumed;
+        if (distance > 0 && consumed + distance <= total && distance < step) { step = distance; target = end; }
+      }
+      if (target < 0) continue;
+      groups.push({ exact: Array.from({ length: step + 1 }, (_, k) => border.exact[(cursor + k) % n]!), curves: pieces.slice(first, i + 1) });
+      cursor = target; consumed += step; first = i + 1;
+    }
+    if (first !== pieces.length || consumed !== total) { append(border.exact, border.closed, pieces); continue; }
+    groups.forEach((group, i) => {
+      const closed = border.closed && groups.length === 1;
+      append(closed ? group.exact.slice(0, -1) : group.exact, closed, group.curves,
+        !closed && (border.closed || i > 0), !closed && (border.closed || i + 1 < groups.length));
+    });
+  }
+  const initial = [...chunks];
+  untangle(chunks, (exact, closed, level) => {
+    const result = smooth(exact, closed, level), keep = joins.get(exact);
+    if (level >= 3 || !result.pieces?.length || !keep) return result;
+    const pieces = [...result.pieces];
+    const align = (original: CubicPiece, fitted: CubicPiece, start: boolean): CubicPiece => {
+      const origin = start ? original.from : original.to;
+      const control = start ? original.c1 : original.c2;
+      const alternative = start ? original.c2 : original.c1;
+      let dx = control.x - origin.x, dy = control.y - origin.y;
+      if (Math.hypot(dx, dy) < 1e-10) { dx = alternative.x - origin.x; dy = alternative.y - origin.y; }
+      const length = Math.hypot(dx, dy);
+      if (length < 1e-10) return fitted;
+      const end = start ? fitted.from : fitted.to, handle = start ? fitted.c1 : fitted.c2;
+      const distance = Math.min(length, Math.hypot(handle.x - end.x, handle.y - end.y));
+      const point = { x: end.x + dx / length * distance, y: end.y + dy / length * distance };
+      return start ? { ...fitted, c1: point } : { ...fitted, c2: point };
+    };
+    if (keep.first) pieces[0] = align(keep.first, pieces[0]!, true);
+    if (keep.last) pieces[pieces.length - 1] = align(keep.last, pieces.at(-1)!, false);
+    return { ...result, pieces };
+  });
+  borders.forEach((border, index) => {
+    const ids = owners[index]!;
+    if (ids.every(id => chunks[id] === initial[id])) return;
+    const points: Point[] = [], pieces: CubicPiece[] = [];
+    for (const id of ids) {
+      const chunk = chunks[id]!;
+      points.push(...(points.length ? chunk.points.slice(1) : chunk.points));
+      if (chunk.pieces?.length) pieces.push(...chunk.pieces);
+      else {
+        const line = chunk.closed ? [...chunk.points, chunk.points[0]!] : chunk.points;
+        for (let i = 0; i + 1 < line.length; i++) {
+          const from = line[i]!, to = line[i + 1]!;
+          pieces.push({ from, c1: { x: from.x + (to.x - from.x) / 3, y: from.y + (to.y - from.y) / 3 }, c2: { x: from.x + (to.x - from.x) * 2 / 3, y: from.y + (to.y - from.y) * 2 / 3 }, to });
+        }
+      }
+    }
+    if (border.closed && points.length > 1 && key(points[0]!) === key(points.at(-1)!)) points.pop();
+    borders[index] = { ...border, points, pieces };
+  });
 };
 
 /** Drops points in the middle of straight runs, keeping every corner: the exact outline with fewer points. */
