@@ -90,6 +90,56 @@ export const simplifyPolyline = (points: readonly Point[], tolerance: number, cl
 };
 
 /**
+ * Shortcuts local hairpins whose neck is at most `size` wide and whose entire
+ * excursion fits in a box of side `4 * size`. Long thin features are retained.
+ * This intentionally removes detail, unlike a distance-bounded simplifier.
+ * Open endpoints are fixed; closed rings retain their winding and at least half
+ * their signed area. Use shared-border intersection checks before filling areas.
+ */
+export const simplifyDetours = (points: readonly Point[], size: number, closed = false): Point[] => {
+  let pts = dedupePoints(points, closed);
+  if (!Number.isFinite(size) || size <= 0 || pts.length < 4) return pts;
+  const area = (line: readonly Point[]): number => line.reduce((sum, p, i) => {
+    const q = line[(i + 1) % line.length]!;
+    return sum + p.x * q.y - q.x * p.y;
+  }, 0);
+  const originalArea = closed ? area(pts) : 0;
+  const run = (line: readonly Point[]): Point[] => {
+    const out: Point[] = [];
+    for (let i = 0; i < line.length; i++) {
+      out.push(line[i]!);
+      let end = i;
+      let travel = 0;
+      let x0 = line[i]!.x, x1 = x0, y0 = line[i]!.y, y1 = y0;
+      for (let j = i + 1; j < line.length; j++) {
+        const p = line[j]!;
+        travel += length(sub(p, line[j - 1]!));
+        x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x);
+        y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y);
+        if (x1 - x0 > size * 4 || y1 - y0 > size * 4 || travel > size * 12) break;
+        const chord = length(sub(p, line[i]!));
+        if (chord <= size && chord > 0 && travel > chord * 3 + size &&
+            Math.max(x1 - x0, y1 - y0) > size &&
+            (!closed || out.length + line.length - j >= 4)) end = j;
+      }
+      if (end > i) i = end - 1;
+    }
+    return out;
+  };
+  for (let pass = 0; pass < (closed ? 2 : 1); pass++) {
+    const next = run(pts);
+    const nextArea = closed ? area(next) : 0;
+    if (!closed || (next.length >= 4 && nextArea * originalArea > 0 && Math.abs(nextArea) >= Math.abs(originalArea) * 0.5)) pts = next;
+    // Expose detours straddling the arbitrary seam of a closed ring.
+    if (closed && pass === 0) {
+      const mid = Math.floor(pts.length / 2);
+      pts = [...pts.slice(mid), ...pts.slice(0, mid)];
+    }
+  }
+  return pts;
+};
+
+/**
  * A smooth curve through every point: centripetal Catmull–Rom, as cubic
  * pieces. It doesn't overshoot into loops or cusps on uneven spacing, and with
  * `closed` it joins the last point back to the first smoothly.
