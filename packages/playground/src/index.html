@@ -43,70 +43,43 @@
       * {
         box-sizing: border-box;
       }
+      html,
+      body {
+        height: 100%;
+      }
       body {
         margin: 0;
         background: var(--bg);
         color: var(--text);
-        font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-      }
-      header {
         display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        align-items: center;
-        padding: 12px 16px;
-        border-bottom: 1px solid var(--border);
-        background: var(--panel);
+        flex-direction: column;
+        overflow: hidden;
       }
-      .game-link {
-        background: #f97316;
-        color: #ffffff;
-        font-weight: 600;
-        text-decoration: none;
-        border-radius: 6px;
-        padding: 5px 12px;
-      }
-      .game-link:hover {
-        background: #ea580c;
-      }
-      header h1 {
-        font-size: 15px;
-        margin: 0 12px 0 0;
-      }
-      button {
-        font: inherit;
-        color: inherit;
-        background: transparent;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 4px 10px;
-        cursor: pointer;
-      }
-      button:hover {
-        border-color: var(--accent);
-      }
-      .spacer {
-        flex: 1;
+      /* Everything you see is canvas: the toolbar, the board and the side panel. */
+      #toolbar {
+        display: block;
+        width: 100%;
+        height: 52px;
+        flex: none;
       }
       main {
+        flex: 1;
+        min-height: 0;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 300px;
-        gap: 16px;
-        padding: 16px;
+        grid-template-columns: minmax(0, 1fr) 320px;
       }
       @media (max-width: 760px) {
         main {
           grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: minmax(0, 1fr) 45%;
         }
       }
       #stage {
         position: relative;
-        border: 1px solid var(--border);
-        border-radius: 8px;
         overflow: hidden;
         background: var(--board);
-        height: min(70vh, 640px);
         touch-action: none;
+        min-height: 0;
       }
       #stage canvas {
         position: absolute;
@@ -117,252 +90,26 @@
       #stage #overlay {
         pointer-events: none;
       }
-      .tools {
-        display: inline-flex;
-        gap: 4px;
-        align-items: center;
-        margin-right: 8px;
-      }
-      .tools button.active {
-        background: var(--accent);
-        color: white;
-      }
-      .tools input[type="range"] {
-        width: 70px;
-      }
-      .tooltip {
-        position: absolute;
-        pointer-events: none;
-        background: #111827;
-        color: white;
-        font: 12px system-ui, sans-serif;
-        padding: 4px 8px;
-        border-radius: 4px;
-        white-space: pre;
-        z-index: 3;
-      }
-      .tooltip[hidden] {
-        display: none;
-      }
-      .text-editor {
-        position: absolute;
-        font: 18px system-ui, sans-serif;
-        min-width: 160px;
-        min-height: 28px;
-        border: 1px dashed var(--accent);
-        background: transparent;
-        resize: none;
-        outline: none;
-        z-index: 2;
+      #side {
+        display: block;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        border-left: 1px solid var(--border);
+        touch-action: none;
       }
       .canvas-ir-a11y :focus-visible {
         outline: 2px solid var(--accent);
         outline-offset: 3px;
         border-radius: 4px;
       }
-      #a11y-tree {
-        max-height: 200px;
-        overflow: auto;
-        font-size: 11px;
-      }
-      #devtools summary {
-        cursor: pointer;
-      }
-      #devtools summary h2 {
-        display: inline;
-      }
-      #op-filter {
-        width: 100%;
-        margin: 8px 0 4px;
-      }
-      #devtools .step {
-        display: flex;
-        gap: 6px;
-        align-items: center;
-      }
-      #devtools .step input {
-        flex: 1;
-      }
-      #op-list {
-        max-height: 260px;
-        overflow: auto;
-        font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        margin: 6px 0;
-      }
-      .op-row {
-        display: grid;
-        grid-template-columns: 3.5em 4.5em minmax(0, 1fr) minmax(0, 1.3fr);
-        gap: 6px;
-        padding: 2px 6px;
-        cursor: pointer;
-        white-space: nowrap;
-      }
-      .op-row span {
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .op-row:hover {
-        background: var(--border);
-      }
-      .op-row.on {
-        background: var(--accent);
-        color: white;
-      }
-      .op-row.dim {
-        opacity: 0.4;
-      }
-      .op-row .n,
-      .op-row .src {
-        color: var(--muted);
-      }
-      .op-row.on .n,
-      .op-row.on .src {
-        color: inherit;
-      }
-      .op-more {
-        padding: 4px 6px;
-        color: var(--muted);
-      }
-      #op-detail {
-        max-height: 240px;
-        overflow: auto;
-        font-size: 11px;
-        white-space: pre-wrap;
-        word-break: break-all;
-      }
-      aside {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        min-width: 0;
-      }
-      section {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 12px;
-      }
-      section h2 {
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: var(--muted);
-        margin: 0 0 8px;
-      }
-      textarea {
-        width: 100%;
-        min-height: 90px;
-        font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
-        background: transparent;
-        color: inherit;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 6px;
-      }
-      pre {
-        margin: 0;
-        white-space: pre-wrap;
-        word-break: break-word;
-        font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
-      }
-      #log {
-        max-height: 160px;
-        overflow: auto;
-        color: var(--muted);
-      }
-      .controls {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        font-size: 13px;
-      }
-      .controls input[type="range"] {
-        vertical-align: middle;
-        width: 120px;
-      }
-      .hint {
-        color: var(--muted);
-        font-size: 12px;
-        margin: 8px 0 0;
-      }
     </style>
   </head>
   <body>
-    <header>
-      <h1>CanvasIR Playground</h1>
-      <span class="tools">
-        <button data-tool="select" class="active" title="Select (V)">Select</button>
-        <button data-tool="pen" title="Pen (P)">Pen</button>
-        <button data-tool="rect" title="Rectangle (R)">Rectangle</button>
-        <button data-tool="ellipse" title="Ellipse (O)">Ellipse</button>
-        <button data-tool="text" title="Text (T)">Text</button>
-        <input type="color" id="tool-fill" value="#fde68a" title="Fill" />
-        <input type="color" id="tool-stroke" value="#1f2937" title="Stroke and text" />
-        <input type="range" id="tool-width" min="1" max="16" value="3" title="Line width" />
-      </span>
-      <span id="samples"></span>
-      <span class="spacer"></span>
-      <a class="game-link" href="./game.html">Play Pelican Ride</a>
-      <button id="vectorize">Vectorize image</button>
-      <button id="export-svg">Export SVG</button>
-      <button id="export-json">Export JSON</button>
-      <button id="reset-view">Reset view</button>
-    </header>
+    <canvas id="toolbar"></canvas>
     <main>
       <div id="stage"><canvas id="board"></canvas><canvas id="overlay"></canvas></div>
-      <aside>
-        <section>
-          <h2>Selection</h2>
-          <pre id="selection">Click something on the board.</pre>
-          <p class="hint">Drag moves an object, or one shape with Alt held; it snaps to other objects (see Snapping) unless Ctrl or Cmd is held. The knob, slider and button drag, click and take arrow keys themselves. Shift-click adds to the selection, and Shift-drag on empty space draws a lasso. Images hit-test, snap and wrap text by their opaque pixels; select the orange sticker and press Vectorize image to turn it into fills. Delete removes the selection. Scroll zooms; drag empty space to pan.</p>
-        </section>
-        <section>
-          <h2>Snapping</h2>
-          <div class="controls">
-            <label><input type="checkbox" id="snap-on" checked /> Snap while dragging</label>
-            <label>Radius <input type="range" id="snap-radius" min="2" max="30" value="8" /> <span id="snap-radius-value">8px</span></label>
-            <label><input type="checkbox" class="snap-kind" value="points" checked /> Corners, centers and crossings</label>
-            <label><input type="checkbox" class="snap-kind" value="bounds" checked /> Bounding boxes</label>
-            <label><input type="checkbox" class="snap-kind" value="path" checked /> Outlines</label>
-            <label><input type="checkbox" id="snap-text" /> Text</label>
-          </div>
-          <p class="hint">Text laid out around what you drag is never a target, since it moves as you drag.</p>
-        </section>
-        <section>
-          <h2>Rendering</h2>
-          <pre id="render-stats">Nothing drawn yet.</pre>
-          <div class="controls">
-            <label><input type="checkbox" id="lod-on" checked /> Simplify what is too small to see</label>
-          </div>
-          <p class="hint">Only what changed is redrawn. While you drag, what lies below and above is cached as two layers. Add 10,000 shapes and zoom out to try it on a big board; small text turns into gray bars and specks are skipped unless you turn simplifying off.</p>
-        </section>
-        <section>
-          <h2>Accessibility</h2>
-          <pre id="a11y-tree"></pre>
-          <p class="hint">Groups name their role and label in their meta; text is read as drawn. The tree is mirrored as DOM over the board for screen readers, so Tab reaches the knob, slider and Reset button, arrows turn them, and Enter presses.</p>
-        </section>
-        <section>
-          <details id="devtools">
-            <summary><h2>Devtools</h2></summary>
-            <input type="search" id="op-filter" placeholder="Filter by kind, id, group or source" />
-            <label class="step">Step <input type="range" id="op-step" min="0" max="0" value="0" /></label>
-            <div id="op-step-label" class="hint"></div>
-            <div id="op-list"></div>
-            <pre id="op-detail"></pre>
-          </details>
-        </section>
-        <section>
-          <h2>Add an SVG</h2>
-          <textarea id="svg-input" spellcheck="false" placeholder="Paste SVG markup"></textarea>
-          <button id="add-svg">Draw it through canvg</button>
-        </section>
-        <section>
-          <h2>Events</h2>
-          <pre id="log"></pre>
-        </section>
-      </aside>
+      <canvas id="side"></canvas>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>

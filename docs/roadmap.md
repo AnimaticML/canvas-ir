@@ -106,4 +106,8 @@ What the library needs for that is incremental updates by group, not an undo sta
 - **Border cleanup (opt-in):** `detourSize` shortcuts hairpins, `microLoopSize` removes fitted micro-loops, and `localFallback` limits the crossing fallback to the part of a border that crossed.
 - **Playground:** paint by numbers, from the built-in painting with a fixed palette or a picture of yours clustered into 6 to 24 colors; numbers sit at each region's point farthest from its edges, and clicks pick regions from the index map.
 
+## Batch 13: canvas-only playground (done)
+
+- **Playground chrome on canvas:** the toolbar and side panels are CanvasIR scenes too, each with its own `Renderer`, `EventRouter` and components: buttons, toggles, sliders, swatches, scrolling text boxes and a text field, laid out again when the width changes. The tooltip and the text tool's editor draw on the overlay. Typing goes through one hidden textarea, so keys, IME and paste work; the rest of the DOM is the file input, the accessibility mirror and the embeds.
+
 Not planned: WebGL or PDF backends, pixel access (`getImageData` and friends), and paints made by another context.

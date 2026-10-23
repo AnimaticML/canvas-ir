@@ -39,16 +39,20 @@ import { GRAPH_ID, type ForceGraph, createGraph, graphButton } from "./graph-dem
 import { PAINT_ID, type PaintSource, paintComponent, paintingSource, pictureSource } from "./paint-demo";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
+import { type Action, Chrome, type Settings } from "./ui/chrome";
+import { type CanvasPanel, textSink } from "./ui/kit";
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 const overlay = document.getElementById("overlay") as HTMLCanvasElement;
 const octx = overlay.getContext("2d")!;
-const renderStats = document.getElementById("render-stats")!;
-const lodOn = document.getElementById("lod-on") as HTMLInputElement;
-const selectionView = document.getElementById("selection")!;
-const logView = document.getElementById("log")!;
+/** What the side panel's controls set. */
+const settings: Settings = { snapOn: true, snapRadius: 8, snapKinds: new Set(["points", "bounds", "path"]), snapText: false, lod: true };
+/** The toolbar and side panel, drawn on canvas; made once the board's parts exist. */
+let chrome: Chrome | null = null;
+/** Where key presses go: the board, or the chrome panel last pressed. */
+let keyTarget: CanvasPanel | null = null;
 
 // Images seen while recording, by the src the IR stores, so replay draws the same objects.
 const images = new Map<string, CanvasImageSource>();
@@ -87,7 +91,6 @@ let renderer = new Renderer(scene, ctx);
 // HTML and WebGL elements of embed ops, beneath the board.
 const embeds = new EmbedLayer(scene, stage, canvas, { create: createEmbed, destroy: destroyEmbed });
 // What screen readers read and Tab reaches: a DOM mirror of the board's roles and text.
-const a11yView = document.getElementById("a11y-tree")!;
 const outlineOf = (nodes: readonly AccessibleNode[], depth = 0): string[] =>
   nodes.flatMap((n) => [`${"  ".repeat(depth)}${n.role}${n.label ? ` "${n.label.length > 48 ? `${n.label.slice(0, 47)}…` : n.label}"` : ""}${n.value !== undefined ? ` = ${n.value}` : ""}`, ...outlineOf(n.children, depth + 1)]);
 const a11y = new AccessibilityLayer(scene, stage, {
@@ -101,15 +104,16 @@ const a11y = new AccessibilityLayer(scene, stage, {
     router.pointerUp({ x: p.x, y: p.y, button: 0 });
   },
   onChange: (tree) => {
-    const lines = outlineOf(tree);
-    a11yView.textContent = lines.length > 60 ? `${lines.slice(0, 60).join("\n")}\n… ${lines.length - 60} more` : lines.join("\n");
+    a11yText = outlineOf(tree).join("\n");
+    chrome?.setText("a11y", a11yText);
   },
 });
+let a11yText = "";
 /** The view and canvas size the renderer last had, so it redraws everything only when they change. */
 let viewKey = "";
 const makeRenderer = (): void => {
   renderer.dispose();
-  renderer = new Renderer(scene, ctx, { images: (src) => images.get(src), ...(lodOn.checked ? {} : { lod: false }) });
+  renderer = new Renderer(scene, ctx, { images: (src) => images.get(src), ...(settings.lod ? {} : { lod: false }) });
   viewKey = "";
 };
 /** Interactive objects (the note, the controls), drawn from their state. */
@@ -119,17 +123,14 @@ let selected: string[] = [];
 let hovered: string | null = null;
 /** The op under the pointer and its groups, innermost first, for chart tooltips. */
 let hoverPath: readonly string[] = [];
-const tooltip = document.createElement("div");
-tooltip.className = "tooltip";
-tooltip.hidden = true;
-stage.append(tooltip);
+/** A chart's datum under the pointer, drawn on the overlay next to it. */
+let tooltip: { text: string; x: number; y: number } | null = null;
 const showTooltip = (screen: { x: number; y: number }): void => {
   const text = hoverPath.length > 0 && !tools.drawing ? datumAt(scene, hoverPath, router.toWorld(screen)) : null;
-  tooltip.hidden = text === null;
-  if (text === null) return;
-  tooltip.textContent = text;
-  tooltip.style.left = `${screen.x + 14}px`;
-  tooltip.style.top = `${screen.y + 14}px`;
+  const next = text === null ? null : { text, x: screen.x + 14, y: screen.y + 14 };
+  if (next?.text === tooltip?.text && next?.x === tooltip?.x && next?.y === tooltip?.y) return;
+  tooltip = next;
+  render();
 };
 /** While dragging objects: what moves, their snap anchors where the drag began, and how far they've moved. */
 let drag: { ids: string[]; anchors: { x: number; y: number }[]; moved: { x: number; y: number } } | null = null;
@@ -149,8 +150,10 @@ const objectOf = (e: RouterEvent): string | null => {
   return e.path[e.path.length - 1] ?? e.target;
 };
 
+let logLines: string[] = [];
 const log = (line: string): void => {
-  logView.textContent = `${line}\n${logView.textContent ?? ""}`.split("\n").slice(0, 40).join("\n");
+  logLines = [line, ...logLines].slice(0, 200);
+  chrome?.setText("log", logLines.join("\n"));
 };
 
 const describe = (id: string): string => {
@@ -212,7 +215,7 @@ const render = (): void => {
   const stats = stepped ? ({ mode: "idle", ops: 0, rects: [] } as const) : renderer.render();
   if (stats.mode !== "idle") {
     const ms = performance.now() - start;
-    renderStats.textContent = `${stats.mode} redraw: ${stats.ops} of ${scene.document.ops.length} ops in ${ms.toFixed(1)} ms${stats.rects.length > 0 ? `, ${stats.rects.length} rect${stats.rects.length > 1 ? "s" : ""}` : ""}`;
+    chrome?.setText("render-stats", `${stats.mode} redraw: ${stats.ops} of ${scene.document.ops.length} ops in ${ms.toFixed(1)} ms${stats.rects.length > 0 ? `, ${stats.rects.length} rect${stats.rects.length > 1 ? "s" : ""}` : ""}`);
   }
   const ctx = octx;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -270,15 +273,31 @@ const render = (): void => {
     ctx.fillStyle = "#e11d48";
     ctx.fillText(snapMark.kind, q.x + r + 2 * dpr, q.y - r);
   }
+  if (tooltip) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.font = "12px system-ui, sans-serif";
+    const lines = tooltip.text.split("\n");
+    const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 16;
+    const h = lines.length * 16 + 8;
+    ctx.fillStyle = "#111827";
+    ctx.beginPath();
+    ctx.roundRect(tooltip.x, tooltip.y, w, h, 4);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.textBaseline = "top";
+    lines.forEach((l, i) => ctx.fillText(l, tooltip!.x + 8, tooltip!.y + 5 + i * 16));
+  }
 };
 
 const showSelection = (): void => {
-  selectionView.textContent =
+  chrome?.setText(
+    "selection",
     selected.length === 0
       ? "Click something on the board."
       : selected.length === 1
         ? describe(selected[0]!)
-        : `${selected.length} objects\n${selected.join(", ")}`;
+        : `${selected.length} objects\n${selected.join(", ")}`,
+  );
   if (selected.length === 1) devtools.show(selected[0]!);
 };
 
@@ -291,17 +310,12 @@ const select = (ids: string[]): void => {
 const shiftHeld = (e: RouterEvent): boolean => "shiftKey" in e.input && e.input.shiftKey === true;
 const snapping = (e: RouterEvent): boolean => !("ctrlKey" in e.input && (e.input.ctrlKey || e.input.metaKey));
 
-const snapOn = document.getElementById("snap-on") as HTMLInputElement;
-const snapRadius = document.getElementById("snap-radius") as HTMLInputElement;
-const snapText = document.getElementById("snap-text") as HTMLInputElement;
-snapRadius.addEventListener("input", () => (document.getElementById("snap-radius-value")!.textContent = `${snapRadius.value}px`));
 const KIND_GROUPS: Record<string, readonly SnapKind[]> = {
   points: ["vertex", "intersection", "center", "midpoint", "extreme", "baseline"],
   bounds: ["bounds"],
   path: ["path"],
 };
-const snapKinds = (): SnapKind[] =>
-  Array.from(document.querySelectorAll<HTMLInputElement>(".snap-kind")).filter((c) => c.checked).flatMap((c) => KIND_GROUPS[c.value] ?? []);
+const snapKinds = (): SnapKind[] => [...settings.snapKinds].flatMap((k) => KIND_GROUPS[k] ?? []);
 
 /** Moves the dragged objects so that, if one of their anchors lands near another object's snap point, it lands on it. */
 const dragTo = (total: { x: number; y: number }, snap: boolean): void => {
@@ -309,11 +323,11 @@ const dragTo = (total: { x: number; y: number }, snap: boolean): void => {
   let target = total;
   snapMark = null;
   const kinds = snapKinds();
-  if (snap && snapOn.checked && kinds.length > 0) {
-    const radius = Number(snapRadius.value) / Math.hypot(view.a, view.b);
+  if (snap && settings.snapOn && kinds.length > 0) {
+    const radius = settings.snapRadius / Math.hypot(view.a, view.b);
     // Text laid out against what moves moves with it: snapping to it would chase a moving target.
     const exclude = [...drag.ids, ...liveTexts.filter((l) => drag!.ids.some((id) => l.dependsOn(id))).map((l) => l.id)];
-    const filter = snapText.checked ? undefined : (op: { kind: string }) => op.kind !== "text";
+    const filter = settings.snapText ? undefined : (op: { kind: string }) => op.kind !== "text";
     let best: { dx: number; dy: number; distance: number; x: number; y: number; kind: string } | null = null;
     for (const a of drag.anchors) {
       const p = { x: a.x + total.x, y: a.y + total.y };
@@ -469,6 +483,10 @@ const pointer = (e: PointerEvent) => ({ ...point(e), button: e.button, altKey: e
 
 canvas.addEventListener("pointerdown", (e) => {
   canvas.setPointerCapture(e.pointerId);
+  // Keeps focus where it is, so the text tool's hidden textarea keeps the keyboard.
+  e.preventDefault();
+  keyTarget = null;
+  textSink().release();
   // A drawing tool takes the press; the select tool hands it to the router.
   if (tools.down(point(e), e.shiftKey)) return;
   router.pointerDown(pointer(e));
@@ -482,9 +500,11 @@ canvas.addEventListener("pointerup", (e) => {
   if (tools.drawing) tools.up();
   else router.pointerUp(pointer(e));
 });
+canvas.addEventListener("pointercancel", () => router.pointerCancel());
 canvas.addEventListener("pointerleave", (e) => {
   router.pointerLeave(pointer(e));
-  tooltip.hidden = true;
+  tooltip = null;
+  render();
 });
 canvas.addEventListener(
   "wheel",
@@ -500,20 +520,19 @@ const TOOL_KEYS: Record<string, ToolName> = { v: "select", p: "pen", r: "rect", 
 const useTool = (name: ToolName): void => {
   tools.cancel();
   tools.current = name;
-  document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach((b) => b.classList.toggle("active", b.dataset["tool"] === name));
+  chrome?.setTool(name);
   canvas.style.cursor = name === "select" ? "" : name === "text" ? "text" : "crosshair";
   render();
 };
-document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach((b) => b.addEventListener("click", () => useTool(b.dataset["tool"] as ToolName)));
-const styleInput = (id: string, set: (value: string) => void): void => {
-  const input = document.getElementById(id) as HTMLInputElement;
-  input.addEventListener("input", () => set(input.value));
-};
-styleInput("tool-fill", (v) => (tools.style.fill = v));
-styleInput("tool-stroke", (v) => (tools.style.stroke = v));
-styleInput("tool-width", (v) => (tools.style.lineWidth = Number(v)));
 window.addEventListener("keydown", (e) => {
-  if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+  // Typing in a text field goes through its hidden textarea, which keeps its keys.
+  if (textSink().active) return;
+  const keys = { key: e.key, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
+  if (keyTarget) {
+    if (e.key === " " || e.key.startsWith("Arrow")) e.preventDefault();
+    keyTarget.router.keyDown(keys);
+    return;
+  }
   const tool = TOOL_KEYS[e.key.toLowerCase()];
   if (tool && !e.ctrlKey && !e.metaKey && !e.altKey) {
     useTool(tool);
@@ -533,8 +552,8 @@ const tools = new Tools({
   pixel: () => 1 / Math.hypot(view.a, view.b),
   snap: (world) => {
     const kinds = snapKinds();
-    if (!snapOn.checked || kinds.length === 0) return null;
-    const found = scene.snap(world, { radius: Number(snapRadius.value) / Math.hypot(view.a, view.b), kinds });
+    if (!settings.snapOn || kinds.length === 0) return null;
+    const found = scene.snap(world, { radius: settings.snapRadius / Math.hypot(view.a, view.b), kinds });
     return found ? { point: found.point, kind: found.kind } : null;
   },
   commit: (id, draw) => {
@@ -645,22 +664,34 @@ const download = (name: string, type: string, text: string): void => {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 
-const samplesBar = document.getElementById("samples")!;
-for (const sample of samples) {
-  const button = document.createElement("button");
-  button.textContent = `+ ${sample.name}`;
-  button.addEventListener("click", () => void add(sample));
-  samplesBar.append(button, " ");
-}
-document.getElementById("add-svg")!.addEventListener("click", () => {
-  const svg = (document.getElementById("svg-input") as HTMLTextAreaElement).value.trim();
-  if (svg) void add({ name: "pasted SVG", svg, at: { x: 40, y: 40 } }).catch((error) => log(`could not draw it: ${error}`));
+/** Draws pasted SVG markup into the board. */
+const addSvg = (text: string): void => {
+  const svg = text.trim();
+  if (!svg.includes("<svg")) {
+    log("paste SVG markup: what was pasted has no <svg>");
+    return;
+  }
+  void add({ name: "pasted SVG", svg, at: { x: 40, y: 40 } }).catch((error) => log(`could not draw it: ${error}`));
+};
+window.addEventListener("paste", (e) => {
+  if (textSink().active) return;
+  const text = e.clipboardData?.getData("text/plain") ?? "";
+  if (text.includes("<svg")) {
+    e.preventDefault();
+    addSvg(text);
+  }
 });
-document.getElementById("export-svg")!.addEventListener("click", () => {
+const pasteSvg = (): void => {
+  navigator.clipboard
+    .readText()
+    .then(addSvg)
+    .catch(() => log("the browser didn't let the page read the clipboard: press Ctrl+V (⌘V) instead"));
+};
+const exportSvg = (): void => {
   const b = stage.getBoundingClientRect();
   download("board.svg", "image/svg+xml", toSVG(scene.document, { width: Math.round(b.width), height: Math.round(b.height) }));
-});
-document.getElementById("vectorize")!.addEventListener("click", () => {
+};
+const vectorizeSelection = (): void => {
   // Images in the selection become fills, one per color, drawn where the image was.
   const ops = selected.flatMap((id) => (scene.getGroup(id) ? scene.groupOps(id) : [id])).map((id) => scene.get(id)).filter((op): op is ImageOp => op?.kind === "image");
   if (ops.length === 0) {
@@ -685,9 +716,7 @@ document.getElementById("vectorize")!.addEventListener("click", () => {
   for (const live of liveTexts) live.update();
   showSelection();
   render();
-});
-document.getElementById("export-json")!.addEventListener("click", () => download("board.json", "application/json", serializeDocument(scene.document)));
-document.getElementById("reset-view")!.addEventListener("click", () => setView(IDENTITY));
+};
 
 /** Pans so a world rect is in sight, keeping the zoom, when it isn't already. */
 const reveal = (b: { x: number; y: number; width: number; height: number }): void => {
@@ -703,9 +732,7 @@ const morphTo = (t: number): void => {
   scene.replaceGroup(MORPH_ID, dayToNight().at(t));
   render();
 };
-const morphButton = document.createElement("button");
-morphButton.textContent = "+ Morph";
-morphButton.addEventListener("click", () => {
+const morphDemo = (): void => {
   if (scene.getGroup(MORPH_ID) === undefined) {
     morphTo(0);
     const m = dayToNight();
@@ -714,8 +741,7 @@ morphButton.addEventListener("click", () => {
   for (const spec of morphControls(morphTo, (id) => components?.get(id))) if (!components!.get(spec.id)) components!.mount(spec);
   const b = scene.bounds(MORPH_ID)!;
   reveal({ ...b, height: b.height + 70 });
-});
-samplesBar.insertBefore(morphButton, samplesBar.lastElementChild);
+};
 
 // The pelican on its bicycle: poses drawn an eighth of a pedal turn apart, morphed into every frame between.
 const PELICAN_AT = { x: 640, y: 990 };
@@ -745,9 +771,7 @@ const startRiding = (): void => {
   };
   requestAnimationFrame(frame);
 };
-const pelicanButton = document.createElement("button");
-pelicanButton.textContent = "+ Pelican";
-pelicanButton.addEventListener("click", () => {
+const pelicanDemo = (): void => {
   if (scene.getGroup(PELICAN_ID) === undefined) rideTo(0);
   if (!components!.get("pelican-ride")) {
     components!.mount(rideButton(PELICAN_AT, () => (components?.get<{ riding: boolean }>("pelican-ride")?.state.riding ? stopRiding() : startRiding())));
@@ -757,8 +781,7 @@ pelicanButton.addEventListener("click", () => {
   startRiding();
   const stats = ride.stats;
   if (stats) log(`pelican: each frame morphs ${stats.paired} ops between two drawn poses`);
-});
-samplesBar.insertBefore(pelicanButton, samplesBar.firstElementChild);
+};
 
 // Physics: bodies drawn as canvas code, simulated by planck.js, moved by live transforms.
 let sandbox: Sandbox | null = null;
@@ -790,9 +813,7 @@ const runPhysics = (): void => {
   };
   requestAnimationFrame(frame);
 };
-const physicsButton = document.createElement("button");
-physicsButton.textContent = "+ Physics";
-physicsButton.addEventListener("click", () => {
+const physicsDemo = (): void => {
   if (!sandbox || !scene.getGroup(PHYSICS_ID)) {
     if (sandbox) sandbox = null;
     sandbox = createSandbox(scene);
@@ -813,14 +834,11 @@ physicsButton.addEventListener("click", () => {
   const b = scene.bounds(PHYSICS_ID)!;
   reveal({ ...b, height: b.height + 50 });
   runPhysics();
-});
-samplesBar.insertBefore(physicsButton, pelicanButton.nextSibling);
+};
 
 // A force-directed graph: d3-force moves the nodes, each drawn once.
 let graph: ForceGraph | null = null;
-const graphButtonEl = document.createElement("button");
-graphButtonEl.textContent = "+ Graph";
-graphButtonEl.addEventListener("click", () => {
+const graphDemo = (): void => {
   if (!graph || !scene.getGroup(GRAPH_ID)) {
     graph?.stop();
     let frames = 0;
@@ -836,8 +854,7 @@ graphButtonEl.addEventListener("click", () => {
   if (!components!.get("graph-shake")) components!.mount(graphButton(() => graph?.simulation.alpha(1).restart()));
   const b = scene.bounds(GRAPH_ID)!;
   reveal({ ...b, height: b.height + 50 });
-});
-samplesBar.insertBefore(graphButtonEl, physicsButton.nextSibling);
+};
 
 // Paint by numbers: a painting, or a picture of yours, vectorized into regions with shared borders.
 const showPaint = (source: PaintSource): void => {
@@ -847,9 +864,12 @@ const showPaint = (source: PaintSource): void => {
   log(`paint by numbers: ${source.name}, ${source.canvas.width}×${source.canvas.height}, vectorized and drawn in ${(performance.now() - t0).toFixed(0)} ms`);
   reveal(scene.bounds(PAINT_ID)!);
 };
-const paintButton = document.createElement("button");
-paintButton.textContent = "+ Paint by numbers";
-paintButton.addEventListener("click", () => showPaint(paintingSource()));
+// A picture comes from the file dialog (an input never shown) or is dropped on the board.
+const paintPicture = (file: File): void => {
+  createImageBitmap(file)
+    .then((bitmap) => showPaint(pictureSource(file.name, bitmap)))
+    .catch((error) => log(`could not read ${file.name}: ${error}`));
+};
 const pictureInput = document.createElement("input");
 pictureInput.type = "file";
 pictureInput.accept = "image/*";
@@ -857,22 +877,61 @@ pictureInput.hidden = true;
 pictureInput.addEventListener("change", () => {
   const file = pictureInput.files?.[0];
   pictureInput.value = "";
-  if (!file) return;
-  createImageBitmap(file)
-    .then((bitmap) => showPaint(pictureSource(file.name, bitmap)))
-    .catch((error) => log(`could not read ${file.name}: ${error}`));
+  if (file) paintPicture(file);
 });
-const pictureButton = document.createElement("button");
-pictureButton.textContent = "Paint my image…";
-pictureButton.title = "Turn a picture of yours into paint by numbers";
-pictureButton.addEventListener("click", () => pictureInput.click());
-samplesBar.insertBefore(pictureButton, paintButton.nextSibling);
-samplesBar.insertBefore(pictureInput, pictureButton);
-samplesBar.insertBefore(paintButton, graphButtonEl.nextSibling);
-lodOn.addEventListener("change", () => {
-  makeRenderer();
-  render();
+stage.addEventListener("dragover", (e) => e.preventDefault());
+stage.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const file = Array.from(e.dataTransfer?.files ?? []).find((f) => f.type.startsWith("image/"));
+  if (file) paintPicture(file);
 });
+
+// The chrome: the toolbar and side panel, drawn on canvas.
+const sampleActions = (): Action[] => {
+  const list: Action[] = [
+    { text: "+ Pelican", onClick: pelicanDemo },
+    { text: "+ Physics", onClick: physicsDemo },
+    { text: "+ Graph", onClick: graphDemo },
+    { text: "+ Paint by numbers", onClick: () => showPaint(paintingSource()) },
+    { text: "Paint my image…", onClick: () => pictureInput.click(), title: "Turn a picture of yours into paint by numbers, or drop one on the board" },
+    ...samples.map((sample) => ({ text: `+ ${sample.name}`, onClick: () => void add(sample) })),
+  ];
+  list.splice(list.length - 1, 0, { text: "+ Morph", onClick: morphDemo });
+  return list;
+};
+chrome = new Chrome(document.getElementById("toolbar") as HTMLCanvasElement, document.getElementById("side") as HTMLCanvasElement, {
+  recorder: recorderOptions,
+  tools: [
+    { name: "select", text: "Select", key: "V" },
+    { name: "pen", text: "Pen", key: "P" },
+    { name: "rect", text: "Rectangle", key: "R" },
+    { name: "ellipse", text: "Ellipse", key: "O" },
+    { name: "text", text: "Text", key: "T" },
+  ],
+  onTool: (name) => useTool(name),
+  samples: sampleActions,
+  actions: [
+    { text: "Play Pelican Ride", look: "accent", onClick: () => location.assign("./game.html") },
+    { text: "Vectorize image", onClick: vectorizeSelection, title: "select an image, such as the orange sticker, first" },
+    { text: "Export SVG", onClick: exportSvg },
+    { text: "Export JSON", onClick: () => download("board.json", "application/json", serializeDocument(scene.document)) },
+    { text: "Reset view", onClick: () => setView(IDENTITY) },
+  ],
+  style: tools.style,
+  settings,
+  onLod: () => {
+    makeRenderer();
+    render();
+  },
+  devtools,
+  pasteSvg,
+  onPress: (panel) => {
+    keyTarget = panel;
+  },
+});
+chrome.setText("log", logLines.join("\n"));
+chrome.setText("a11y", a11yText);
+showSelection();
 
 for (const sample of initialSamples) await add(sample);
 initial = false;

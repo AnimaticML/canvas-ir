@@ -1,7 +1,9 @@
 // Drawing tools: pen, rectangle, ellipse and text. Each records a new group
 // through a RecordingContext and hands it to the board, which swaps it into the
 // scene; while drawing, a preview goes on the overlay. Corners snap to the
-// board like a drag does.
+// board like a drag does. Text is typed into the hidden textarea every text
+// field shares and drawn on the overlay as it is typed.
+import { textSink } from "./ui/kit";
 import { RecordingContext, type Matrix2D, type Point, type RecordingContextOptions, type Scene, applyToPoint, fitCurve, simplifyPolyline, traceCurve } from "canvas-ir";
 
 export type ToolName = "select" | "pen" | "rect" | "ellipse" | "text";
@@ -38,7 +40,8 @@ export class Tools {
   private square = false;
   /** The snap shown while drawing. */
   mark: { point: Point; kind: string } | null = null;
-  private editor: HTMLTextAreaElement | null = null;
+  /** Text being typed: where, what so far, and the caret. */
+  private editor: { world: Point; value: string; caret: number } | null = null;
 
   constructor(private readonly host: ToolHost) {}
 
@@ -150,6 +153,29 @@ export class Tools {
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
+    if (this.editor) {
+      // The text as it will be drawn, with a caret and a dashed box around it.
+      const { world, value, caret } = this.editor;
+      const k = Math.hypot(device.a, device.b);
+      const q = applyToPoint(device, world.x, world.y);
+      ctx.font = `${18 * k}px system-ui, sans-serif`;
+      ctx.textBaseline = "top";
+      const lines = value === "" ? [""] : value.split("\n");
+      const width = Math.max(160 * k, ...lines.map((l) => ctx.measureText(l).width + 8 * k));
+      ctx.setLineDash([4 * dpr, 3 * dpr]);
+      ctx.strokeStyle = "#2563eb";
+      ctx.lineWidth = dpr;
+      ctx.strokeRect(q.x - 4 * k, q.y - 4 * k, width, lines.length * 24 * k + 4 * k);
+      ctx.setLineDash([]);
+      ctx.fillStyle = value === "" ? "#94a3b8" : this.style.stroke;
+      if (value === "") ctx.fillText("Type, then Enter", q.x, q.y);
+      else lines.forEach((line, i) => ctx.fillText(line, q.x, q.y + i * 24 * k));
+      const before = value.slice(0, caret).split("\n");
+      const row = before.length - 1;
+      const cx = q.x + (value === "" ? 0 : ctx.measureText(before.at(-1)!).width);
+      ctx.fillStyle = "#2563eb";
+      ctx.fillRect(cx, q.y + row * 24 * k, 1.5 * dpr, 20 * k);
+    }
     if (this.mark) {
       const q = applyToPoint(device, this.mark.point.x, this.mark.point.y);
       const r = 5 * dpr;
@@ -164,8 +190,7 @@ export class Tools {
     this.to = null;
     this.points = [];
     this.mark = null;
-    this.editor?.remove();
-    this.editor = null;
+    if (this.editor) textSink().release();
   }
 
   /** The pointer in world space, snapped to the board when something is near. */
@@ -183,20 +208,13 @@ export class Tools {
   }
 
   private openEditor(screen: Point, world: Point): void {
-    this.editor?.remove();
-    const editor = document.createElement("textarea");
-    editor.className = "text-editor";
-    editor.style.left = `${screen.x}px`;
-    editor.style.top = `${screen.y - 10}px`;
-    editor.placeholder = "Type, then Enter";
-    this.host.stage.append(editor);
-    this.editor = editor;
-    setTimeout(() => editor.focus());
-    const finish = (keep: boolean): void => {
+    const editor = { world, value: "", caret: 0 };
+    let keep = true;
+    const finish = (): void => {
       if (this.editor !== editor) return;
       this.editor = null;
+      this.host.redraw();
       const text = editor.value.trimEnd();
-      editor.remove();
       if (!keep || text === "") return;
       const lines = text.split("\n");
       const id = `drawn-text-${count++}`;
@@ -208,13 +226,28 @@ export class Tools {
       });
       this.host.log(`text "${lines[0]}"${lines.length > 1 ? ` and ${lines.length - 1} more lines` : ""}`);
     };
-    editor.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        finish(true);
-      } else if (e.key === "Escape") finish(false);
+    const r = this.host.stage.getBoundingClientRect();
+    this.editor = editor;
+    textSink().take("", { x: r.left + screen.x, y: r.top + screen.y }, {
+      onInput: (value, caret) => {
+        editor.value = value;
+        editor.caret = caret;
+        this.host.redraw();
+      },
+      // Enter ends the text (Shift+Enter starts a line); Escape drops it.
+      onKey: (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          textSink().release();
+          return true;
+        }
+        if (e.key === "Escape") {
+          keep = false;
+          textSink().release();
+          return true;
+        }
+        return false;
+      },
+      onBlur: finish,
     });
-    editor.addEventListener("blur", () => finish(true));
   }
 }
