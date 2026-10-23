@@ -99,10 +99,11 @@ export const simplifyPolyline = (points: readonly Point[], tolerance: number, cl
 export const simplifyDetours = (points: readonly Point[], size: number, closed = false): Point[] => {
   let pts = dedupePoints(points, closed);
   if (!Number.isFinite(size) || size <= 0 || pts.length < 4) return pts;
-  const area = (line: readonly Point[]): number => line.reduce((sum, p, i) => {
-    const q = line[(i + 1) % line.length]!;
-    return sum + p.x * q.y - q.x * p.y;
-  }, 0);
+  const area = (line: readonly Point[]): number =>
+    line.reduce((sum, p, i) => {
+      const q = line[(i + 1) % line.length]!;
+      return sum + p.x * q.y - q.x * p.y;
+    }, 0);
   const originalArea = closed ? area(pts) : 0;
   const run = (line: readonly Point[]): Point[] => {
     const out: Point[] = [];
@@ -110,12 +111,17 @@ export const simplifyDetours = (points: readonly Point[], size: number, closed =
       out.push(line[i]!);
       let end = i;
       let travel = 0;
-      let x0 = line[i]!.x, x1 = x0, y0 = line[i]!.y, y1 = y0;
+      let x0 = line[i]!.x,
+        x1 = x0,
+        y0 = line[i]!.y,
+        y1 = y0;
       for (let j = i + 1; j < line.length; j++) {
         const p = line[j]!;
         travel += length(sub(p, line[j - 1]!));
-        x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x);
-        y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y);
+        x0 = Math.min(x0, p.x);
+        x1 = Math.max(x1, p.x);
+        y0 = Math.min(y0, p.y);
+        y1 = Math.max(y1, p.y);
         if (x1 - x0 > size * 4 || y1 - y0 > size * 4 || travel > size * 12) break;
         const chord = length(sub(p, line[i]!));
         // A long thin feature also has a small loop at its tip. Do not shave
@@ -124,9 +130,7 @@ export const simplifyDetours = (points: readonly Point[], size: number, closed =
         const before = i > 0 ? line[i - 1] : closed ? line.at(-1) : undefined;
         const after = j + 1 < line.length ? line[j + 1] : closed ? line[0] : undefined;
         const continues = !before || !after || dot(unit(sub(line[i]!, before)), unit(sub(after, p))) >= 0.25;
-        if (continues && chord <= size && chord > 0 && travel > chord * 3 + size &&
-            Math.max(x1 - x0, y1 - y0) > size &&
-            (!closed || out.length + line.length - j >= 4)) end = j;
+        if (continues && chord <= size && chord > 0 && travel > chord * 3 + size && Math.max(x1 - x0, y1 - y0) > size && (!closed || out.length + line.length - j >= 4)) end = j;
       }
       if (end > i) i = end - 1;
     }

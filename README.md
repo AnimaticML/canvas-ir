@@ -193,6 +193,8 @@ For paint-by-number style work it takes a fixed palette and gives back its index
 
 `labelRegions(width, height, values, { connectivity: 4 | 8, empty })` splits a labeled image (palette indices, say) into connected regions: a label per pixel, and per region its value, area, bounds and neighbours with the length of each shared border, ids in scan order so the same values give the same ids. `traceRegion(map, id)` traces one region within its bounds, holes included; `traceMask(width, height, inside, { bounds })` does the same for any mask, visiting only the box. `traceBorders(map, { tolerance, curves, cornerAngle })` traces all regions at once: each border between two regions is found, simplified or fitted with curves once and walked forwards by one and backwards by the other, so filling every region (`traceRegionPath(ctx, outlines, id)`, or `regionRings` for points) leaves no gap and no overlap. Junctions and the image's frame stay on the pixel lattice, and a border that would cross another, or turn a region inside out at a junction, goes back to the exact pixel edges. With `tolerance` below 0.5 every pixel's center also stays in its own region; 0 keeps every border exact.
 
+Three options, all off by default, clean up what tracing a photo leaves behind. `detourSize` shortcuts hairpins, where a border pokes out and comes straight back through a neck at most that wide and within four times that size, before fitting; long thin parts such as strands of hair stay. `microLoopSize` removes loops of at most that size that curve fitting tied into a border, keeping the curve's tangents where it joins back up (`removeMicroLoops(pieces, size, closed)` does this to any curve; `simplifyDetours(points, size, closed)` does the hairpins to any polyline). `localFallback` (with `curves`) makes a border that would cross a neighbour smooth less only near where it crosses, so a tight junction doesn't flatten a wave further along the same border. Both sides still share each border, the crossing checks still run, and labels and region ids don't change; a hairpin cut can move an outline further than `tolerance`, so hit-test the paths to find what is painted where.
+
 ## Curves
 
 `simplifyPolyline(points, tolerance, closed)` drops points a line stays within `tolerance` of. `smoothPolyline(points, closed)` turns a polyline into cubic pieces through every point (centripetal Catmull–Rom). `fitCurve(points, tolerance, { closed, cornerAngle, cornerWindow })` fits as few cubics as stay within `tolerance`, keeping turns sharper than `cornerAngle` as corners; a `cornerWindow` of a few points measures turns over a span, so a traced pixel staircase reads as a curve and a box keeps its corners. `traceCurve(ctx, pieces, closed)` draws the pieces, straight ones as `lineTo`. For freehand strokes: `traceCurve(ctx, fitCurve(simplifyPolyline(points, 0.5, false), 1), false)`.
@@ -269,40 +271,3 @@ bun run test:pixel   # needs Chromium; set CHROMIUM_PATH if Playwright can't fin
 ```
 
 `packages/core` is the library, `packages/text` the text layout layer on top of it, `packages/physics` the physics layer, `packages/vectorize` the vectorizer experiment, `packages/pixel` holds the browser checks, and `packages/playground` is a demo app that depends on both libraries. After changing a text fixture, run `bun run --cwd packages/pixel capture-text` to capture its measurements and layout from Chromium for the Bun tests. Tooling depends on the libraries, never the reverse. `SVG_DEBUG=<drawing name>` on the pixel run writes that drawing's SVG export and both renderings to `SVG_DEBUG_DIR`.
-
-### Optional short-detour cleanup for shared borders
-
-`traceBorders(map, { curves: true, tolerance: 1.2, cornerAngle: 90,
- detourSize: 2.5 })` can remove tiny hairpins before curve fitting. The default
-`detourSize: 0` retains existing behavior. A shortcut requires a neck no wider
-than the requested size, an excursion bounded by four times that size, and a
-path length bounded by twelve times the size. Long thin limbs or strokes are
-not removed merely because they are narrow. Junction endpoints stay fixed;
-closed rings retain winding and at least half their area. Both regions use the
-same modified border. Existing intersection/junction checks reduce the cleanup
-or return to exact edges where necessary. Canonical labels and region IDs are
-unchanged; applications should hit-test the resulting paths when selecting
-what is visibly painted. Cleanup intentionally permits more displacement than
-the ordinary fitting tolerance. `simplifyDetours` exposes the polyline operation
-separately, without a region topology guarantee.
-
-`traceBorders(..., { microLoopSize: 3.25 })` optionally repairs actual fitted
-self-intersections inside a cubic or across up to four neighboring pieces.
-Single-cubic loops are solved analytically; crossings between pieces use
-curvature-bounded sampling followed by Newton refinement. Only loops fitting
-inside the requested size are removed. If the entire intersecting window is
-microscopic it becomes a tangent-preserving curved connector; otherwise the unaffected portions
-are kept by exact Bézier splitting. Open endpoints stay fixed, regular tiny
-holes and long narrow shapes are not removed, and closed-ring winding and at
-least half its signed area are retained. This is independent of smoothing and
-`detourSize`, disabled by default. Shared-border intersection guards still run.
-The standalone helper is `removeMicroLoops`.
-
-`traceBorders(..., { curves: true, localFallback: true })` limits topology
-fallback to source-anchored curve groups. An intersection near a junction no
-longer coarsens a distant wave on the same shared border. Artificial joins keep
-the original tangent directions where curved fitting is safe; exact pixel edges
-remain the final local fallback. Default false preserves existing behavior.
-Microscopic loop connectors preserve incoming and outgoing tangents rather than
-replacing the entire window with a straight chord. Canonical labels and shared
-border/ring IDs remain unchanged.
