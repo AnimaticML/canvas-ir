@@ -40,19 +40,25 @@ import { PAINT_ID, type PaintSource, paintComponent, paintingSource, pictureSour
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 import { type Action, Chrome, type Settings } from "./ui/chrome";
-import { type CanvasPanel, textSink } from "./ui/kit";
+import { CardLayer } from "./ui/cards";
+import { textSink } from "./ui/kit";
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
+const cardCanvas = document.getElementById("cards") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLCanvasElement;
 const octx = overlay.getContext("2d")!;
-/** What the side panel's controls set. */
+/** What the inspector's controls set. */
 const settings: Settings = { snapOn: true, snapRadius: 8, snapKinds: new Set(["points", "bounds", "path"]), snapText: false, lod: true };
-/** The toolbar and side panel, drawn on canvas; made once the board's parts exist. */
+/** The playground and inspector cards; made once the board's parts exist. */
 let chrome: Chrome | null = null;
-/** Where key presses go: the board, or the chrome panel last pressed. */
-let keyTarget: CanvasPanel | null = null;
+/** Whether key presses go to the cards, after a press on one, rather than the board. */
+let keysToCards = false;
+/** Whether the press that is down began on a card, and whether the pointer is over one. */
+let cardPress = false;
+let boardPress = false;
+let overCards = false;
 
 // Images seen while recording, by the src the IR stores, so replay draws the same objects.
 const images = new Map<string, CanvasImageSource>();
@@ -88,13 +94,28 @@ let liveTexts: LiveText[] = [];
 let view: Matrix2D = IDENTITY;
 let router = new EventRouter(scene);
 let renderer = new Renderer(scene, ctx);
+// The playground's controls: cards in a scene of their own, drawn over the board with its view.
+const cards = new CardLayer(cardCanvas, stage, {
+  recorder: recorderOptions,
+  onCursor: (cursor) => {
+    if (overCards) canvas.style.cursor = cursor ?? "default";
+  },
+  onFocus: () => {
+    keysToCards = true;
+  },
+});
+/** The board's cursor: a hovered component's, or the drawing tool's. */
+const boardCursor = (): string => components?.cursor ?? (tools.current === "select" ? "" : tools.current === "text" ? "text" : "crosshair");
 // HTML and WebGL elements of embed ops, beneath the board.
 const embeds = new EmbedLayer(scene, stage, canvas, { create: createEmbed, destroy: destroyEmbed });
 // What screen readers read and Tab reaches: a DOM mirror of the board's roles and text.
 const outlineOf = (nodes: readonly AccessibleNode[], depth = 0): string[] =>
   nodes.flatMap((n) => [`${"  ".repeat(depth)}${n.role}${n.label ? ` "${n.label.length > 48 ? `${n.label.slice(0, 47)}…` : n.label}"` : ""}${n.value !== undefined ? ` = ${n.value}` : ""}`, ...outlineOf(n.children, depth + 1)]);
 const a11y = new AccessibilityLayer(scene, stage, {
-  onFocus: (id) => router.focusOn(id),
+  onFocus: (id) => {
+    keysToCards = false;
+    router.focusOn(id);
+  },
   // Enter or Space presses the control where it is drawn, as a click would.
   onActivate: (id) => {
     const b = scene.bounds(id);
@@ -190,7 +211,7 @@ let stepped = false;
 const render = (): void => {
   const dpr = window.devicePixelRatio || 1;
   const { width, height } = stage.getBoundingClientRect();
-  for (const c of [canvas, overlay]) {
+  for (const c of [canvas, cardCanvas, overlay]) {
     if (c.width !== Math.round(width * dpr) || c.height !== Math.round(height * dpr)) {
       c.width = Math.round(width * dpr);
       c.height = Math.round(height * dpr);
@@ -203,6 +224,7 @@ const render = (): void => {
     renderer.setView(device, canvas.width, canvas.height);
     embeds.setView(view);
     a11y.setView(view);
+    cards.setView(view, device);
     viewKey = key;
   }
   const start = performance.now();
@@ -361,7 +383,7 @@ const wire = (): void => {
     components = new Components(scene, router, {
       recorder: recorderOptions,
       onChange: () => {
-        canvas.style.cursor = components?.cursor ?? "";
+        if (!overCards) canvas.style.cursor = boardCursor();
         render();
       },
     });
@@ -481,27 +503,68 @@ const point = (e: MouseEvent): { x: number; y: number } => {
 };
 const pointer = (e: PointerEvent) => ({ ...point(e), button: e.button, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey });
 
+// The cards get the pointer where they are; the board gets it everywhere else, and keeps a press it began.
 canvas.addEventListener("pointerdown", (e) => {
   canvas.setPointerCapture(e.pointerId);
   // Keeps focus where it is, so the text tool's hidden textarea keeps the keyboard.
   e.preventDefault();
-  keyTarget = null;
   textSink().release();
+  if (cards.hits(point(e))) {
+    cardPress = true;
+    keysToCards = true;
+    cards.router.pointerDown(pointer(e));
+    return;
+  }
+  keysToCards = false;
+  boardPress = true;
   // A drawing tool takes the press; the select tool hands it to the router.
   if (tools.down(point(e), e.shiftKey)) return;
   router.pointerDown(pointer(e));
 });
 canvas.addEventListener("pointermove", (e) => {
+  if (cardPress) {
+    cards.router.pointerMove(pointer(e));
+    return;
+  }
+  if (!boardPress && cards.hits(point(e))) {
+    if (!overCards) {
+      router.pointerLeave(pointer(e));
+      tooltip = null;
+      render();
+    }
+    overCards = true;
+    cards.router.pointerMove(pointer(e));
+    canvas.style.cursor = cards.components.cursor ?? "default";
+    return;
+  }
+  if (overCards) {
+    cards.router.pointerLeave(pointer(e));
+    overCards = false;
+    canvas.style.cursor = boardCursor();
+  }
   if (tools.drawing) tools.move(point(e), e.shiftKey);
   else router.pointerMove(pointer(e));
   showTooltip(point(e));
 });
 canvas.addEventListener("pointerup", (e) => {
+  if (cardPress) {
+    cardPress = false;
+    cards.router.pointerUp(pointer(e));
+    return;
+  }
+  boardPress = false;
   if (tools.drawing) tools.up();
   else router.pointerUp(pointer(e));
 });
-canvas.addEventListener("pointercancel", () => router.pointerCancel());
+canvas.addEventListener("pointercancel", () => {
+  cardPress = false;
+  boardPress = false;
+  cards.router.pointerCancel();
+  router.pointerCancel();
+});
 canvas.addEventListener("pointerleave", (e) => {
+  overCards = false;
+  cards.router.pointerLeave(pointer(e));
   router.pointerLeave(pointer(e));
   tooltip = null;
   render();
@@ -511,6 +574,8 @@ canvas.addEventListener(
   (e) => {
     e.preventDefault();
     const p = point(e);
+    // A card that scrolls keeps the wheel; anywhere else it zooms the board.
+    if (cards.hits(p) && cards.wheel({ ...p, deltaX: e.deltaX, deltaY: e.deltaY, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey })) return;
     const k = Math.exp(-e.deltaY * 0.0015);
     setView(multiply({ a: k, b: 0, c: 0, d: k, e: p.x - k * p.x, f: p.y - k * p.y }, view));
   },
@@ -521,16 +586,16 @@ const useTool = (name: ToolName): void => {
   tools.cancel();
   tools.current = name;
   chrome?.setTool(name);
-  canvas.style.cursor = name === "select" ? "" : name === "text" ? "text" : "crosshair";
+  canvas.style.cursor = boardCursor();
   render();
 };
 window.addEventListener("keydown", (e) => {
   // Typing in a text field goes through its hidden textarea, which keeps its keys.
   if (textSink().active) return;
   const keys = { key: e.key, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
-  if (keyTarget) {
+  if (keysToCards) {
     if (e.key === " " || e.key.startsWith("Arrow")) e.preventDefault();
-    keyTarget.router.keyDown(keys);
+    cards.router.keyDown(keys);
     return;
   }
   const tool = TOOL_KEYS[e.key.toLowerCase()];
@@ -718,6 +783,25 @@ const vectorizeSelection = (): void => {
   render();
 };
 
+/** The view that shows the cards and the drawing on the board, at most at full size. */
+const home = (): Matrix2D => {
+  let box = cards.bounds();
+  for (const op of scene.document.ops) {
+    const b = scene.bounds(op.id);
+    if (!b || !box) {
+      box ??= b;
+      continue;
+    }
+    const x = Math.min(box.x, b.x);
+    const y = Math.min(box.y, b.y);
+    box = { x, y, width: Math.max(box.x + box.width, b.x + b.width) - x, height: Math.max(box.y + box.height, b.y + b.height) - y };
+  }
+  if (!box) return IDENTITY;
+  const { width, height } = stage.getBoundingClientRect();
+  const k = Math.min(1, (width - 48) / box.width, (height - 48) / box.height);
+  return { a: k, b: 0, c: 0, d: k, e: (width - box.width * k) / 2 - box.x * k, f: Math.max(24, (height - box.height * k) / 2) - box.y * k };
+};
+
 /** Pans so a world rect is in sight, keeping the zoom, when it isn't already. */
 const reveal = (b: { x: number; y: number; width: number; height: number }): void => {
   const { width, height } = stage.getBoundingClientRect();
@@ -886,7 +970,7 @@ stage.addEventListener("drop", (e) => {
   if (file) paintPicture(file);
 });
 
-// The chrome: the toolbar and side panel, drawn on canvas.
+// The controls: the playground and inspector cards.
 const sampleActions = (): Action[] => {
   const list: Action[] = [
     { text: "+ Pelican", onClick: pelicanDemo },
@@ -899,8 +983,7 @@ const sampleActions = (): Action[] => {
   list.splice(list.length - 1, 0, { text: "+ Morph", onClick: morphDemo });
   return list;
 };
-chrome = new Chrome(document.getElementById("toolbar") as HTMLCanvasElement, document.getElementById("side") as HTMLCanvasElement, {
-  recorder: recorderOptions,
+chrome = new Chrome(cards, {
   tools: [
     { name: "select", text: "Select", key: "V" },
     { name: "pen", text: "Pen", key: "P" },
@@ -915,7 +998,7 @@ chrome = new Chrome(document.getElementById("toolbar") as HTMLCanvasElement, doc
     { text: "Vectorize image", onClick: vectorizeSelection, title: "select an image, such as the orange sticker, first" },
     { text: "Export SVG", onClick: exportSvg },
     { text: "Export JSON", onClick: () => download("board.json", "application/json", serializeDocument(scene.document)) },
-    { text: "Reset view", onClick: () => setView(IDENTITY) },
+    { text: "Fit the board", onClick: () => setView(home()) },
   ],
   style: tools.style,
   settings,
@@ -925,9 +1008,6 @@ chrome = new Chrome(document.getElementById("toolbar") as HTMLCanvasElement, doc
   },
   devtools,
   pasteSvg,
-  onPress: (panel) => {
-    keyTarget = panel;
-  },
 });
 chrome.setText("log", logLines.join("\n"));
 chrome.setText("a11y", a11yText);
@@ -935,3 +1015,4 @@ showSelection();
 
 for (const sample of initialSamples) await add(sample);
 initial = false;
+setView(home());

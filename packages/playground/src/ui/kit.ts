@@ -1,21 +1,9 @@
-// A small widget kit drawn with canvas-ir: each panel of the playground's
-// chrome (the toolbar, the side panel) is a canvas with its own scene,
-// renderer, event router and components, and every button, toggle, slider,
-// text box and text field is a component drawn from its state. The only DOM
-// besides the canvases is one hidden textarea that takes keyboard and IME
-// input for whichever text field has focus; what is typed is drawn on canvas.
-import {
-  type ComponentHandle,
-  type ComponentSpec,
-  Components,
-  EventRouter,
-  IDENTITY,
-  type JsonValue,
-  type RecordingContext,
-  type RecordingContextOptions,
-  Renderer,
-  Scene,
-} from "canvas-ir";
+// A small widget kit drawn with canvas-ir: every button, toggle, slider,
+// swatch row, text box and text field is a component drawn from its state,
+// mounted on a surface (a card on the board). The only DOM is one hidden
+// textarea that takes keyboard and IME input for whichever text field has
+// focus; what is typed is drawn on canvas.
+import { type ComponentHandle, type ComponentSpec, type JsonValue, type RecordingContext, type RouterEvent } from "canvas-ir";
 
 /** The page's colors, read from its CSS custom properties so the chrome follows light and dark. */
 export interface Palette {
@@ -135,135 +123,25 @@ class TextSink {
 let sink: TextSink | null = null;
 export const textSink = (): TextSink => (sink ??= new TextSink());
 
-export interface PanelOptions {
-  readonly recorder: RecordingContextOptions;
-  /** Mounts the panel's widgets for its width; returns the height they take. Called again when the width changes. */
-  readonly build: (panel: CanvasPanel, width: number) => number;
-  /** Whether the content scrolls with the wheel when it is taller than the panel. Default true. */
-  readonly scroll?: boolean;
-  /** Called when the pointer goes down in the panel: the host routes keys here until another panel or the board is pressed. */
-  readonly onPress?: (panel: CanvasPanel) => void;
+/**
+ * Where widgets live: a card on the board, or anything else that mounts
+ * components and can say where its content is. Widgets draw in the surface's
+ * content coordinates.
+ */
+export interface Surface {
+  readonly colors: Palette;
+  /** Mounts a widget; ids are unique within the surface. */
+  mount<S>(spec: ComponentSpec<S>): ComponentHandle<S>;
+  get<S>(id: string): ComponentHandle<S> | undefined;
+  /** Clears the surface and builds its widgets again. */
+  rebuild(): void;
+  /** Where an event happened, in content coordinates. */
+  local(e: RouterEvent): { x: number; y: number };
+  /** Where a point in the content is on the page, for the text sink. */
+  toPage(x: number, y: number): { x: number; y: number };
 }
 
-/** A canvas with its own scene, renderer, router and components, sized to its CSS box. */
-export class CanvasPanel {
-  readonly scene = new Scene({ version: 1, ops: [] });
-  readonly router: EventRouter;
-  readonly components: Components;
-  colors = palette();
-  private readonly renderer: Renderer;
-  private readonly ctx: CanvasRenderingContext2D;
-  private width = 0;
-  private height = 0;
-  private dpr = 0;
-  private scrollY = 0;
-  private content = 0;
-  private frame = 0;
-
-  constructor(
-    readonly canvas: HTMLCanvasElement,
-    private readonly options: PanelOptions,
-  ) {
-    this.ctx = canvas.getContext("2d")!;
-    this.router = new EventRouter(this.scene, { tolerance: 2 });
-    this.renderer = new Renderer(this.scene, this.ctx, { background: this.colors.panel, lod: false });
-    this.components = new Components(this.scene, this.router, {
-      recorder: options.recorder,
-      onChange: () => {
-        this.canvas.style.cursor = this.components.cursor ?? "";
-        this.render();
-      },
-    });
-    this.router.on("*", "wheel", (e) => {
-      if (this.options.scroll === false) return;
-      const dy = (e.input as { deltaY?: number }).deltaY ?? 0;
-      this.scrollTo(this.scrollY + dy);
-    });
-    const point = (e: MouseEvent) => {
-      const r = canvas.getBoundingClientRect();
-      return { x: e.clientX - r.left, y: e.clientY - r.top };
-    };
-    const pointer = (e: PointerEvent) => ({ ...point(e), button: e.button, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey });
-    canvas.addEventListener("pointerdown", (e) => {
-      canvas.setPointerCapture(e.pointerId);
-      options.onPress?.(this);
-      this.router.pointerDown(pointer(e));
-    });
-    canvas.addEventListener("pointermove", (e) => this.router.pointerMove(pointer(e)));
-    canvas.addEventListener("pointerup", (e) => this.router.pointerUp(pointer(e)));
-    canvas.addEventListener("pointercancel", () => this.router.pointerCancel());
-    canvas.addEventListener("pointerleave", (e) => this.router.pointerLeave(pointer(e)));
-    canvas.addEventListener(
-      "wheel",
-      (e) => {
-        e.preventDefault();
-        this.router.wheel({ ...point(e), deltaX: e.deltaX, deltaY: e.deltaY, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey });
-      },
-      { passive: false },
-    );
-    new ResizeObserver(() => this.layout()).observe(canvas);
-    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.rebuild());
-  }
-
-  /** Mounts a widget; ids are unique within the panel. */
-  mount<S>(spec: ComponentSpec<S>): ComponentHandle<S> {
-    return this.components.mount(spec);
-  }
-
-  get<S>(id: string): ComponentHandle<S> | undefined {
-    return this.components.get<S>(id);
-  }
-
-  /** Clears the panel and builds it again, as for a new width or theme. */
-  rebuild(): void {
-    this.colors = palette();
-    for (const id of this.components.ids) this.components.unmount(id);
-    this.content = this.options.build(this, this.width);
-    this.renderer.invalidate();
-    this.scrollTo(this.scrollY);
-    this.render();
-  }
-
-  /** Scrolls the content so `y` (panel units) is at the top, within bounds. */
-  scrollTo(y: number): void {
-    this.scrollY = Math.max(0, Math.min(y, this.content - this.height));
-    this.router.setView({ ...IDENTITY, f: -this.scrollY });
-    this.render();
-  }
-
-  /** Where a point in the panel's content is on the page, for the text sink. */
-  toPage(x: number, y: number): { x: number; y: number } {
-    const r = this.canvas.getBoundingClientRect();
-    return { x: r.left + x, y: r.top + y - this.scrollY };
-  }
-
-  private layout(): void {
-    const r = this.canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const width = Math.round(r.width);
-    const changed = width !== this.width || dpr !== this.dpr;
-    this.width = width;
-    this.height = Math.round(r.height);
-    this.dpr = dpr;
-    this.canvas.width = Math.round(r.width * dpr);
-    this.canvas.height = Math.round(r.height * dpr);
-    if (changed) this.rebuild();
-    else this.render();
-  }
-
-  /** Draws what changed, once per frame. */
-  render(): void {
-    if (this.frame) return;
-    this.frame = requestAnimationFrame(() => {
-      this.frame = 0;
-      const d = this.dpr || 1;
-      this.renderer.setView({ a: d, b: 0, c: 0, d, e: 0, f: -this.scrollY * d }, this.canvas.width, this.canvas.height);
-      this.renderer.render();
-    });
-  }
-}
-
-/** A widget's place in its panel. */
+/** A widget's place on its surface. */
 export interface Box {
   readonly x: number;
   readonly y: number;
@@ -289,7 +167,7 @@ export const buttonWidth = (c: { font: string; measureText(text: string): { widt
 
 export const button = (o: {
   id: string;
-  panel: CanvasPanel;
+  panel: Surface;
   box: Box;
   text: string;
   onClick: () => void;
@@ -348,7 +226,7 @@ export const button = (o: {
 });
 
 /** A checkbox with its label. */
-export const toggle = (o: { id: string; panel: CanvasPanel; box: Box; text: string; checked: boolean; onChange: (checked: boolean) => void }): ComponentSpec<{ checked: boolean }> => ({
+export const toggle = (o: { id: string; panel: Surface; box: Box; text: string; checked: boolean; onChange: (checked: boolean) => void }): ComponentSpec<{ checked: boolean }> => ({
   id: o.id,
   state: { checked: o.checked },
   meta: (s) => ({ role: "checkbox", label: o.text, value: s.checked }),
@@ -399,7 +277,7 @@ export const toggle = (o: { id: string; panel: CanvasPanel; box: Box; text: stri
 /** A slider with a label and its value; drag, click or use arrow keys. */
 export const slider = (o: {
   id: string;
-  panel: CanvasPanel;
+  panel: Surface;
   box: Box;
   text?: string;
   min: number;
@@ -464,12 +342,12 @@ export const slider = (o: {
     on: {
       down: (e, self) => {
         e.stopPropagation();
-        set(self, at(e.point.x));
+        set(self, at(o.panel.local(e).x));
       },
       dragstart: (e) => e.stopPropagation(),
       drag: (e, self) => {
         e.stopPropagation();
-        set(self, at(e.point.x));
+        set(self, at(o.panel.local(e).x));
       },
       keydown: (e, self) => {
         const key = (e.input as { key: string }).key;
@@ -481,7 +359,7 @@ export const slider = (o: {
 };
 
 /** A row of color swatches to pick from. */
-export const swatches = (o: { id: string; panel: CanvasPanel; box: Box; text: string; colors: readonly string[]; value: string; onChange: (color: string) => void }): ComponentSpec<{ value: string }> => {
+export const swatches = (o: { id: string; panel: Surface; box: Box; text: string; colors: readonly string[]; value: string; onChange: (color: string) => void }): ComponentSpec<{ value: string }> => {
   const size = 18;
   const gap = 5;
   const x0 = o.box.x + 64;
@@ -516,9 +394,10 @@ export const swatches = (o: { id: string; panel: CanvasPanel; box: Box; text: st
     on: {
       click: (e, self) => {
         e.stopPropagation();
+        const { x } = o.panel.local(e);
         const i = o.colors.findIndex((_, i) => {
           const p = cell(i);
-          return e.point.x >= p.x - gap / 2 && e.point.x < p.x + size + gap / 2;
+          return x >= p.x - gap / 2 && x < p.x + size + gap / 2;
         });
         if (i < 0) return;
         self.setState({ value: o.colors[i]! });
@@ -536,9 +415,11 @@ export interface TextBoxState {
 /** Monospaced or plain text in a box, cut to its width, scrolled by the wheel when longer than it. */
 export const textBox = (o: {
   id: string;
-  panel: CanvasPanel;
+  panel: Surface;
   box: Box;
   text: string;
+  /** What screen readers call it. */
+  label: string;
   mono?: boolean;
   /** Rows that can be clicked: called with the row's index. */
   onRow?: (row: number) => void;
@@ -550,7 +431,8 @@ export const textBox = (o: {
   return {
     id: o.id,
     state: { text: o.text, scroll: 0 },
-    meta: (s) => ({ role: "log", label: s.text.split("\n", 1)[0] ?? "" }),
+    // A fixed label: a box showing the accessibility tree would otherwise change the tree it shows.
+    meta: { role: "log", label: o.label },
     ...(o.onRow ? { cursor: "pointer" } : {}),
     draw: (c, s) => {
       const k = o.panel.colors;
@@ -604,7 +486,7 @@ export const textBox = (o: {
       click: (e, self) => {
         if (!o.onRow) return;
         e.stopPropagation();
-        const row = Math.floor((e.point.y - o.box.y - 6) / LINE);
+        const row = Math.floor((o.panel.local(e).y - o.box.y - 6) / LINE);
         if (row >= 0 && row < rows) o.onRow(self.state.scroll + row);
       },
     },
@@ -614,7 +496,7 @@ export const textBox = (o: {
 /** A one-line text field; typing goes through the hidden textarea and is drawn here, with its caret. */
 export const textField = (o: {
   id: string;
-  panel: CanvasPanel;
+  panel: Surface;
   box: Box;
   placeholder: string;
   onChange: (value: string) => void;
@@ -685,7 +567,7 @@ export const textField = (o: {
 });
 
 /** A section heading with an optional hint wrapped under it; returns the height it takes. */
-export const section = (panel: CanvasPanel, id: string, x: number, y: number, w: number, title: string, hint?: string): { spec: ComponentSpec<null>; height: number } => {
+export const section = (panel: Surface, id: string, x: number, y: number, w: number, title: string, hint?: string): { spec: ComponentSpec<null>; height: number } => {
   // Measure the hint on a throwaway canvas: the label draws with the same font.
   const m = new OffscreenCanvas(1, 1).getContext("2d")!;
   m.font = `12px ${FONT}`;

@@ -106,8 +106,8 @@ What the library needs for that is incremental updates by group, not an undo sta
 - **Border cleanup (opt-in):** `detourSize` shortcuts hairpins, `microLoopSize` removes fitted micro-loops, and `localFallback` limits the crossing fallback to the part of a border that crossed.
 - **Playground:** paint by numbers, from the built-in painting with a fixed palette or a picture of yours clustered into 6 to 24 colors; numbers sit at each region's point farthest from its edges, and clicks pick regions from the index map.
 
-## Batch 13: canvas-only playground (done)
+## Batch 13: the playground on one board (done)
 
-- **Playground chrome on canvas:** the toolbar and side panels are CanvasIR scenes too, each with its own `Renderer`, `EventRouter` and components: buttons, toggles, sliders, swatches, scrolling text boxes and a text field, laid out again when the width changes. The tooltip and the text tool's editor draw on the overlay. Typing goes through one hidden textarea, so keys, IME and paste work; the rest of the DOM is the file input, the accessibility mirror and the embeds.
+- **Playground on one board:** the page is a single board that pans and zooms, with no bars around it. Its controls are cards on it: buttons, toggles, sliders, swatches, scrolling text boxes and a text field are components, mounted in a scene of their own that is drawn over the board with its view, so they stay out of the drawing, its exports and its devtools. A card moves by its frame and scrolls with the wheel, its widgets clipped to what shows; elsewhere the wheel zooms. The cards have their own accessibility mirror, so Tab reaches their controls. The tooltip and the text tool's editor draw on the overlay, and typing goes through one hidden textarea, so keys, IME and paste work.
 
 Not planned: WebGL or PDF backends, pixel access (`getImageData` and friends), and paints made by another context.

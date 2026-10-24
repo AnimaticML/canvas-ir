@@ -1,11 +1,12 @@
-// The playground's chrome, drawn on canvas with the widget kit: the toolbar
-// across the top (title, drawing tools, samples and actions, wrapping onto as
-// many rows as the width needs) and the side panel (drawing style, selection,
-// snapping, rendering, accessibility, devtools, pasting SVG, the event log).
-import type { RecordingContextOptions } from "canvas-ir";
+// The playground's controls, as two cards on the board drawn with the widget
+// kit: the playground card (drawing tools, what to add, actions, wrapping onto
+// as many rows as its width needs) and the inspector, a scrolling card of
+// drawing style, selection, snapping, rendering, accessibility, devtools,
+// pasting SVG and the event log.
 import type { Devtools } from "../devtools";
 import type { ToolName } from "../tools";
-import { type ButtonLook, CanvasPanel, FONT, type TextBoxState, button, buttonWidth, label, section, slider, swatches, textBox, textField, toggle } from "./kit";
+import type { Card, CardLayer } from "./cards";
+import { type ButtonLook, FONT, type TextBoxState, button, buttonWidth, section, slider, swatches, textBox, textField, toggle } from "./kit";
 
 export interface Action {
   readonly text: string;
@@ -24,7 +25,6 @@ export interface Settings {
 }
 
 export interface ChromeHost {
-  readonly recorder: RecordingContextOptions;
   readonly tools: readonly { name: ToolName; text: string; key: string }[];
   readonly onTool: (name: ToolName) => void;
   /** Sample and demo buttons, in order. */
@@ -36,19 +36,26 @@ export interface ChromeHost {
   readonly onLod: () => void;
   readonly devtools: Devtools;
   readonly pasteSvg: () => void;
-  /** The panel the keyboard goes to changed (a press in it). */
-  readonly onPress: (panel: CanvasPanel) => void;
 }
 
-/** Text shown in the side panel's boxes, by box. */
+/** Text shown in the inspector's boxes, by box. */
 export type TextId = "selection" | "render-stats" | "a11y" | "log" | "op-list" | "op-detail";
+
+const LABELS: Record<TextId, string> = {
+  selection: "Selection",
+  "render-stats": "Last redraw",
+  a11y: "Accessibility tree",
+  log: "Events",
+  "op-list": "Ops",
+  "op-detail": "Op details",
+};
 
 const FILLS = ["#fde68a", "#fecaca", "#bbf7d0", "#bfdbfe", "#e9d5ff", "#ffffff", "transparent"];
 const STROKES = ["#1f2937", "#dc2626", "#16a34a", "#2563eb", "#9333ea", "#f97316", "#ffffff"];
 
 export class Chrome {
-  readonly toolbar: CanvasPanel;
-  readonly side: CanvasPanel;
+  readonly toolbar: Card;
+  readonly side: Card;
   private tool: ToolName = "select";
   private readonly texts = new Map<TextId, string>();
   private devtoolsOpen = false;
@@ -56,11 +63,12 @@ export class Chrome {
   private step = { max: 0, value: 0, label: "" };
   private picked = -1;
 
-  constructor(toolbarCanvas: HTMLCanvasElement, sideCanvas: HTMLCanvasElement, private readonly host: ChromeHost) {
-    this.toolbar = new CanvasPanel(toolbarCanvas, { recorder: host.recorder, scroll: false, build: (p, w) => this.buildToolbar(p, w), onPress: host.onPress });
-    this.side = new CanvasPanel(sideCanvas, { recorder: host.recorder, build: (p, w) => this.buildSide(p, w), onPress: host.onPress });
+  /** Puts the cards on `layer`, to the left of where the samples are drawn. */
+  constructor(layer: CardLayer, private readonly host: ChromeHost) {
     this.texts.set("selection", "Click something on the board.");
     this.texts.set("render-stats", "Nothing drawn yet.");
+    this.toolbar = layer.card({ id: "playground", title: "CanvasIR Playground", x: -740, y: 20, width: 340, build: (p, w) => this.buildToolbar(p, w) });
+    this.side = layer.card({ id: "inspector", title: "Inspector", x: -380, y: 20, width: 330, height: 640, build: (p, w) => this.buildSide(p, w) });
     const chrome = this;
     host.devtools.view = {
       get open() {
@@ -106,61 +114,45 @@ export class Chrome {
     for (const t of this.host.tools) this.toolbar.get<{ active: boolean }>(`tool-${t.name}`)?.setState({ active: t.name === name });
   }
 
-  /** Lays the toolbar out again, as when a sample button is added. */
-  relayout(): void {
-    this.toolbar.rebuild();
-  }
-
-  private buildToolbar(p: CanvasPanel, width: number): number {
+  private buildToolbar(p: Card, width: number): number {
     const measure = new OffscreenCanvas(1, 1).getContext("2d")!;
     const H = 28;
     const GAP = 6;
-    const PAD = 12;
+    const PAD = 14;
     let x = PAD;
     let y = PAD;
-    const place = (w: number, extra = 0): { x: number; y: number } => {
+    // Buttons flow left to right, onto as many rows as they need.
+    const place = (w: number): { x: number; y: number } => {
       if (x + w > width - PAD && x > PAD) {
         x = PAD;
         y += H + GAP;
       }
       const at = { x, y };
-      x += w + GAP + extra;
+      x += w + GAP;
       return at;
     };
-    measure.font = `600 15px ${FONT}`;
-    const title = "CanvasIR Playground";
-    const tw = Math.ceil(measure.measureText(title).width);
-    const t = place(tw, 10);
-    p.mount(
-      label("title", (c) => {
-        c.font = `600 15px ${FONT}`;
-        c.fillStyle = p.colors.text;
-        c.textBaseline = "middle";
-        c.fillText(title, t.x, t.y + H / 2);
-      }),
-    );
+    const head = (id: string, title: string, hint?: string): void => {
+      if (x > PAD) y += H + 16;
+      const s = section(p, id, PAD, y, width - PAD * 2, title, hint);
+      p.mount(s.spec);
+      x = PAD;
+      y += s.height + 6;
+    };
     const add = (id: string, a: Action, active = false): void => {
       const w = buttonWidth(measure, a.text);
       const at = place(w);
       p.mount(button({ id, panel: p, box: { x: at.x, y: at.y, w, h: H }, text: a.text, onClick: a.onClick, active, ...(a.look ? { look: a.look } : {}), ...(a.title ? { title: a.title } : {}) }));
     };
+    head("tools-head", "Tools", "Keys V, P, R, O and T. Scroll to zoom, drag empty space to pan, and drag a card by its frame.");
     for (const tool of this.host.tools) add(`tool-${tool.name}`, { text: tool.text, onClick: () => this.host.onTool(tool.name), title: `${tool.text} (${tool.key})` }, tool.name === this.tool);
-    x += 8;
+    head("samples-head", "Add to the board");
     this.host.samples().forEach((a, i) => add(`sample-${i}`, a));
-    x += 8;
+    head("actions-head", "Do");
     this.host.actions.forEach((a, i) => add(`action-${i}`, a));
-    const height = y + H + PAD;
-    p.mount(
-      label("rule", (c) => {
-        c.fillStyle = p.colors.border;
-        c.fillRect(0, height - 1, width, 1);
-      }),
-    );
-    if (p.canvas.style.height !== `${height}px`) p.canvas.style.height = `${height}px`;
-    return height;
+    return y + H + PAD;
   }
 
-  private buildSide(p: CanvasPanel, width: number): number {
+  private buildSide(p: Card, width: number): number {
     const PAD = 14;
     const w = width - PAD * 2;
     const x = PAD;
@@ -171,7 +163,7 @@ export class Chrome {
       y += s.height + 8;
     };
     const box = (id: TextId, h: number, mono = true, extra: Partial<Parameters<typeof textBox>[0]> = {}): void => {
-      p.mount(textBox({ id, panel: p, box: { x, y, w, h }, text: this.text(id), mono, ...extra }));
+      p.mount(textBox({ id, panel: p, box: { x, y, w, h }, text: this.text(id), label: LABELS[id], mono, ...extra }));
       y += h + 8;
     };
     const row = (h = 26) => {
