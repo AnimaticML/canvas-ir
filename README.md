@@ -109,7 +109,31 @@ canvas.style.cursor = components.cursor ?? "";
 
 Handlers run in capture, before the board's own listeners, so a knob that stops its drags keeps them from moving it. Presses, drags and keys keep reaching a component that redraws mid-gesture under new op ids. A group whose meta has `hitArea: true` makes transparent shapes hit targets (a slider's grip); one with `snap: false` is never snapped to, and `snap` also takes a `filter`.
 
-`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a link that highlights on hover, in a circle, and flowing around a shape that re-lays it out as you drag it), a knob, a slider and a button built as components that change the wrapped text, canvas shapes, D3 and Chart.js charts, a day-to-night morph, a pelican riding a bicycle (eight drawn poses per pedal turn, morphed into every frame between), a physics sandbox of crates, balls and stars to throw around, a force-directed graph, an HTML form and a WebGL cube embedded on the board, and pen, rectangle, ellipse and text tools, on one board, with snapping settings, hover and selection outlines, dragging, zoom and pan, SVG and JSON export, a Devtools panel and an accessibility tree. The page is one board you pan and zoom. Every feature is an icon scattered over it; pressing one flies there and adds the feature beside its icon. The controls are cards on the board, a playground card of tools and actions and a scrolling inspector, drawn from widgets built as components (`packages/playground/src/ui`) in a scene of their own over the board's, so they move with the view but stay out of the drawing and its exports. One hidden textarea takes typed text. It renders through `Renderer` and shows what each frame redrew; a button adds 10,000 shapes to try it on a big board. Its **Pelican Ride** page is a small game built the same way: the pelican pedals a bicycle on sprung wheel joints over hills, crates and lakes, flaps over the water and catches fish. Run it with `bun run --cwd packages/playground dev`, or build self-contained files with `bun run --cwd packages/playground build` (`dist/index.html` and `dist/game.html`).
+### Virtual groups
+
+A `VirtualGroup` is a group too big to record whole: a table of a million rows, a long log, a chart of millions of points. It records only the part of its extent that shows, plus some overscan, and records again when what shows moves past what it drew. Rendering, hit tests, events, the accessibility mirror and export see ordinary ops in an ordinary group, so they all work on the drawn part without knowing about the rest. Clipped (as a scroll container is), it draws exactly what shows, and only the ops crossing the edge carry the clip.
+
+```ts
+import { VirtualGroup } from "canvas-ir";
+
+const rows = new VirtualGroup(scene, {
+  id: "rows",
+  extent: { x: 0, y: 0, width: 860, height: 1_000_000 * 28 },
+  draw: (ctx, window) => {
+    for (let r = Math.floor(window.y / 28); r * 28 < window.y + window.height; r++) {
+      ctx.beginGroup({ id: `r${r}` }); // stable ids: events and selection follow the row across redraws
+      ctx.fillText(`Row ${r + 1}`, 10, r * 28 + 18);
+      ctx.endGroup();
+    }
+  },
+});
+// Scrolled inside a 476-pixel box at (x, y): the transform places the content, the box clips it.
+rows.show({ transform: { a: 1, b: 0, c: 0, d: 1, e: x, f: y - scroll }, visible: { x, y, width: 860, height: 476 }, clip: true });
+```
+
+`window`, `bounds` (the whole extent where it is placed), `refresh()` after the data changed, `update(spec)` and `bind(scene)` for a rebuilt scene. Recording and swapping in 18 rows of 8 ops takes under a millisecond in Bun, however many rows there are; the playground's million-row table is the demo: sorting, range selection, copying as tab-separated text, and the keyboard.
+
+`packages/playground` puts this together: sample SVGs drawn through canvg, rich text (with decorations and a link that highlights on hover, in a circle, and flowing around a shape that re-lays it out as you drag it), a knob, a slider and a button built as components that change the wrapped text, canvas shapes, D3 and Chart.js charts, a day-to-night morph, a pelican riding a bicycle (eight drawn poses per pedal turn, morphed into every frame between), a physics sandbox of crates, balls and stars to throw around, a force-directed graph, a table of a million rows, an HTML form and a WebGL cube embedded on the board, and pen, rectangle, ellipse and text tools, on one board, with snapping settings, hover and selection outlines, dragging, zoom and pan, SVG and JSON export, a Devtools panel and an accessibility tree. The page is one board you pan and zoom. Every feature is an icon scattered over it; pressing one flies there and adds the feature beside its icon. The controls are cards on the board, a playground card of tools and actions and a scrolling inspector, drawn from widgets built as components (`packages/playground/src/ui`) in a scene of their own over the board's, so they move with the view but stay out of the drawing and its exports. One hidden textarea takes typed text. It renders through `Renderer` and shows what each frame redrew; a button adds 10,000 shapes to try it on a big board. Its **Pelican Ride** page is a small game built the same way: the pelican pedals a bicycle on sprung wheel joints over hills, crates and lakes, flaps over the water and catches fish. Run it with `bun run --cwd packages/playground dev`, or build self-contained files with `bun run --cwd packages/playground build` (`dist/index.html` and `dist/game.html`).
 
 ## Rendering
 

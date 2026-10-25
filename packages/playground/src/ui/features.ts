@@ -27,7 +27,8 @@ export type Glyph =
   | "d3"
   | "chartjs"
   | "embed"
-  | "many";
+  | "many"
+  | "table";
 
 export interface Feature {
   readonly id: string;
@@ -60,6 +61,7 @@ const TINTS: Record<Glyph, string> = {
   chartjs: "#fecdd3",
   embed: "#c7d2fe",
   many: "#d9f99d",
+  table: "#cffafe",
 };
 
 const INK = "#1f2937";
@@ -397,6 +399,21 @@ const glyph = (c: RecordingContext, g: Glyph): void => {
       c.closePath();
       c.fill();
       c.stroke();
+      break;
+    }
+    case "table": {
+      c.fillStyle = "#ffffff";
+      c.fillRect(4, 8, 92, 84);
+      c.fillStyle = "#0e7490";
+      c.fillRect(4, 8, 92, 18);
+      c.lineWidth = 2;
+      c.strokeStyle = "#94a3b8";
+      for (let y = 40; y < 92; y += 14) line(4, y, 96, y);
+      line(36, 8, 36, 92);
+      line(66, 8, 66, 92);
+      c.lineWidth = 3;
+      c.strokeStyle = INK;
+      c.strokeRect(4, 8, 92, 84);
       break;
     }
     case "many": {

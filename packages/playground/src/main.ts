@@ -37,6 +37,7 @@ import { PELICAN_ID, POSES_PER_TURN, Ride, rideButton } from "./pelican";
 import { PHYSICS_AT, PHYSICS_ID, type Sandbox, createSandbox, sandboxButton } from "./physics-demo";
 import { GRAPH_AT, GRAPH_ID, type ForceGraph, createGraph, graphButton } from "./graph-demo";
 import { PAINT_AT, PAINT_ID, type PaintSource, paintComponent, paintingSource, pictureSource } from "./paint-demo";
+import { MillionRows, TABLE_AT, TABLE_ID } from "./table-demo";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 import { Chrome, type Settings } from "./ui/chrome";
@@ -138,6 +139,10 @@ const makeRenderer = (): void => {
   renderer = new Renderer(scene, ctx, { images: (src) => images.get(src), ...(settings.lod ? {} : { lod: false }) });
   viewKey = "";
 };
+/** Set when a wheel on the board reaches the end of its path unclaimed, so it zooms. */
+let wheelFree = false;
+/** The million-row table, once added. */
+let table: MillionRows | null = null;
 /** Interactive objects (the note, the controls), drawn from their state. */
 let components: Components | null = null;
 /** Selected objects (outermost groups, or single ops picked with Alt), in the order picked. */
@@ -206,6 +211,7 @@ const followMove = (moved: string, dx: number, dy: number): void => {
     if (inside(parentOf(live))) live.translate(dx, dy);
     else if (live.dependsOn(moved)) live.update();
   }
+  if (table?.alive && inside(TABLE_ID)) table.moved(dx, dy);
 };
 
 let stepped = false;
@@ -380,6 +386,7 @@ const wire = (): void => {
   a11y.setScene(scene);
   makeRenderer();
   if (components) components.bind(scene, router);
+  if (table?.alive) table.bind(scene, router);
   else {
     components = new Components(scene, router, {
       recorder: recorderOptions,
@@ -389,6 +396,9 @@ const wire = (): void => {
       },
     });
   }
+  router.on("*", "wheel", () => {
+    wheelFree = true;
+  });
   router.on("*", "enter", (e) => {
     hoverPath = e.path;
     // Over an embed, the pointer goes to its element (a form, a WebGL view); with Alt held, the board keeps it, to drag the embed.
@@ -575,8 +585,12 @@ canvas.addEventListener(
   (e) => {
     e.preventDefault();
     const p = point(e);
-    // A card that scrolls keeps the wheel; anywhere else it zooms the board.
-    if (cards.hits(p) && cards.wheel({ ...p, deltaX: e.deltaX, deltaY: e.deltaY, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey })) return;
+    // A card or anything on the board that scrolls (the million rows) keeps the wheel; anywhere else it zooms the board.
+    const input = { ...p, deltaX: e.deltaX, deltaY: e.deltaY, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
+    if (cards.hits(p) && cards.wheel(input)) return;
+    wheelFree = false;
+    router.wheel(input);
+    if (!wheelFree) return;
     const k = Math.exp(-e.deltaY * 0.0015);
     setView(multiply({ a: k, b: 0, c: 0, d: k, e: p.x - k * p.x, f: p.y - k * p.y }, view));
   },
@@ -1025,6 +1039,12 @@ stage.addEventListener("drop", (e) => {
   if (file) paintPicture(file);
 });
 
+// A million rows: a table whose body records only the rows that show.
+const tableDemo = (): void => {
+  if (!table?.alive) table = new MillionRows(scene, router, { components: () => components!, render: () => render(), log });
+  reveal(table.bounds);
+};
+
 // Every feature is an icon somewhere on the board; what it adds goes to its right.
 const DEMO = (at: { x: number; y: number }) => ({ x: at.x - ICON_REACH, y: at.y });
 const sampleNamed = (name: string): Sample => samples.find((sample) => sample.name === name)!;
@@ -1034,6 +1054,7 @@ const features: Feature[] = [
   { id: "graph", name: "Graph", glyph: "graph", ...DEMO(GRAPH_AT), tilt: -4, onClick: graphDemo },
   { id: "morph", name: "Morph", glyph: "morph", ...DEMO(MORPH_AT), tilt: 7, onClick: morphDemo },
   { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, onClick: () => showPaint(paintingSource()) },
+  { id: "table", name: "A million rows", glyph: "table", ...DEMO(TABLE_AT), tilt: -3, onClick: tableDemo },
   { id: "picture", name: "Paint my image…", glyph: "picture", x: PAINT_AT.x - ICON_REACH, y: PAINT_AT.y + 240, tilt: 4, onClick: () => pictureInput.click() },
   ...(
     [

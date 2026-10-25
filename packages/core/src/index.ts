@@ -92,6 +92,8 @@ export {
   Components,
   type ComponentsOptions,
 } from "./components";
+export { VirtualGroup } from "./virtual";
+export type { VirtualGroupSpec, VirtualView } from "./virtual";
 export { EventRouter } from "./interaction";
 export type {
   EventRouterOptions,
