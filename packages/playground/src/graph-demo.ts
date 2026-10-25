@@ -5,7 +5,7 @@ import { type ComponentSpec, type Point, RecordingContext, type Scene } from "ca
 import { type Simulation, type SimulationLinkDatum, type SimulationNodeDatum, forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from "d3-force";
 
 export const GRAPH_ID = "graph";
-export const GRAPH_AT = { x: 700, y: 1760 };
+export const GRAPH_AT = { x: 500, y: 1050 };
 const W = 560;
 const H = 420;
 const COLORS = ["#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c", "#0891b2"];

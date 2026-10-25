@@ -108,11 +108,11 @@ export class CardLayer {
     this.render();
   }
 
-  /** The world box the cards cover. */
+  /** The world box the cards and everything else on this layer cover. */
   bounds(): { x: number; y: number; width: number; height: number } | null {
     let box: { x: number; y: number; width: number; height: number } | null = null;
-    for (const card of this.cards) {
-      const b = this.scene.bounds(card.group);
+    for (const op of this.scene.document.ops) {
+      const b = this.scene.bounds(op.id);
       if (!b) continue;
       if (!box) box = b;
       else {

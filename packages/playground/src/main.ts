@@ -32,14 +32,15 @@ import { LiveText } from "@canvas-ir/text";
 import { datumAt } from "./charts";
 import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
-import { MORPH_ID, dayToNight, morphControls } from "./morph-demo";
+import { MORPH_AT, MORPH_ID, dayToNight, morphControls } from "./morph-demo";
 import { PELICAN_ID, POSES_PER_TURN, Ride, rideButton } from "./pelican";
-import { PHYSICS_ID, type Sandbox, createSandbox, sandboxButton } from "./physics-demo";
-import { GRAPH_ID, type ForceGraph, createGraph, graphButton } from "./graph-demo";
-import { PAINT_ID, type PaintSource, paintComponent, paintingSource, pictureSource } from "./paint-demo";
+import { PHYSICS_AT, PHYSICS_ID, type Sandbox, createSandbox, sandboxButton } from "./physics-demo";
+import { GRAPH_AT, GRAPH_ID, type ForceGraph, createGraph, graphButton } from "./graph-demo";
+import { PAINT_AT, PAINT_ID, type PaintSource, paintComponent, paintingSource, pictureSource } from "./paint-demo";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
-import { type Action, Chrome, type Settings } from "./ui/chrome";
+import { Chrome, type Settings } from "./ui/chrome";
+import { type Feature, ICON_REACH, featureIcon } from "./ui/features";
 import { CardLayer } from "./ui/cards";
 import { textSink } from "./ui/kit";
 
@@ -666,8 +667,15 @@ const hooks: ControlHooks = {
   get: (id) => components?.get(id),
 };
 
-/** Draws more onto the board: the current document is replayed into a new recorder, then the sample is drawn after it. */
-const add = async (sample: Sample): Promise<void> => {
+/** How many times each sample was added from its icon, so copies step aside from each other. */
+const copies = new Map<string, number>();
+
+/**
+ * Draws more onto the board: the current document is replayed into a new
+ * recorder, then the sample is drawn after it. Added from an icon, it is
+ * moved to the right of `near`, as a drag would move it.
+ */
+const add = async (sample: Sample, near?: { x: number; y: number }): Promise<void> => {
   const recorder = new RecordingContext(recorderOptions);
   const before = scene.document.ops;
   replayDocument(recorder, scene.document, { images: (src) => images.get(src) });
@@ -707,17 +715,35 @@ const add = async (sample: Sample): Promise<void> => {
   }
   for (const spec of drawn?.components ?? []) components!.mount(spec);
   log(`added ${sample.name}; the board has ${scene.document.ops.length} ops`);
+  const added = scene.document.ops.slice(before.length).map((op) => op.id);
+  let box = boxOf(added);
+  if (near && box) {
+    const n = copies.get(sample.name) ?? 0;
+    copies.set(sample.name, n + 1);
+    const dx = near.x + ICON_REACH + n * 36 - box.x;
+    const dy = near.y + n * 36 - box.y;
+    // Each new outermost group moves as one, with what is laid out against it.
+    for (const id of new Set(added.map((op) => scene.groupChain(op).at(-1) ?? op))) {
+      components!.move(id, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
+      followMove(id, dx, dy);
+    }
+    box = { ...box, x: box.x + dx, y: box.y + dy };
+  }
   render();
-  // Bring what was added into sight, unless it is too big to (the 10,000 shapes).
+  if (box && !initial) reveal(box);
+};
+
+/** The world box around some ops. */
+const boxOf = (ids: readonly string[]): { x: number; y: number; width: number; height: number } | null => {
   let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
-  for (const op of scene.document.ops.slice(before.length)) {
-    const b = scene.bounds(op.id);
+  for (const id of ids) {
+    const b = scene.bounds(id);
     if (!b) continue;
     box = box
       ? { minX: Math.min(box.minX, b.x), minY: Math.min(box.minY, b.y), maxX: Math.max(box.maxX, b.x + b.width), maxY: Math.max(box.maxY, b.y + b.height) }
       : { minX: b.x, minY: b.y, maxX: b.x + b.width, maxY: b.y + b.height };
   }
-  if (box && box.maxX - box.minX < 1500 && !initial) reveal({ x: box.minX, y: box.minY, width: box.maxX - box.minX, height: box.maxY - box.minY });
+  return box && { x: box.minX, y: box.minY, width: box.maxX - box.minX, height: box.maxY - box.minY };
 };
 let initial = true;
 
@@ -802,13 +828,42 @@ const home = (): Matrix2D => {
   return { a: k, b: 0, c: 0, d: k, e: (width - box.width * k) / 2 - box.x * k, f: Math.max(24, (height - box.height * k) / 2) - box.y * k };
 };
 
-/** Pans so a world rect is in sight, keeping the zoom, when it isn't already. */
+/** Glides the view from where it is to `to`, zooming out and back in on the way when the move is long. */
+let flight = 0;
+const flyTo = (to: Matrix2D): void => {
+  const from = view;
+  const run = ++flight;
+  const { width, height } = stage.getBoundingClientRect();
+  // The world points at the center of the screen, and the zooms, at both ends.
+  const center = (m: Matrix2D) => ({ x: (width / 2 - m.e) / m.a, y: (height / 2 - m.f) / m.d });
+  const c0 = center(from);
+  const c1 = center(to);
+  const k0 = Math.log(from.a);
+  const k1 = Math.log(to.a);
+  // Far apart, the view backs out so both ends are in sight midway.
+  const span = Math.hypot(c1.x - c0.x, c1.y - c0.y);
+  const out = Math.min(k0, k1, Math.log(Math.max(0.05, Math.min(width, height) / Math.max(1, span * 1.4))));
+  const start = performance.now();
+  const ms = 450 + Math.min(450, span / 8);
+  const frame = (now: number): void => {
+    if (run !== flight) return;
+    const t = Math.min(1, (now - start) / ms);
+    const e = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+    const bump = Math.min(k0, k1) - out;
+    const k = Math.exp(k0 + (k1 - k0) * e - bump * Math.sin(Math.PI * e));
+    const x = c0.x + (c1.x - c0.x) * e;
+    const y = c0.y + (c1.y - c0.y) * e;
+    setView({ a: k, b: 0, c: 0, d: k, e: width / 2 - k * x, f: height / 2 - k * y });
+    if (t < 1) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+};
+
+/** Flies to a world rect, fitting it on the screen at most at full size. */
 const reveal = (b: { x: number; y: number; width: number; height: number }): void => {
   const { width, height } = stage.getBoundingClientRect();
-  const p = applyToPoint(view, b.x, b.y);
-  const q = applyToPoint(view, b.x + b.width, b.y + b.height);
-  if (p.x >= 0 && p.y >= 0 && q.x <= width && q.y <= height) return;
-  setView({ ...view, e: view.e + width / 2 - (p.x + q.x) / 2, f: view.f + height / 2 - (p.y + q.y) / 2 });
+  const k = Math.min(1, (width - 120) / b.width, (height - 120) / b.height);
+  flyTo({ a: k, b: 0, c: 0, d: k, e: width / 2 - k * (b.x + b.width / 2), f: height / 2 - k * (b.y + b.height / 2) });
 };
 
 // The morph demo: day and night drawn apart, blended by controls drawn on the board under them.
@@ -828,7 +883,7 @@ const morphDemo = (): void => {
 };
 
 // The pelican on its bicycle: poses drawn an eighth of a pedal turn apart, morphed into every frame between.
-const PELICAN_AT = { x: 640, y: 990 };
+const PELICAN_AT = { x: 1850, y: -40 };
 const ride = new Ride(PELICAN_AT);
 let position = 0;
 let riding = 0;
@@ -970,19 +1025,36 @@ stage.addEventListener("drop", (e) => {
   if (file) paintPicture(file);
 });
 
+// Every feature is an icon somewhere on the board; what it adds goes to its right.
+const DEMO = (at: { x: number; y: number }) => ({ x: at.x - ICON_REACH, y: at.y });
+const sampleNamed = (name: string): Sample => samples.find((sample) => sample.name === name)!;
+const features: Feature[] = [
+  { id: "pelican", name: "Pelican", glyph: "pelican", ...DEMO(PELICAN_AT), tilt: -6, onClick: pelicanDemo },
+  { id: "physics", name: "Physics", glyph: "physics", ...DEMO(PHYSICS_AT), tilt: 5, onClick: physicsDemo },
+  { id: "graph", name: "Graph", glyph: "graph", ...DEMO(GRAPH_AT), tilt: -4, onClick: graphDemo },
+  { id: "morph", name: "Morph", glyph: "morph", ...DEMO(MORPH_AT), tilt: 7, onClick: morphDemo },
+  { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, onClick: () => showPaint(paintingSource()) },
+  { id: "picture", name: "Paint my image…", glyph: "picture", x: PAINT_AT.x - ICON_REACH, y: PAINT_AT.y + 240, tilt: 4, onClick: () => pictureInput.click() },
+  ...(
+    [
+      ["Badge", "badge", -650, -720, 6],
+      ["Chart", "chart", 0, -780, -7],
+      ["Star", "star", 800, -700, 9],
+      ["Text block", "text", 1300, -760, -3],
+      ["Text around shapes", "wrap", 2050, -720, 5],
+      ["Text in a circle", "circle", 2800, -760, -6],
+      ["Canvas shapes", "shapes", 2650, 40, 4],
+      ["Controls", "controls", 1700, 560, -8],
+      ["Chart.js chart", "chartjs", 2650, 620, 6],
+      ["D3 chart", "d3", 2300, 1080, -5],
+      ["HTML and 3D", "embed", 1000, 1900, 3],
+      ["10,000 shapes", "many", 2000, 1850, -4],
+    ] as const
+  ).map(([name, glyph, x, y, tilt]): Feature => ({ id: glyph, name, glyph, x, y, tilt, onClick: () => void add(sampleNamed(name), { x, y }) })),
+];
+for (const f of features) cards.components.mount(featureIcon(f, () => cards.colors));
+
 // The controls: the playground and inspector cards.
-const sampleActions = (): Action[] => {
-  const list: Action[] = [
-    { text: "+ Pelican", onClick: pelicanDemo },
-    { text: "+ Physics", onClick: physicsDemo },
-    { text: "+ Graph", onClick: graphDemo },
-    { text: "+ Paint by numbers", onClick: () => showPaint(paintingSource()) },
-    { text: "Paint my image…", onClick: () => pictureInput.click(), title: "Turn a picture of yours into paint by numbers, or drop one on the board" },
-    ...samples.map((sample) => ({ text: `+ ${sample.name}`, onClick: () => void add(sample) })),
-  ];
-  list.splice(list.length - 1, 0, { text: "+ Morph", onClick: morphDemo });
-  return list;
-};
 chrome = new Chrome(cards, {
   tools: [
     { name: "select", text: "Select", key: "V" },
@@ -992,7 +1064,6 @@ chrome = new Chrome(cards, {
     { name: "text", text: "Text", key: "T" },
   ],
   onTool: (name) => useTool(name),
-  samples: sampleActions,
   actions: [
     { text: "Play Pelican Ride", look: "accent", onClick: () => location.assign("./game.html") },
     { text: "Vectorize image", onClick: vectorizeSelection, title: "select an image, such as the orange sticker, first" },

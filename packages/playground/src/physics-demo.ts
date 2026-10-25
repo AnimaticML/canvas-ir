@@ -5,7 +5,7 @@ import { type ComponentSpec, type IRDocument, RecordingContext, type Scene } fro
 import { Physics } from "@canvas-ir/physics";
 
 export const PHYSICS_ID = "physics";
-export const PHYSICS_AT = { x: 40, y: 1760 };
+export const PHYSICS_AT = { x: -560, y: 1000 };
 const W = 620;
 const H = 420;
 

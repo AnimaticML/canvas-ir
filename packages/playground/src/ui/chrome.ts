@@ -1,5 +1,5 @@
 // The playground's controls, as two cards on the board drawn with the widget
-// kit: the playground card (drawing tools, what to add, actions, wrapping onto
+// kit: the playground card (drawing tools and actions, wrapping onto
 // as many rows as its width needs) and the inspector, a scrolling card of
 // drawing style, selection, snapping, rendering, accessibility, devtools,
 // pasting SVG and the event log.
@@ -27,8 +27,6 @@ export interface Settings {
 export interface ChromeHost {
   readonly tools: readonly { name: ToolName; text: string; key: string }[];
   readonly onTool: (name: ToolName) => void;
-  /** Sample and demo buttons, in order. */
-  readonly samples: () => readonly Action[];
   /** Buttons at the toolbar's end. */
   readonly actions: readonly Action[];
   readonly style: { fill: string; stroke: string; lineWidth: number };
@@ -63,7 +61,7 @@ export class Chrome {
   private step = { max: 0, value: 0, label: "" };
   private picked = -1;
 
-  /** Puts the cards on `layer`, to the left of where the samples are drawn. */
+  /** Puts the cards on `layer`, to the left of where the first samples are drawn. */
   constructor(layer: CardLayer, private readonly host: ChromeHost) {
     this.texts.set("selection", "Click something on the board.");
     this.texts.set("render-stats", "Nothing drawn yet.");
@@ -143,10 +141,8 @@ export class Chrome {
       const at = place(w);
       p.mount(button({ id, panel: p, box: { x: at.x, y: at.y, w, h: H }, text: a.text, onClick: a.onClick, active, ...(a.look ? { look: a.look } : {}), ...(a.title ? { title: a.title } : {}) }));
     };
-    head("tools-head", "Tools", "Keys V, P, R, O and T. Scroll to zoom, drag empty space to pan, and drag a card by its frame.");
+    head("tools-head", "Tools", "Keys V, P, R, O and T. Scroll to zoom, drag empty space to pan, and drag a card by its frame. Every feature is an icon somewhere on the board: zoom out to find them, press one to add it beside it.");
     for (const tool of this.host.tools) add(`tool-${tool.name}`, { text: tool.text, onClick: () => this.host.onTool(tool.name), title: `${tool.text} (${tool.key})` }, tool.name === this.tool);
-    head("samples-head", "Add to the board");
-    this.host.samples().forEach((a, i) => add(`sample-${i}`, a));
     head("actions-head", "Do");
     this.host.actions.forEach((a, i) => add(`action-${i}`, a));
     return y + H + PAD;
