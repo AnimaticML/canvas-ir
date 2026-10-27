@@ -186,8 +186,10 @@ export class TenMillionPoints {
         const input = e.input as { deltaX?: number; deltaY?: number; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean };
         if (input.ctrlKey || input.metaKey) return;
         e.stopPropagation();
+        const dx = input.deltaX ?? 0;
         const dy = input.deltaY ?? 0;
-        const pan = (input.deltaX ?? 0) + (input.shiftKey ? dy : 0);
+        // A sideways scroll pans; the stray sideways jitter of a trackpad scrolling up or down doesn't.
+        const pan = input.shiftKey ? dy || dx : Math.abs(dx) > Math.abs(dy) ? dx : 0;
         if (pan !== 0) this.view(this.start + (pan / PW) * this.span, this.span);
         else {
           // Zoom about the reading under the pointer, from the whole year down to 40 readings.
