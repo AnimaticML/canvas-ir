@@ -28,7 +28,8 @@ export type Glyph =
   | "chartjs"
   | "embed"
   | "many"
-  | "table";
+  | "table"
+  | "points";
 
 export interface Feature {
   readonly id: string;
@@ -62,6 +63,7 @@ const TINTS: Record<Glyph, string> = {
   embed: "#c7d2fe",
   many: "#d9f99d",
   table: "#cffafe",
+  points: "#dbeafe",
 };
 
 const INK = "#1f2937";
@@ -399,6 +401,22 @@ const glyph = (c: RecordingContext, g: Glyph): void => {
       c.closePath();
       c.fill();
       c.stroke();
+      break;
+    }
+    case "points": {
+      // A dense band of readings.
+      c.beginPath();
+      for (let x = 0; x <= 100; x += 2) c.lineTo(x, 50 - 26 * Math.sin(x / 16) - 8 * Math.sin(x / 3.1) - 10);
+      for (let x = 100; x >= 0; x -= 2) c.lineTo(x, 50 - 26 * Math.sin(x / 16) - 8 * Math.sin(x / 3.1) + 14);
+      c.closePath();
+      c.fillStyle = "#2563eb";
+      c.fill();
+      for (let x = 6; x < 100; x += 11) {
+        c.beginPath();
+        c.arc(x, 84 - 6 * Math.sin(x / 9), 3.5, 0, Math.PI * 2);
+        c.fillStyle = "#1d4ed8";
+        c.fill();
+      }
       break;
     }
     case "table": {

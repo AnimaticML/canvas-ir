@@ -83,6 +83,20 @@ describe("VirtualGroup", () => {
     expect(clicked).toEqual(["table/r10"]);
   });
 
+  test("a new level of detail draws again, and draw is told it", () => {
+    const scene = new Scene({ version: 1, ops: [] });
+    const seen: number[] = [];
+    const g = new VirtualGroup(scene, { id: "g", extent: { x: 0, y: 0, width: 1000, height: 100 }, draw: (c, w, detail) => {
+      seen.push(detail);
+      c.fillRect(w.x, w.y, w.width, w.height);
+    } });
+    const visible = { x: 0, y: 0, width: 100, height: 100 };
+    g.show({ visible, detail: 2 });
+    expect(g.show({ visible, detail: 2 })).toBe(false);
+    expect(g.show({ visible, detail: 3 })).toBe(true);
+    expect(seen).toEqual([2, 3]);
+  });
+
   test("bind draws into a rebuilt scene", () => {
     const { scene, rows } = table();
     rows.show({ visible: { x: 0, y: 0, width: 300, height: 400 } });

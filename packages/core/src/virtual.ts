@@ -16,9 +16,10 @@ export interface VirtualGroupSpec {
    * coordinates: a million-row table draws the rows in it, a map the tiles. It
    * is called again whenever the window changes, so it should draw only what
    * meets it. Nested groups with stable ids (a row's key) keep events and
-   * selection pointing at the same thing across redraws.
+   * selection pointing at the same thing across redraws. `detail` is the
+   * view's level of detail, as the host defined it.
    */
-  draw(ctx: RecordingContext, window: Rect): void;
+  draw(ctx: RecordingContext, window: Rect, detail: number): void;
   /**
    * How much past each side of what shows to draw, as a fraction of what
    * shows, so that small moves need no redraw. Default 0.5. A clipped
@@ -34,6 +35,12 @@ export interface VirtualView {
   readonly visible: Rect;
   /** Clips the drawing to `visible`, as a scroll container does. Default false. */
   readonly clip?: boolean;
+  /**
+   * A level of detail, passed to `draw`; the group draws again when it
+   * changes. A chart of millions of points might pass the log2 of how many
+   * points fall in a pixel, and draw one bar per pixel above 0. Default 0.
+   */
+  readonly detail?: number;
 }
 
 const intersect = (a: Rect, b: Rect): Rect | null => {
@@ -103,15 +110,17 @@ export class VirtualGroup {
 
   /**
    * Says what shows and where the content is. Redraws when the visible part
-   * moves past what was drawn, when the content moved, or, clipped, whenever
-   * the view changed; returns whether it redrew.
+   * moves past what was drawn, when the content moved or the level of detail
+   * changed, or, clipped, whenever the view changed; returns whether it redrew.
    */
   show(view: VirtualView): boolean {
     const transform = view.transform ?? IDENTITY;
-    const moved = !sameMatrix(transform, this.placed);
+    let moved = !sameMatrix(transform, this.placed);
     const visible = intersect(toContent(transform, view.visible), this.spec.extent);
     const clipChanged = view.clip === true && (this.view?.clip !== true || !sameRect(view.visible, this.view.visible));
+    const detailChanged = this.drawn !== null && (view.detail ?? 0) !== (this.view?.detail ?? 0);
     this.view = view;
+    if (detailChanged) moved = true;
     if (!moved && !clipChanged && visible && this.drawn && contains(this.drawn, visible)) return false;
     if (!moved && !clipChanged && !visible && this.drawn) return false;
     this.record(visible);
@@ -155,7 +164,7 @@ export class VirtualGroup {
     ctx.beginGroup({ id: this.spec.id, meta: { ...this.spec.meta, virtual: true } });
     if (window) {
       ctx.setTransform(transform.a, transform.b, transform.c, transform.d, transform.e, transform.f);
-      this.spec.draw(ctx, window);
+      this.spec.draw(ctx, window, view.detail ?? 0);
     }
     ctx.endGroup();
     let document = ctx.getDocument();

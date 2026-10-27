@@ -38,6 +38,7 @@ import { PHYSICS_AT, PHYSICS_ID, type Sandbox, createSandbox, sandboxButton } fr
 import { GRAPH_AT, GRAPH_ID, type ForceGraph, createGraph, graphButton } from "./graph-demo";
 import { PAINT_AT, PAINT_ID, type PaintSource, paintComponent, paintingSource, pictureSource } from "./paint-demo";
 import { MillionRows, TABLE_AT, TABLE_ID } from "./table-demo";
+import { POINTS_AT, POINTS_ID, TenMillionPoints } from "./points-demo";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 import { Chrome, type Settings } from "./ui/chrome";
@@ -141,6 +142,8 @@ const makeRenderer = (): void => {
 };
 /** Set when a wheel on the board reaches the end of its path unclaimed, so it zooms. */
 let wheelFree = false;
+/** The ten-million-point chart, once added. */
+let points: TenMillionPoints | null = null;
 /** The million-row table, once added. */
 let table: MillionRows | null = null;
 /** Interactive objects (the note, the controls), drawn from their state. */
@@ -212,6 +215,7 @@ const followMove = (moved: string, dx: number, dy: number): void => {
     else if (live.dependsOn(moved)) live.update();
   }
   if (table?.alive && inside(TABLE_ID)) table.moved(dx, dy);
+  if (points?.alive && inside(POINTS_ID)) points.moved(dx, dy);
 };
 
 let stepped = false;
@@ -387,6 +391,7 @@ const wire = (): void => {
   makeRenderer();
   if (components) components.bind(scene, router);
   if (table?.alive) table.bind(scene, router);
+  if (points?.alive) points.bind(scene, router);
   else {
     components = new Components(scene, router, {
       recorder: recorderOptions,
@@ -505,6 +510,7 @@ const wire = (): void => {
 const setView = (next: Matrix2D): void => {
   view = next;
   router.setView(view);
+  points?.zoomed();
   render();
 };
 
@@ -1045,6 +1051,12 @@ const tableDemo = (): void => {
   reveal(table.bounds);
 };
 
+// Ten million points: a chart whose plot draws a bar per pixel, a line or dots, by how many readings share a pixel.
+const pointsDemo = (): void => {
+  if (!points?.alive) points = new TenMillionPoints(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log });
+  reveal(points.bounds);
+};
+
 // Every feature is an icon somewhere on the board; what it adds goes to its right.
 const DEMO = (at: { x: number; y: number }) => ({ x: at.x - ICON_REACH, y: at.y });
 const sampleNamed = (name: string): Sample => samples.find((sample) => sample.name === name)!;
@@ -1055,6 +1067,7 @@ const features: Feature[] = [
   { id: "morph", name: "Morph", glyph: "morph", ...DEMO(MORPH_AT), tilt: 7, onClick: morphDemo },
   { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, onClick: () => showPaint(paintingSource()) },
   { id: "table", name: "A million rows", glyph: "table", ...DEMO(TABLE_AT), tilt: -3, onClick: tableDemo },
+  { id: "points", name: "Ten million points", glyph: "points", ...DEMO(POINTS_AT), tilt: 5, onClick: pointsDemo },
   { id: "picture", name: "Paint my image…", glyph: "picture", x: PAINT_AT.x - ICON_REACH, y: PAINT_AT.y + 240, tilt: 4, onClick: () => pictureInput.click() },
   ...(
     [
