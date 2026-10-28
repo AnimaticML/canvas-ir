@@ -29,7 +29,8 @@ export type Glyph =
   | "embed"
   | "many"
   | "table"
-  | "points";
+  | "points"
+  | "galaxy";
 
 export interface Feature {
   readonly id: string;
@@ -64,6 +65,7 @@ const TINTS: Record<Glyph, string> = {
   many: "#d9f99d",
   table: "#cffafe",
   points: "#dbeafe",
+  galaxy: "#c7d2fe",
 };
 
 const INK = "#1f2937";
@@ -417,6 +419,29 @@ const glyph = (c: RecordingContext, g: Glyph): void => {
         c.fillStyle = "#1d4ed8";
         c.fill();
       }
+      break;
+    }
+    case "galaxy": {
+      // A spiral of stars on the night sky, with a ringed planet in front.
+      c.fillStyle = "#0b1020";
+      c.beginPath();
+      c.arc(50, 50, 46, 0, Math.PI * 2);
+      c.fill();
+      for (let arm = 0; arm < 2; arm++) {
+        for (let i = 0; i < 26; i++) {
+          const t = i / 25;
+          const a = arm * Math.PI + t * 4.2;
+          const rr = 4 + t * 36;
+          dot(50 + Math.cos(a) * rr, 50 + Math.sin(a) * rr * 0.62, 2.6 - t * 1.6, i % 5 === 0 ? "#fde68a" : "#c7d2fe");
+        }
+      }
+      dot(50, 50, 6, "#fff7d6");
+      dot(76, 74, 9, "#f59e0b");
+      c.strokeStyle = "#fde68a";
+      c.lineWidth = 2;
+      c.beginPath();
+      c.ellipse(76, 74, 15, 4, -0.3, 0, Math.PI * 2);
+      c.stroke();
       break;
     }
     case "table": {

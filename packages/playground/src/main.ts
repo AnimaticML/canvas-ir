@@ -39,6 +39,7 @@ import { GRAPH_AT, GRAPH_ID, type ForceGraph, createGraph, graphButton } from ".
 import { PAINT_AT, PAINT_ID, type PaintSource, paintComponent, paintingSource, pictureSource } from "./paint-demo";
 import { MillionRows, TABLE_AT, TABLE_ID } from "./table-demo";
 import { POINTS_AT, POINTS_ID, TenMillionPoints } from "./points-demo";
+import { GALAXY_AT, GALAXY_ID, StarsAndPlanets } from "./galaxy-demo";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 import { Chrome, type Settings } from "./ui/chrome";
@@ -144,6 +145,7 @@ const makeRenderer = (): void => {
 let wheelFree = false;
 /** The ten-million-point chart, once added. */
 let points: TenMillionPoints | null = null;
+let galaxy: StarsAndPlanets | null = null;
 /** The million-row table, once added. */
 let table: MillionRows | null = null;
 /** Interactive objects (the note, the controls), drawn from their state. */
@@ -216,6 +218,7 @@ const followMove = (moved: string, dx: number, dy: number): void => {
   }
   if (table?.alive && inside(TABLE_ID)) table.moved(dx, dy);
   if (points?.alive && inside(POINTS_ID)) points.moved(dx, dy);
+  if (galaxy?.alive && inside(GALAXY_ID)) galaxy.moved(dx, dy);
 };
 
 let stepped = false;
@@ -390,8 +393,6 @@ const wire = (): void => {
   a11y.setScene(scene);
   makeRenderer();
   if (components) components.bind(scene, router);
-  if (table?.alive) table.bind(scene, router);
-  if (points?.alive) points.bind(scene, router);
   else {
     components = new Components(scene, router, {
       recorder: recorderOptions,
@@ -401,6 +402,9 @@ const wire = (): void => {
       },
     });
   }
+  if (table?.alive) table.bind(scene, router);
+  if (points?.alive) points.bind(scene, router);
+  if (galaxy?.alive) galaxy.bind(scene, router);
   router.on("*", "wheel", () => {
     wheelFree = true;
   });
@@ -511,6 +515,7 @@ const setView = (next: Matrix2D): void => {
   view = next;
   router.setView(view);
   points?.zoomed();
+  galaxy?.zoomed();
   render();
 };
 
@@ -1057,6 +1062,12 @@ const pointsDemo = (): void => {
   reveal(points.bounds);
 };
 
+// Stars and planets: a galaxy made region by region as you look, from the whole of it down to a planet's face.
+const galaxyDemo = (): void => {
+  if (!galaxy?.alive) galaxy = new StarsAndPlanets(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, recorder: { ...recorderOptions, captureSource: false } });
+  reveal(galaxy.bounds);
+};
+
 // Every feature is an icon somewhere on the board; what it adds goes to its right.
 const DEMO = (at: { x: number; y: number }) => ({ x: at.x - ICON_REACH, y: at.y });
 const sampleNamed = (name: string): Sample => samples.find((sample) => sample.name === name)!;
@@ -1068,6 +1079,7 @@ const features: Feature[] = [
   { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, onClick: () => showPaint(paintingSource()) },
   { id: "table", name: "A million rows", glyph: "table", ...DEMO(TABLE_AT), tilt: -3, onClick: tableDemo },
   { id: "points", name: "Ten million points", glyph: "points", ...DEMO(POINTS_AT), tilt: 5, onClick: pointsDemo },
+  { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...DEMO(GALAXY_AT), tilt: -4, onClick: galaxyDemo },
   { id: "picture", name: "Paint my image…", glyph: "picture", x: PAINT_AT.x - ICON_REACH, y: PAINT_AT.y + 240, tilt: 4, onClick: () => pictureInput.click() },
   ...(
     [
