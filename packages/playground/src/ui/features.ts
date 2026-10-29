@@ -31,7 +31,8 @@ export type Glyph =
   | "table"
   | "points"
   | "galaxy"
-  | "map";
+  | "map"
+  | "book";
 
 export interface Feature {
   readonly id: string;
@@ -68,6 +69,7 @@ const TINTS: Record<Glyph, string> = {
   points: "#dbeafe",
   galaxy: "#c7d2fe",
   map: "#bae6fd",
+  book: "#fed7aa",
 };
 
 const INK = "#1f2937";
@@ -473,6 +475,41 @@ const glyph = (c: RecordingContext, g: Glyph): void => {
       c.strokeRect(6, 12, 88, 76);
       dot(24, 46, 7, "#dc2626");
       dot(24, 46, 2.5, "#ffffff");
+      break;
+    }
+    case "book": {
+      // An open book: two pages of lines, and a ribbon.
+      c.fillStyle = "#7c2d12";
+      c.beginPath();
+      c.moveTo(4, 22);
+      c.lineTo(50, 28);
+      c.lineTo(96, 22);
+      c.lineTo(96, 86);
+      c.lineTo(50, 92);
+      c.lineTo(4, 86);
+      c.closePath();
+      c.fill();
+      c.fillStyle = "#fffaf0";
+      for (const side of [-1, 1]) {
+        c.beginPath();
+        c.moveTo(50, 24);
+        c.bezierCurveTo(50 + side * 14, 14, 50 + side * 30, 14, 50 + side * 42, 18);
+        c.lineTo(50 + side * 42, 80);
+        c.bezierCurveTo(50 + side * 30, 76, 50 + side * 14, 76, 50, 86);
+        c.closePath();
+        c.fill();
+      }
+      c.strokeStyle = "#94a3b8";
+      c.lineWidth = 2;
+      for (let y = 32; y < 74; y += 8) {
+        line(16, y, 42, y + 2);
+        line(58, y + 2, 84, y);
+      }
+      c.strokeStyle = INK;
+      c.lineWidth = 3;
+      line(50, 24, 50, 86);
+      c.fillStyle = "#dc2626";
+      c.fillRect(70, 14, 6, 26);
       break;
     }
     case "table": {

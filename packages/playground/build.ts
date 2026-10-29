@@ -1,5 +1,5 @@
 // Builds the playground and the game into self-contained files, dist/index.html and dist/game.html, with the
-// files they fetch beside them (the world map's data, dist/world.bin).
+// files they fetch beside them (the world map's data, dist/world.bin, and the novel, dist/war-and-peace.txt).
 const page = async (entry: string, html: string, out: string, tag: string): Promise<void> => {
   const result = await Bun.build({
     entrypoints: [new URL(`./src/${entry}`, import.meta.url).pathname],
