@@ -6,6 +6,7 @@
 // hover. The wheel over the chart zooms its time axis and a drag pans it;
 // zooming the board changes the detail too.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type Rect, type Scene, VirtualGroup } from "canvas-ir";
+import { WheelGesture } from "./wheel";
 
 export const POINTS_ID = "ten-million";
 export const POINTS_AT = { x: -560, y: 3150 };
@@ -120,6 +121,7 @@ export class TenMillionPoints {
   private readonly plot: VirtualGroup;
   private readonly frame: ComponentHandle<FrameState>;
   private unlisten: (() => void)[] = [];
+  private readonly gesture = new WheelGesture();
   private drawnPoints = 0;
   private mode = "";
 
@@ -186,10 +188,8 @@ export class TenMillionPoints {
         const input = e.input as { deltaX?: number; deltaY?: number; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean };
         if (input.ctrlKey || input.metaKey) return;
         e.stopPropagation();
-        const dx = input.deltaX ?? 0;
-        const dy = input.deltaY ?? 0;
-        // A sideways scroll pans; the stray sideways jitter of a trackpad scrolling up or down doesn't.
-        const pan = input.shiftKey ? dy || dx : Math.abs(dx) > Math.abs(dy) ? dx : 0;
+        // A sideways gesture pans; up and down zooms, however a trackpad wobbles on the way.
+        const { zoom: dy, pan } = this.gesture.read(input);
         if (pan !== 0) this.view(this.start + (pan / PW) * this.span, this.span);
         else {
           // Zoom about the reading under the pointer, from the whole year down to 40 readings.

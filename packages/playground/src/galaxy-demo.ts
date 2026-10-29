@@ -10,6 +10,7 @@
 // position as a whole light year plus a fraction and everything is drawn
 // relative to it: the board's own float coordinates would run out long before.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
+import { WheelGesture } from "./wheel";
 
 export const GALAXY_ID = "galaxy";
 export const GALAXY_AT = { x: 1300, y: 3250 };
@@ -224,6 +225,7 @@ export class StarsAndPlanets {
   private readonly frame: ComponentHandle<FrameState>;
   private readonly total: number;
   private unlisten: (() => void)[] = [];
+  private readonly gesture = new WheelGesture();
   /** What a click on a drawn star or planet flies to. */
   private targets = new Map<string, { x: At; y: At; scale: number }>();
   private drawn = 0;
@@ -292,10 +294,8 @@ export class StarsAndPlanets {
         if (input.ctrlKey || input.metaKey) return;
         e.stopPropagation();
         this.land();
-        const dx = input.deltaX ?? 0;
-        const dy = input.deltaY ?? 0;
-        // A sideways scroll pans, as on the chart; up and down zooms about the pointer.
-        const pan = input.shiftKey ? dy || dx : Math.abs(dx) > Math.abs(dy) ? dx : 0;
+        // A sideways gesture pans, as on the chart; up and down zooms about the pointer.
+        const { zoom: dy, pan } = this.gesture.read(input);
         const c = this.camera;
         if (pan !== 0) {
           c.x = at(c.x.whole, c.x.part + pan / (this.host.zoom() * c.scale));
