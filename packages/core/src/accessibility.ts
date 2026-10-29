@@ -58,6 +58,7 @@ const numberOf = (value: unknown): number | undefined => (typeof value === "numb
 
 /** The accessibility tree of a scene: top-level nodes in drawing order. */
 export const accessibilityTree = (scene: Scene): AccessibleNode[] => {
+  // Index boxes: placing an element over a node needs no exact outline, and a long stroke's is costly to build.
   const walk = (items: readonly (Branch | Op)[]): AccessibleNode[] => {
     const out: AccessibleNode[] = [];
     // Text ops next to each other in one group read as one run, like the lines of a paragraph.
@@ -72,7 +73,7 @@ export const accessibilityTree = (scene: Scene): AccessibleNode[] => {
     const boundsOf = (ids: readonly string[]): Rect | null => {
       let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
       for (const id of ids) {
-        const b = scene.bounds(id);
+        const b = scene.bounds(id, "index");
         if (!b) continue;
         box = box
           ? { minX: Math.min(box.minX, b.x), minY: Math.min(box.minY, b.y), maxX: Math.max(box.maxX, b.x + b.width), maxY: Math.max(box.maxY, b.y + b.height) }
@@ -94,7 +95,7 @@ export const accessibilityTree = (scene: Scene): AccessibleNode[] => {
         else if (item.kind === "embed") {
           flush();
           const label = item.content["label"] ?? item.content["type"];
-          out.push({ id: item.id, role: "group", label: typeof label === "string" ? label : "embedded element", bounds: scene.bounds(item.id), children: [] });
+          out.push({ id: item.id, role: "group", label: typeof label === "string" ? label : "embedded element", bounds: scene.bounds(item.id, "index"), children: [] });
         }
         continue;
       }
@@ -123,7 +124,7 @@ export const accessibilityTree = (scene: Scene): AccessibleNode[] => {
         ...(value !== undefined ? { value } : {}),
         ...(min !== undefined ? { min } : {}),
         ...(max !== undefined ? { max } : {}),
-        bounds: scene.bounds(item.id!),
+        bounds: scene.bounds(item.id!, "index"),
         children: leaf ? [] : walk(item.items),
       });
     }

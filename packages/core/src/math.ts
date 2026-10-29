@@ -20,7 +20,11 @@ export const applyToPoint = (m: Matrix2D, x: number, y: number): Point => ({
 export const sameMatrix = (m: Matrix2D, n: Matrix2D): boolean =>
   m.a === n.a && m.b === n.b && m.c === n.c && m.d === n.d && m.e === n.e && m.f === n.f;
 
-export const allFinite = (...values: number[]): boolean => values.every(Number.isFinite);
+export const allFinite = (...values: number[]): boolean => {
+  // A loop rather than `every`: this runs for every point drawn.
+  for (let i = 0; i < values.length; i++) if (!Number.isFinite(values[i])) return false;
+  return true;
+};
 
 export const invert = (m: Matrix2D): Matrix2D | null => {
   const det = m.a * m.d - m.b * m.c;

@@ -203,6 +203,23 @@ describe("hitTest", () => {
     expect(s.hitTest({ x: 5, y: 5 }, { includeInvisible: true }).map((h) => h.id)).toEqual(["o0"]);
   });
 
+  test("ops in a group with hit: false are never hit, so what lies under them is", () => {
+    const s = scene((ctx) => {
+      ctx.fillRect(0, 0, 10, 10);
+      ctx.beginGroup({ id: "roads", meta: { hit: false } });
+      ctx.beginGroup({ id: "road" });
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(0, 5);
+      ctx.lineTo(10, 5);
+      ctx.stroke();
+      ctx.endGroup();
+      ctx.endGroup();
+    });
+    expect(ids(s, { x: 5, y: 5 })).toEqual(["o0"]);
+    expect(s.queryRect({ x: 4, y: 4, width: 2, height: 2 })).toEqual(["o0", "o1"]);
+  });
+
   test("nothing is painted under a singular transform", () => {
     const s = scene((ctx) => {
       ctx.rect(0, 0, 10, 10);

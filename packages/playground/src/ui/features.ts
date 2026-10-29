@@ -30,7 +30,8 @@ export type Glyph =
   | "many"
   | "table"
   | "points"
-  | "galaxy";
+  | "galaxy"
+  | "map";
 
 export interface Feature {
   readonly id: string;
@@ -66,6 +67,7 @@ const TINTS: Record<Glyph, string> = {
   table: "#cffafe",
   points: "#dbeafe",
   galaxy: "#c7d2fe",
+  map: "#bae6fd",
 };
 
 const INK = "#1f2937";
@@ -442,6 +444,35 @@ const glyph = (c: RecordingContext, g: Glyph): void => {
       c.beginPath();
       c.ellipse(76, 74, 15, 4, -0.3, 0, Math.PI * 2);
       c.stroke();
+      break;
+    }
+    case "map": {
+      // A folded map: sea, two shores, a road and a pin.
+      c.fillStyle = "#a9d3ea";
+      c.fillRect(6, 12, 88, 76);
+      c.fillStyle = "#f3e3c3";
+      c.beginPath();
+      c.moveTo(6, 12);
+      c.lineTo(52, 12);
+      c.bezierCurveTo(40, 34, 58, 50, 36, 88);
+      c.lineTo(6, 88);
+      c.closePath();
+      c.fill();
+      c.fillStyle = "#dcebc9";
+      c.beginPath();
+      c.moveTo(94, 40);
+      c.bezierCurveTo(78, 46, 70, 66, 80, 88);
+      c.lineTo(94, 88);
+      c.closePath();
+      c.fill();
+      c.strokeStyle = "#d97706";
+      c.lineWidth = 3;
+      line(10, 30, 26, 46, 22, 70, 34, 84);
+      c.strokeStyle = INK;
+      c.lineWidth = 3;
+      c.strokeRect(6, 12, 88, 76);
+      dot(24, 46, 7, "#dc2626");
+      dot(24, 46, 2.5, "#ffffff");
       break;
     }
     case "table": {

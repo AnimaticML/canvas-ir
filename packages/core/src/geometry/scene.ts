@@ -332,6 +332,8 @@ export class Scene {
    * or an embed covering the point hides everything drawn before it. Invisible ops are
    * skipped, unless they are in a group whose meta has `hitArea: true`: a
    * transparent shape there is a deliberate target, such as a slider's grip.
+   * Ops in a group whose meta has `hit: false` are never hit: decoration such
+   * as a map's roads, which pointer handlers don't need.
    */
   hitTest(point: Point, options: HitTestOptions = {}): Hit[] {
     const tolerance = options.tolerance ?? 0;
@@ -340,6 +342,9 @@ export class Scene {
     const hits: Hit[] = [];
     for (const entry of candidates) {
       if (boxDistance(entry.coarse, point) > tolerance) continue;
+      const kind = entry.op.kind;
+      // Checked before the shape is built: a long stroke's outline is costly.
+      if (kind !== "clear" && kind !== "embed" && this.flagged(entry.op.id, "hit", false)) continue;
       const shape = this.shape(entry);
       if (entry.op.kind === "clear") {
         if (shapeContains(shape, point, 0)) break;
