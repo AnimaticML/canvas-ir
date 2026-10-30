@@ -41,7 +41,9 @@ import { MillionRows, TABLE_AT, TABLE_ID } from "./table-demo";
 import { POINTS_AT, POINTS_ID, TenMillionPoints } from "./points-demo";
 import { GALAXY_AT, GALAXY_ID, StarsAndPlanets } from "./galaxy-demo";
 import { MAP_AT, MAP_ID, WorldMap } from "./map-demo";
-import { BOOK_AT, BOOK_ID, WarAndPeace } from "./book-demo";
+import { BOOK_AT, BOOK_ID, warAndPeace } from "./book-demo";
+import { DECLARATION_AT, DECLARATION_ID, declaration } from "./declaration-demo";
+import { Reader } from "./reader";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
 import { Chrome, type Settings } from "./ui/chrome";
@@ -149,7 +151,8 @@ let wheelFree = false;
 let points: TenMillionPoints | null = null;
 let galaxy: StarsAndPlanets | null = null;
 let worldMap: WorldMap | null = null;
-let book: WarAndPeace | null = null;
+let book: Reader | null = null;
+let rights: Reader | null = null;
 /** The million-row table, once added. */
 let table: MillionRows | null = null;
 /** Interactive objects (the note, the controls), drawn from their state. */
@@ -225,6 +228,7 @@ const followMove = (moved: string, dx: number, dy: number): void => {
   if (galaxy?.alive && inside(GALAXY_ID)) galaxy.moved(dx, dy);
   if (worldMap?.alive && inside(MAP_ID)) worldMap.moved(dx, dy);
   if (book?.alive && inside(BOOK_ID)) book.moved(dx, dy);
+  if (rights?.alive && inside(DECLARATION_ID)) rights.moved(dx, dy);
 };
 
 let stepped = false;
@@ -413,6 +417,7 @@ const wire = (): void => {
   if (galaxy?.alive) galaxy.bind(scene, router);
   if (worldMap?.alive) worldMap.bind(scene, router);
   if (book?.alive) book.bind(scene, router);
+  if (rights?.alive) rights.bind(scene, router);
   router.on("*", "wheel", () => {
     wheelFree = true;
   });
@@ -1083,17 +1088,25 @@ const mapDemo = (): void => {
   reveal(worldMap.bounds);
 };
 
-// A whole novel of real text: War and Peace, laid out a chapter at a time as it comes into view and the rest between frames.
+// Long documents of real text, read as books: laid out a section at a time as it comes into view and the rest between frames.
+const readerHost = () => ({
+  components: () => components!,
+  render: () => render(),
+  log,
+  toPage: (x: number, y: number) => {
+    const r = canvas.getBoundingClientRect();
+    const p = applyToPoint(view, x, y);
+    return { x: r.left + p.x, y: r.top + p.y };
+  },
+  recorder: { ...recorderOptions, captureSource: false },
+});
 const bookDemo = (): void => {
-  if (!book?.alive) {
-    const toPage = (x: number, y: number) => {
-      const r = canvas.getBoundingClientRect();
-      const p = applyToPoint(view, x, y);
-      return { x: r.left + p.x, y: r.top + p.y };
-    };
-    book = new WarAndPeace(scene, router, { components: () => components!, render: () => render(), log, toPage, recorder: { ...recorderOptions, captureSource: false } });
-  }
+  if (!book?.alive) book = new Reader(scene, router, readerHost(), warAndPeace);
   reveal(book.bounds);
+};
+const declarationDemo = (): void => {
+  if (!rights?.alive) rights = new Reader(scene, router, readerHost(), declaration);
+  reveal(rights.bounds);
 };
 
 // Every feature is an icon somewhere on the board; what it adds goes to its right.
@@ -1110,6 +1123,7 @@ const features: Feature[] = [
   { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...DEMO(GALAXY_AT), tilt: -4, onClick: galaxyDemo },
   { id: "map", name: "World map", glyph: "map", ...DEMO(MAP_AT), tilt: 3, onClick: mapDemo },
   { id: "book", name: "War and Peace", glyph: "book", ...DEMO(BOOK_AT), tilt: -5, onClick: bookDemo },
+  { id: "declaration", name: "Human rights in 529 languages", glyph: "languages", ...DEMO(DECLARATION_AT), tilt: 4, onClick: declarationDemo },
   { id: "picture", name: "Paint my image…", glyph: "picture", x: PAINT_AT.x - ICON_REACH, y: PAINT_AT.y + 240, tilt: 4, onClick: () => pictureInput.click() },
   ...(
     [

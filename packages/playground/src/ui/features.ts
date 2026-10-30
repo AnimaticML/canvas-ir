@@ -32,7 +32,8 @@ export type Glyph =
   | "points"
   | "galaxy"
   | "map"
-  | "book";
+  | "book"
+  | "languages";
 
 export interface Feature {
   readonly id: string;
@@ -70,6 +71,7 @@ const TINTS: Record<Glyph, string> = {
   galaxy: "#c7d2fe",
   map: "#bae6fd",
   book: "#fed7aa",
+  languages: "#ddd6fe",
 };
 
 const INK = "#1f2937";
@@ -475,6 +477,28 @@ const glyph = (c: RecordingContext, g: Glyph): void => {
       c.strokeRect(6, 12, 88, 76);
       dot(24, 46, 7, "#dc2626");
       dot(24, 46, 2.5, "#ffffff");
+      break;
+    }
+    case "languages": {
+      // Three speech bubbles, each in another script.
+      const bubble = (x: number, y: number, w: number, fill: string, text: string, font: string): void => {
+        c.fillStyle = fill;
+        c.beginPath();
+        c.roundRect(x, y, w, 30, 8);
+        c.fill();
+        c.strokeStyle = INK;
+        c.lineWidth = 3;
+        c.stroke();
+        c.fillStyle = "#ffffff";
+        c.font = font;
+        c.textAlign = "center";
+        c.textBaseline = "middle";
+        c.fillText(text, x + w / 2, y + 16);
+        c.textAlign = "left";
+      };
+      bubble(6, 8, 50, "#2563eb", "Aa", "700 18px sans-serif");
+      bubble(44, 36, 50, "#16a34a", "ع", "700 20px sans-serif");
+      bubble(10, 64, 50, "#dc2626", "文", "700 18px sans-serif");
       break;
     }
     case "book": {
