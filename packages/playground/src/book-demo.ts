@@ -6,9 +6,10 @@
 // yet laid out takes the height its length suggests. The text is a
 // VirtualGroup that records the lines that show. Search runs over the raw
 // text and jumps to each match; a bigger or smaller font lays the book out
-// again.
+// again. Selection is a pair of places in the book, drawn per chapter with
+// the text package's selection rects and copied as plain text.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Scene, VirtualGroup } from "canvas-ir";
-import { type Block, type TextLayout, canvasMeasurer, layoutText } from "@canvas-ir/text";
+import { type Block, type TextLayout, type TextPosition, canvasMeasurer, layoutText, positionAtPoint, selectionRects } from "@canvas-ir/text";
 import bookUrl from "./book/war-and-peace.txt" with { type: "file" };
 import { textSink } from "./ui/kit";
 
@@ -50,6 +51,16 @@ interface Entry {
   readonly text: string;
   readonly book: boolean;
 }
+
+/** A place in the book: a section, a block in it (the headings first, then the paragraphs), and an offset in the block's text. */
+interface Place {
+  readonly section: number;
+  readonly block: number;
+  readonly offset: number;
+}
+
+const compare = (a: Place, b: Place): number => a.section - b.section || a.block - b.block || a.offset - b.offset;
+const words = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter("en", { granularity: "word" }) : null;
 
 interface Match {
   readonly paragraph: number;
@@ -103,6 +114,14 @@ export class WarAndPeace {
   private started = 0;
   private busy = 0;
   private recorded = { lines: 0, ms: 0 };
+  /** Where a selection started, and where it ends now; the same place when nothing is selected. */
+  private anchorAt: Place | null = null;
+  private focusAt: Place | null = null;
+  private clicks = { count: 0, time: 0 };
+  private chosen = 0;
+  /** Where a selecting drag is, and the frame that scrolls while it is past an edge. */
+  private pointer: { x: number; y: number } | null = null;
+  private edge = 0;
   private readonly measurer = canvasMeasurer();
   private readonly text: VirtualGroup;
   private readonly frame: ComponentHandle<FrameState>;
@@ -332,15 +351,59 @@ export class WarAndPeace {
         e.stopPropagation();
         this.scrollTo(this.scroll + (input.deltaY ?? 0));
       }),
-      // Dragging the page scrolls it, as a finger does; the board doesn't move the book.
-      this.router.on(text, "down", (e) => e.stopPropagation()),
+      // A press places the selection's start (Shift moves its end), a double press takes a word and a triple one a paragraph; dragging selects, scrolling past the edges.
+      this.router.on(text, "down", (e) => {
+        e.stopPropagation();
+        const at = this.placeAt(e.point);
+        if (!at) return;
+        const now = performance.now();
+        this.clicks = { count: now - this.clicks.time < 400 ? this.clicks.count + 1 : 1, time: now };
+        if ("shiftKey" in e.input && e.input.shiftKey && this.anchorAt) this.focusAt = at;
+        else if (this.clicks.count === 2) [this.anchorAt, this.focusAt] = this.word(at);
+        else if (this.clicks.count >= 3) {
+          this.anchorAt = { ...at, offset: 0 };
+          this.focusAt = { ...at, offset: this.blockText(this.sections[at.section]!, at.block).length };
+        } else this.anchorAt = this.focusAt = at;
+        this.selected();
+      }),
       this.router.on(text, "dragstart", (e) => e.stopPropagation()),
       this.router.on(text, "drag", (e) => {
         e.stopPropagation();
-        this.scrollTo(this.scroll - e.delta!.y);
+        this.pointer = e.point;
+        this.extend();
+        // Held past an edge, the page keeps scrolling, faster the farther out.
+        if (!this.edge) {
+          const step = (): void => {
+            this.edge = 0;
+            const p = this.pointer;
+            const top = this.y + TITLE;
+            const past = !p ? 0 : p.y < top ? p.y - top : p.y > top + BODY ? p.y - top - BODY : 0;
+            if (past === 0) return;
+            this.scrollTo(this.scroll + past / 3);
+            this.extend();
+            this.edge = requestAnimationFrame(step);
+          };
+          this.edge = requestAnimationFrame(step);
+        }
+      }),
+      this.router.on(text, "dragend", () => {
+        this.pointer = null;
       }),
       this.router.on(BOOK_ID, "keydown", (e) => {
-        const k = e.input as { key: string };
+        const k = e.input as { key: string; ctrlKey?: boolean; metaKey?: boolean };
+        if ((k.ctrlKey || k.metaKey) && (k.key === "c" || k.key === "C")) {
+          e.stopPropagation();
+          this.copy();
+          return;
+        }
+        if ((k.ctrlKey || k.metaKey) && (k.key === "a" || k.key === "A")) {
+          e.stopPropagation();
+          const last = this.sections.length - 1;
+          this.anchorAt = { section: 0, block: 0, offset: 0 };
+          this.focusAt = { section: last, block: this.blockCount(this.sections[last]!) - 1, offset: Infinity };
+          this.selected();
+          return;
+        }
         const step: Record<string, number> = { ArrowDown: 40, ArrowUp: -40, PageDown: BODY - 60, PageUp: -(BODY - 60), " ": BODY - 60 };
         if (k.key === "Home") this.scrollTo(0);
         else if (k.key === "End") this.scrollTo(this.total);
@@ -379,7 +442,8 @@ export class WarAndPeace {
     const lines = this.sections.reduce((n, s) => n + (s.layout?.lines.length ?? 0), 0);
     const layout = this.sections.length === 0 ? "Loading the book" : laid < this.sections.length ? `Laying out: ${laid} of ${this.sections.length} chapters` : `${lines.toLocaleString("en-US")} lines laid out in ${this.busy.toFixed(0)} ms`;
     const search = this.matches.length > 0 ? `; match ${this.match + 1} of ${this.matches.length.toLocaleString("en-US")}` : this.frame.state.query.length > 1 ? "; no matches" : "";
-    const note = `${layout}; ${this.recorded.lines} lines recorded in ${this.recorded.ms.toFixed(1)} ms${search}`;
+    const chosen = this.chosen > 0 && this.selection() ? `; ${this.chosen.toLocaleString("en-US")} characters selected` : "";
+    const note = `${layout}; ${this.recorded.lines} lines recorded in ${this.recorded.ms.toFixed(1)} ms${search}${chosen}`;
     const s = this.frame.state;
     let contents = s.contents;
     const row = this.entries.findIndex((e) => !e.book && e.section === current);
@@ -390,6 +454,11 @@ export class WarAndPeace {
 
   private draw(ctx: RecordingContext, window: { y: number; height: number }): void {
     let recorded = 0;
+    // The whole page takes presses, between the lines and in the margins too.
+    ctx.beginGroup({ id: "page", meta: { hitArea: true } });
+    ctx.fillStyle = "transparent";
+    ctx.fillRect(SIDE + 1 - TEXT_X, window.y, AREA - 1, window.height);
+    ctx.endGroup();
     if (this.sections.length > 0) {
       const first = this.sectionAt(window.y);
       const last = this.sectionAt(window.y + window.height);
@@ -399,6 +468,14 @@ export class WarAndPeace {
         const dy = this.tops[i]! - layout.top;
         const s = this.sections[i]!;
         const heads = s.title ? 2 : 1;
+        const range = this.rangeIn(i);
+        if (range) {
+          ctx.fillStyle = "rgba(37, 99, 235, 0.2)";
+          for (const r of selectionRects(layout, range[0], range[1], this.measurer)) {
+            const top = dy + r.y;
+            if (top + r.height >= window.y && top <= window.y + window.height) ctx.fillRect(r.x, top, r.width, r.height);
+          }
+        }
         let open = -1;
         for (const line of layout.lines) {
           const top = dy + line.top;
@@ -422,6 +499,105 @@ export class WarAndPeace {
       }
     }
     this.recorded.lines = recorded;
+  }
+
+  private blockCount(s: Section): number {
+    return (s.title ? 2 : 1) + s.count;
+  }
+
+  /** A block's text: the book's title, the chapter's, or a paragraph. */
+  private blockText(s: Section, block: number): string {
+    const heads = s.title ? 2 : 1;
+    if (block >= heads) return this.paragraphs[s.first + block - heads] ?? "";
+    return s.title && block === 0 ? s.title : s.chapter;
+  }
+
+  /** The place under a board point in the text, laying out its section if need be. */
+  private placeAt(point: { x: number; y: number }): Place | null {
+    if (this.sections.length === 0) return null;
+    const y = point.y - this.y - TITLE + this.scroll;
+    const section = this.sectionAt(Math.max(0, y));
+    this.lay(section);
+    const layout = this.sections[section]!.layout!;
+    const p = positionAtPoint(layout, { x: point.x - this.x - TEXT_X, y: y - this.tops[section]! + layout.top }, this.measurer);
+    return p ? { section, block: layout.paragraphs[p.paragraph]!.block, offset: p.offset } : null;
+  }
+
+  /** Moves the selection's end to the pointer, held inside the page. */
+  private extend(): void {
+    const p = this.pointer;
+    if (!p || !this.anchorAt) return;
+    const top = this.y + TITLE;
+    const at = this.placeAt({ x: p.x, y: Math.max(top, Math.min(top + BODY - 1, p.y)) });
+    if (!at) return;
+    this.focusAt = at;
+    this.selected();
+  }
+
+  /** The word around a place, or the place itself between words. */
+  private word(at: Place): [Place, Place] {
+    const text = this.blockText(this.sections[at.section]!, at.block);
+    for (const w of words?.segment(text) ?? []) {
+      if (w.index <= at.offset && at.offset < w.index + w.segment.length && w.isWordLike) {
+        return [{ ...at, offset: w.index }, { ...at, offset: w.index + w.segment.length }];
+      }
+    }
+    return [at, at];
+  }
+
+  /** The selection, start first; null when nothing is selected. */
+  private selection(): [Place, Place] | null {
+    if (!this.anchorAt || !this.focusAt) return null;
+    const order = compare(this.anchorAt, this.focusAt);
+    if (order === 0) return null;
+    return order < 0 ? [this.anchorAt, this.focusAt] : [this.focusAt, this.anchorAt];
+  }
+
+  /** The part of the selection in a section, as positions in its layout. */
+  private rangeIn(section: number): [TextPosition, TextPosition] | null {
+    const sel = this.selection();
+    if (!sel || section < sel[0].section || section > sel[1].section) return null;
+    const from = sel[0].section === section ? sel[0] : { block: 0, offset: 0 };
+    const to = sel[1].section === section ? sel[1] : { block: this.blockCount(this.sections[section]!) - 1, offset: Infinity };
+    return [
+      { paragraph: from.block, run: 0, offset: from.offset },
+      { paragraph: to.block, run: 0, offset: to.offset },
+    ];
+  }
+
+  /** The selected text, paragraphs apart by a blank line, as a book copies. */
+  private selectedText(): string {
+    const sel = this.selection();
+    if (!sel) return "";
+    const [from, to] = sel;
+    const out: string[] = [];
+    for (let i = from.section; i <= to.section; i++) {
+      const s = this.sections[i]!;
+      const first = i === from.section ? from.block : 0;
+      const last = i === to.section ? to.block : this.blockCount(s) - 1;
+      for (let b = first; b <= last; b++) {
+        const text = this.blockText(s, b);
+        out.push(text.slice(i === from.section && b === from.block ? from.offset : 0, i === to.section && b === to.block ? to.offset : text.length));
+      }
+    }
+    return out.join("\n\n");
+  }
+
+  /** The selection changed: draw it, and say how much it holds. */
+  private selected(): void {
+    this.chosen = this.selectedText().length;
+    this.text.refresh();
+    this.note();
+    this.host.render();
+  }
+
+  private copy(): void {
+    const text = this.selectedText();
+    if (text === "") return;
+    void navigator.clipboard.writeText(text).then(
+      () => this.host.log(`war and peace: copied ${text.length.toLocaleString("en-US")} characters`),
+      () => this.host.log("war and peace: the browser didn't let the page write to the clipboard"),
+    );
   }
 
   /** Marks the search's matches on a line, the current one stronger. */
@@ -607,7 +783,7 @@ export class WarAndPeace {
         c.fill();
         c.font = `12px ${FONT}`;
         c.fillStyle = "#64748b";
-        c.fillText(`${s.note}. Wheel or drag to read, click a chapter to go there, Enter for the next match.`, 14, TITLE + BODY + STATUS / 2);
+        c.fillText(`${s.note}. Wheel to read, drag to select, Ctrl+C copies, click a chapter to go there.`, 14, TITLE + BODY + STATUS / 2);
       },
       on: {
         wheel: (e, self) => {
