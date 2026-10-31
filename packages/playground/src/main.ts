@@ -1082,9 +1082,9 @@ const galaxyDemo = (): void => {
   reveal(galaxy.bounds);
 };
 
-// A world map of real data, from Natural Earth: tiles at four levels of detail, read as they come into view.
+// A world map of real data, from Natural Earth: tiles at four levels of detail, read as they come into view, and Wikipedia's articles about the places in view.
 const mapDemo = (): void => {
-  if (!worldMap?.alive) worldMap = new WorldMap(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, recorder: { ...recorderOptions, captureSource: false } });
+  if (!worldMap?.alive) worldMap = new WorldMap(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, recorder: { ...recorderOptions, captureSource: false }, reader: readerHost });
   reveal(worldMap.bounds);
 };
 

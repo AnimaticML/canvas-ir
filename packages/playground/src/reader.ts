@@ -9,18 +9,12 @@
 // out again. Selection is a pair of places in the document, drawn per section
 // with the text package's selection rects and copied as plain text.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Scene, VirtualGroup } from "canvas-ir";
-import { type Block, type Direction, type TextLayout, type TextPosition, canvasMeasurer, layoutText, positionAtPoint, selectionRects } from "@canvas-ir/text";
+import { type Block, type Direction, type Inline, type TextLayout, type TextPosition, canvasMeasurer, layoutText, positionAtPoint, selectionRects } from "@canvas-ir/text";
 import { fit, textSink } from "./ui/kit";
 
-const W = 1180;
 const TITLE = 46;
-const BODY = 800;
 const STATUS = 28;
-const SIDE = 250;
 const GUTTER = 14;
-const AREA = W - GUTTER - SIDE;
-const COLUMN = 640;
-const TEXT_X = SIDE + (AREA - COLUMN) / 2;
 const ROW = 22;
 const SIZES = [14, 15, 17, 19, 22, 26];
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
@@ -60,18 +54,46 @@ export interface Entry {
   readonly group: boolean;
 }
 
+/** A link in a paragraph: a span of its text, and where it goes. */
+export interface Link {
+  readonly start: number;
+  readonly end: number;
+  readonly href: string;
+}
+
+/** A document split for reading. */
+export interface ReaderDocument {
+  readonly paragraphs: string[];
+  readonly sections: SectionSource[];
+  readonly entries: Entry[];
+  /** Each paragraph's heading level, 0 for body text. */
+  readonly levels?: Uint8Array;
+  /** The links in each paragraph that has any, in order. */
+  readonly links?: ReadonlyMap<number, readonly Link[]>;
+}
+
 export interface ReaderSpec {
   readonly id: string;
   readonly at: { x: number; y: number };
   readonly title: string;
   readonly subtitle: string;
-  /** The document's file, fetched beside the page. */
-  readonly url: string;
+  /** The document's file, fetched beside the page; without one, the reader waits for `open`. */
+  readonly url?: string;
   /** What a section is called, for the status line: "chapters", "languages". */
   readonly sections: string;
   readonly font: string;
   /** Splits the file into paragraphs, sections and the contents. */
-  parse(source: string): { paragraphs: string[]; sections: SectionSource[]; entries: Entry[]; levels?: Uint8Array };
+  parse(source: string): ReaderDocument;
+  /** The reader's width, the text's height and the contents' width, 0 for none. A book's, by default. */
+  readonly size?: { readonly width: number; readonly body: number; readonly side: number };
+  /** A group to draw the reader in, which moves it. */
+  readonly parent?: string;
+  /** What the status line says to do. */
+  readonly hint?: string;
+  /** A click on a link. */
+  readonly onLink?: (href: string) => void;
+  /** Shows a close button that calls this. */
+  readonly onClose?: () => void;
 }
 
 /** A place in the book: a section, a block in it (the headings first, then the paragraphs), and an offset in the block's text. */
@@ -124,6 +146,15 @@ export class Reader {
   private entries: Entry[] = [];
   /** The section of each paragraph. */
   private sectionOf = new Uint16Array(0);
+  private links: ReadonlyMap<number, readonly Link[]> = new Map();
+  private title: string;
+  private subtitle: string;
+  private readonly w: number;
+  private readonly body: number;
+  private readonly side: number;
+  private readonly area: number;
+  private readonly column: number;
+  private readonly textX: number;
   /** Each section's top and the bottom of the last, in the book's coordinates. */
   private tops = new Float64Array(1);
   private scroll = 0;
@@ -156,7 +187,16 @@ export class Reader {
   ) {
     this.x = spec.at.x;
     this.y = spec.at.y;
-    scene.addGroup({ id: spec.id, meta: { role: "figure", label: spec.title, source: spec.id } });
+    this.title = spec.title;
+    this.subtitle = spec.subtitle;
+    const size = spec.size ?? { width: 1180, body: 800, side: 250 };
+    this.w = size.width;
+    this.body = size.body;
+    this.side = size.side;
+    this.area = this.w - GUTTER - this.side;
+    this.column = Math.min(640, this.area - 48);
+    this.textX = this.side + (this.area - this.column) / 2;
+    scene.addGroup({ id: spec.id, ...(spec.parent ? { parent: spec.parent } : {}), meta: { role: "figure", label: spec.title, source: spec.id } });
     this.frame = host.components().mount(this.frameSpec());
     this.text = new VirtualGroup(
       scene,
@@ -165,14 +205,14 @@ export class Reader {
         parent: spec.id,
         meta: { role: "document", label: spec.title },
         // Taller than any book: the view is clipped to what shows, and the book's height changes as it is laid out.
-        extent: { x: 0, y: 0, width: COLUMN, height: 1e9 },
+        extent: { x: 0, y: 0, width: this.column, height: 1e9 },
         draw: (ctx, window) => this.draw(ctx, window),
       },
       host.recorder ? { recorder: host.recorder } : {},
     );
     this.show();
     this.listen();
-    void this.load();
+    if (spec.url) void this.load(spec.url);
   }
 
   get alive(): boolean {
@@ -180,7 +220,33 @@ export class Reader {
   }
 
   get bounds(): { x: number; y: number; width: number; height: number } {
-    return { x: this.x, y: this.y, width: W, height: TITLE + BODY + STATUS };
+    return { x: this.x, y: this.y, width: this.w, height: TITLE + this.body + STATUS };
+  }
+
+  /** Takes the reader off the board. */
+  close(): void {
+    for (const off of this.unlisten) off();
+    this.unlisten = [];
+    window.clearTimeout(this.pump);
+    cancelAnimationFrame(this.edge);
+    if (this.alive) this.scene.remove(this.spec.id);
+    this.host.render();
+  }
+
+  /** Says what is coming, with an empty page until it does. */
+  wait(title: string, note: string): void {
+    this.title = title;
+    this.subtitle = "";
+    this.take({ paragraphs: [], sections: [], entries: [] });
+    this.frame.setState({ note });
+  }
+
+  /** Reads a document in place of the one shown, from its start. */
+  open(title: string, subtitle: string, doc: ReaderDocument): void {
+    this.title = title;
+    this.subtitle = subtitle;
+    this.take(doc);
+    this.log(`${doc.paragraphs.length} paragraphs in ${doc.sections.length} ${this.spec.sections}`);
   }
 
   bind(scene: Scene, router: EventRouter): void {
@@ -197,23 +263,35 @@ export class Reader {
   }
 
   /** Fetches the text, which ships beside the page, and splits it into sections. */
-  private async load(): Promise<void> {
+  private async load(url: string): Promise<void> {
     const t0 = performance.now();
-    const source = await (await fetch(this.spec.url)).text();
-    const parsed = this.spec.parse(source);
-    this.paragraphs = parsed.paragraphs;
-    this.levels = parsed.levels ?? new Uint8Array(this.paragraphs.length);
-    this.sections = parsed.sections.map((s) => ({ ...s, layout: null }));
-    this.entries = parsed.entries;
-    this.sectionOf = new Uint16Array(this.paragraphs.length);
-    this.sections.forEach((s, i) => this.sectionOf.fill(i, s.first, s.first + s.count));
+    const source = await (await fetch(url)).text();
+    this.take(this.spec.parse(source));
     const words = source.split(/\s+/).length;
     this.log(`${words.toLocaleString("en-US")} words in ${this.sections.length} ${this.spec.sections} read in ${(performance.now() - t0).toFixed(0)} ms`);
+  }
+
+  private take(doc: ReaderDocument): void {
+    this.paragraphs = doc.paragraphs;
+    this.levels = doc.levels ?? new Uint8Array(this.paragraphs.length);
+    this.links = doc.links ?? new Map();
+    this.sections = doc.sections.map((s) => ({ ...s, layout: null }));
+    this.entries = doc.entries;
+    this.sectionOf = new Uint16Array(this.paragraphs.length);
+    this.sections.forEach((s, i) => this.sectionOf.fill(i, s.first, s.first + s.count));
+    this.lower = null;
+    this.matches = [];
+    this.byParagraph = new Map();
+    this.match = -1;
+    this.anchorAt = this.focusAt = null;
+    this.chosen = 0;
+    this.scroll = 0;
+    this.frame.setState({ scroll: 0, current: 0, contents: 0, query: "", caret: 0 });
     this.relayout();
   }
 
   private log(line: string): void {
-    this.host.log(`${this.spec.title.toLowerCase()}: ${line}`);
+    this.host.log(`${this.title.toLowerCase()}: ${line}`);
   }
 
   /** Lays the book out again from scratch, the chapters in view first. */
@@ -221,7 +299,7 @@ export class Reader {
     const at = this.anchor();
     for (const s of this.sections) s.layout = null;
     this.measure();
-    this.scroll = this.tops[at.section]! + at.fraction * this.heightOf(at.section);
+    this.scroll = this.sections.length > 0 ? this.tops[at.section]! + at.fraction * this.heightOf(at.section) : 0;
     this.started = performance.now();
     this.busy = 0;
     this.show(true);
@@ -252,16 +330,58 @@ export class Reader {
     }));
     for (let i = s.first; i < s.first + s.count; i++) {
       const level = this.levels[i]!;
-      const content = [this.paragraphs[i]!];
+      const content = this.runsOf(i);
       blocks.push(level > 0 ? { type: "heading", level: level as 1 | 2 | 3 | 4 | 5 | 6, direction: s.direction, content } : { type: "paragraph", direction: s.direction, content });
     }
     return blocks;
   }
 
+  /** A paragraph as runs: its text, cut where its links start and end. */
+  private runsOf(paragraph: number): Inline[] {
+    const text = this.paragraphs[paragraph]!;
+    const links = this.links.get(paragraph);
+    if (!links) return [text];
+    const runs: Inline[] = [];
+    let at = 0;
+    for (const l of links) {
+      if (l.start > at) runs.push(text.slice(at, l.start));
+      runs.push({ text: text.slice(l.start, l.end), href: l.href });
+      at = l.end;
+    }
+    if (at < text.length) runs.push(text.slice(at));
+    return runs;
+  }
+
+  /** Where each run of a laid-out block starts in the block's text. */
+  private starts(layout: TextLayout, block: number): number[] {
+    const out = [0];
+    for (const r of layout.paragraphs[block]!.runs) out.push(out[out.length - 1]! + r.text.length);
+    return out;
+  }
+
+  /** A block offset as a run and an offset in it. */
+  private position(layout: TextLayout, block: number, offset: number): TextPosition {
+    const starts = this.starts(layout, block);
+    const runs = starts.length - 1;
+    if (offset === Infinity) return { paragraph: block, run: runs - 1, offset: Infinity };
+    let run = 0;
+    while (run < runs - 1 && starts[run + 1]! <= offset) run++;
+    return { paragraph: block, run, offset: offset - starts[run]! };
+  }
+
+  /** The link at a place, if any. */
+  private linkAt(at: Place): string | null {
+    const s = this.sections[at.section]!;
+    const paragraph = s.first + at.block - s.heads.length;
+    if (at.block < s.heads.length) return null;
+    for (const l of this.links.get(paragraph) ?? []) if (l.start <= at.offset && at.offset < l.end) return l.href;
+    return null;
+  }
+
   private lay(i: number): void {
     const s = this.sections[i]!;
     if (s.layout) return;
-    s.layout = layoutText({ blocks: this.blocks(s) }, { container: { x: 0, y: 0, width: COLUMN }, theme: this.theme(), measurer: this.measurer });
+    s.layout = layoutText({ blocks: this.blocks(s) }, { container: { x: 0, y: 0, width: this.column }, theme: this.theme(), measurer: this.measurer });
   }
 
   /** A section's height: laid out, or guessed from its length and the chapters laid out so far. */
@@ -283,7 +403,7 @@ export class Reader {
       height += s.layout.bottom - s.layout.top - (2 * s.heads.length + 1) * this.size;
     }
     // About half an em a character, before anything is laid out.
-    this.perChar = chars > 0 ? height / chars : (1.6 * this.size) / (COLUMN / (0.47 * this.size));
+    this.perChar = chars > 0 ? height / chars : (1.6 * this.size) / (this.column / (0.47 * this.size));
     const tops = new Float64Array(this.sections.length + 1);
     for (let i = 0; i < this.sections.length; i++) tops[i + 1] = tops[i]! + this.heightOf(i);
     this.tops = tops;
@@ -317,7 +437,7 @@ export class Reader {
     if (this.sections.length === 0) return;
     for (let round = 0; round < 8; round++) {
       const first = this.sectionAt(this.scroll);
-      const last = this.sectionAt(this.scroll + BODY);
+      const last = this.sectionAt(this.scroll + this.body);
       let laid = false;
       for (let i = first; i <= last; i++) {
         if (this.sections[i]!.layout) continue;
@@ -329,7 +449,7 @@ export class Reader {
       }
       if (!laid) break;
     }
-    this.scroll = Math.max(0, Math.min(this.total - BODY, this.scroll));
+    this.scroll = Math.max(0, Math.min(this.total - this.body, this.scroll));
   }
 
   /** Lays out the rest of the book a slice at a time between frames. */
@@ -351,7 +471,7 @@ export class Reader {
       this.scroll = this.tops[at.section]! + at.fraction * this.heightOf(at.section);
       this.busy += performance.now() - t0;
       // Chapters laid out below the view move nothing in it.
-      const moved = before <= this.sectionAt(this.scroll + BODY);
+      const moved = before <= this.sectionAt(this.scroll + this.body);
       const done = this.sections.every((s) => s.layout);
       if (done) {
         const lines = this.sections.reduce((n, s) => n + s.layout!.lines.length, 0);
@@ -399,7 +519,7 @@ export class Reader {
             this.edge = 0;
             const p = this.pointer;
             const top = this.y + TITLE;
-            const past = !p ? 0 : p.y < top ? p.y - top : p.y > top + BODY ? p.y - top - BODY : 0;
+            const past = !p ? 0 : p.y < top ? p.y - top : p.y > top + this.body ? p.y - top - this.body : 0;
             if (past === 0) return;
             this.scrollTo(this.scroll + past / 3);
             this.extend();
@@ -410,6 +530,15 @@ export class Reader {
       }),
       this.router.on(text, "dragend", () => {
         this.pointer = null;
+      }),
+      // A click on a link, not a drag that selects, follows it.
+      this.router.on(text, "click", (e) => {
+        if (!this.spec.onLink || this.selection()) return;
+        const at = this.placeAt(e.point);
+        const href = at && this.linkAt(at);
+        if (!href) return;
+        e.stopPropagation();
+        this.spec.onLink(href);
       }),
       this.router.on(this.spec.id, "keydown", (e) => {
         const k = e.input as { key: string; ctrlKey?: boolean; metaKey?: boolean };
@@ -426,7 +555,7 @@ export class Reader {
           this.selected();
           return;
         }
-        const step: Record<string, number> = { ArrowDown: 40, ArrowUp: -40, PageDown: BODY - 60, PageUp: -(BODY - 60), " ": BODY - 60 };
+        const step: Record<string, number> = { ArrowDown: 40, ArrowUp: -40, PageDown: this.body - 60, PageUp: -(this.body - 60), " ": this.body - 60 };
         if (k.key === "Home") this.scrollTo(0);
         else if (k.key === "End") this.scrollTo(this.total);
         else if (step[k.key] !== undefined) this.scrollTo(this.scroll + step[k.key]!);
@@ -437,7 +566,7 @@ export class Reader {
   }
 
   private scrollTo(y: number): void {
-    const next = Math.max(0, Math.min(this.total - BODY, y));
+    const next = Math.max(0, Math.min(this.total - this.body, y));
     if (next === this.scroll) return;
     this.scroll = next;
     this.show();
@@ -448,8 +577,8 @@ export class Reader {
     this.fill();
     const t0 = performance.now();
     const view = {
-      transform: { a: 1, b: 0, c: 0, d: 1, e: this.x + TEXT_X, f: this.y + TITLE - this.scroll },
-      visible: { x: this.x + SIDE + 1, y: this.y + TITLE, width: AREA - 1, height: BODY },
+      transform: { a: 1, b: 0, c: 0, d: 1, e: this.x + this.textX, f: this.y + TITLE - this.scroll },
+      visible: { x: this.x + this.side + 1, y: this.y + TITLE, width: this.area - 1, height: this.body },
       clip: true,
     };
     if (!this.text.show(view) && redraw) this.text.refresh();
@@ -469,7 +598,7 @@ export class Reader {
     const s = this.frame.state;
     let contents = s.contents;
     const row = this.entries.findIndex((e) => !e.group && e.section === current);
-    const rows = Math.floor(BODY / ROW);
+    const rows = Math.floor(this.body / ROW);
     if (row >= 0 && current !== s.current) contents = Math.max(0, Math.min(this.entries.length - rows, row < contents + 2 || row > contents + rows - 3 ? row - Math.floor(rows / 3) : contents));
     this.frame.setState({ scroll: this.scroll, current, contents, note });
   }
@@ -479,7 +608,7 @@ export class Reader {
     // The whole page takes presses, between the lines and in the margins too.
     ctx.beginGroup({ id: "page", meta: { hitArea: true } });
     ctx.fillStyle = "transparent";
-    ctx.fillRect(SIDE + 1 - TEXT_X, window.y, AREA - 1, window.height);
+    ctx.fillRect(this.side + 1 - this.textX, window.y, this.area - 1, window.height);
     ctx.endGroup();
     // Fragments are placed by their left edge, whatever their direction.
     ctx.textAlign = "left";
@@ -511,13 +640,16 @@ export class Reader {
             ctx.beginGroup({ id: paragraph >= 0 ? `p${paragraph}` : `s${i}h${block}` });
             open = block;
           }
-          if (block >= heads) this.highlight(ctx, s.first + block - heads, line, top);
+          const starts = this.starts(layout, line.paragraph);
+          if (block >= heads) this.highlight(ctx, s.first + block - heads, line, top, starts);
+          const runs = layout.paragraphs[line.paragraph]!.runs;
           for (const f of line.fragments) {
             ctx.font = f.font;
             ctx.fillStyle = f.color;
             // A fragment is one direction's run, already in visual order; the canvas lays out its letters that way.
             ctx.direction = f.direction;
             ctx.fillText(f.text, f.x, dy + line.baseline);
+            if (f.run >= 0 && runs[f.run]!.href !== undefined) ctx.fillRect(f.x, dy + line.baseline + 2, f.width, 1);
           }
           recorded++;
         }
@@ -544,8 +676,10 @@ export class Reader {
     const section = this.sectionAt(Math.max(0, y));
     this.lay(section);
     const layout = this.sections[section]!.layout!;
-    const p = positionAtPoint(layout, { x: point.x - this.x - TEXT_X, y: y - this.tops[section]! + layout.top }, this.measurer);
-    return p ? { section, block: layout.paragraphs[p.paragraph]!.block, offset: p.offset } : null;
+    const p = positionAtPoint(layout, { x: point.x - this.x - this.textX, y: y - this.tops[section]! + layout.top }, this.measurer);
+    if (!p) return null;
+    const block = layout.paragraphs[p.paragraph]!.block;
+    return { section, block, offset: this.starts(layout, p.paragraph)[p.run]! + p.offset };
   }
 
   /** Moves the selection's end to the pointer, held inside the page. */
@@ -553,7 +687,7 @@ export class Reader {
     const p = this.pointer;
     if (!p || !this.anchorAt) return;
     const top = this.y + TITLE;
-    const at = this.placeAt({ x: p.x, y: Math.max(top, Math.min(top + BODY - 1, p.y)) });
+    const at = this.placeAt({ x: p.x, y: Math.max(top, Math.min(top + this.body - 1, p.y)) });
     if (!at) return;
     this.focusAt = at;
     this.selected();
@@ -584,10 +718,8 @@ export class Reader {
     if (!sel || section < sel[0].section || section > sel[1].section) return null;
     const from = sel[0].section === section ? sel[0] : { block: 0, offset: 0 };
     const to = sel[1].section === section ? sel[1] : { block: this.blockCount(this.sections[section]!) - 1, offset: Infinity };
-    return [
-      { paragraph: from.block, run: 0, offset: from.offset },
-      { paragraph: to.block, run: 0, offset: to.offset },
-    ];
+    const layout = this.sections[section]!.layout!;
+    return [this.position(layout, from.block, from.offset), this.position(layout, to.block, to.offset)];
   }
 
   /** The selected text, paragraphs apart by a blank line, as a book copies. */
@@ -626,19 +758,23 @@ export class Reader {
   }
 
   /** Marks the search's matches on a line, the current one stronger. */
-  private highlight(ctx: RecordingContext, paragraph: number, line: TextLayout["lines"][number], top: number): void {
+  private highlight(ctx: RecordingContext, paragraph: number, line: TextLayout["lines"][number], top: number, runStarts: readonly number[]): void {
     const starts = this.byParagraph.get(paragraph);
     if (!starts) return;
     const n = this.frame.state.query.length;
     const current = this.matches[this.match];
     for (const f of line.fragments) {
+      if (f.run < 0) continue;
+      // Where the fragment is in the paragraph's text, past the runs before it.
+      const from = runStarts[f.run]! + f.sourceStart;
+      const to = runStarts[f.run]! + f.sourceEnd;
       for (const start of starts) {
-        const a = Math.max(start, f.sourceStart);
-        const b = Math.min(start + n, f.sourceEnd);
+        const a = Math.max(start, from);
+        const b = Math.min(start + n, to);
         if (a >= b) continue;
         // Right-to-left fragments run from their right edge.
         const at = (k: number): number => {
-          const w = this.measurer.width(f.font, f.text.slice(0, k - f.sourceStart));
+          const w = this.measurer.width(f.font, f.text.slice(0, k - from));
           return f.direction === "rtl" ? f.x + f.width - w : f.x + w;
         };
         const x0 = Math.min(at(a), at(b));
@@ -685,15 +821,16 @@ export class Reader {
     const s = this.sections[section]!;
     const layout = s.layout!;
     const block = m.paragraph - s.first + s.heads.length;
-    const line = layout.lines.find((l) => layout.paragraphs[l.paragraph]!.block === block && l.fragments.some((f) => f.sourceEnd > m.start)) ?? layout.lines[0]!;
-    this.scroll = Math.max(0, Math.min(this.total - BODY, this.tops[section]! - layout.top + line.top - BODY / 3));
+    const starts = this.starts(layout, block);
+    const line = layout.lines.find((l) => layout.paragraphs[l.paragraph]!.block === block && l.fragments.some((f) => f.run >= 0 && starts[f.run]! + f.sourceEnd > m.start)) ?? layout.lines[0]!;
+    this.scroll = Math.max(0, Math.min(this.total - this.body, this.tops[section]! - layout.top + line.top - this.body / 3));
     this.show(true);
   }
 
   private jump(section: number): void {
     this.scroll = this.tops[section]!;
     this.fill();
-    this.scroll = Math.min(this.tops[section]!, this.total - BODY);
+    this.scroll = Math.min(this.tops[section]!, this.total - this.body);
     this.show();
   }
 
@@ -705,17 +842,22 @@ export class Reader {
   }
 
   private frameSpec(): ComponentSpec<FrameState> {
-    const H = TITLE + BODY + STATUS;
-    const field = { x: W - 14 - 2 * 34 - 8 - 240, y: 10, width: 240, height: 26 };
-    const smaller = { x: W - 14 - 2 * 34 - 4, y: 10, width: 34, height: 26 };
-    const bigger = { x: W - 14 - 34, y: 10, width: 34, height: 26 };
+    const H = TITLE + this.body + STATUS;
+    // The close button, when there is one, then the font sizes and the search field, from the right.
+    const right = this.w - 14 - (this.spec.onClose ? 34 + 8 : 0);
+    const close = { x: this.w - 14 - 34, y: 10, width: 34, height: 26 };
+    const searchWidth = Math.min(240, this.w / 3);
+    const field = { x: right - 2 * 34 - 8 - searchWidth, y: 10, width: searchWidth, height: 26 };
+    const smaller = { x: right - 2 * 34 - 4, y: 10, width: 34, height: 26 };
+    const bigger = { x: right - 34, y: 10, width: 34, height: 26 };
+    const hint = this.spec.hint ?? "Wheel to read, drag to select, Ctrl+C copies, click the contents to go there.";
     const inside = (p: { x: number; y: number }, b: { x: number; y: number; width: number; height: number }): boolean => p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
     const local = (point: { x: number; y: number }) => ({ x: point.x - this.x, y: point.y - this.y });
-    const track = { x: W - GUTTER + 4, y: TITLE + 4, width: 6, height: BODY - 8 };
+    const track = { x: this.w - GUTTER + 4, y: TITLE + 4, width: 6, height: this.body - 8 };
     const thumb = (s: FrameState): { top: number; height: number } => {
-      const total = Math.max(BODY, this.total);
-      const height = Math.max(28, (track.height * BODY) / total);
-      return { top: track.y + ((track.height - height) * s.scroll) / Math.max(1, total - BODY), height };
+      const total = Math.max(this.body, this.total);
+      const height = Math.max(28, (track.height * this.body) / total);
+      return { top: track.y + ((track.height - height) * s.scroll) / Math.max(1, total - this.body), height };
     };
     let grab: number | null = null;
     return {
@@ -729,7 +871,7 @@ export class Reader {
         c.shadowBlur = 18;
         c.shadowOffsetY = 4;
         c.beginPath();
-        c.roundRect(0, 0, W, H, 10);
+        c.roundRect(0, 0, this.w, H, 10);
         c.fillStyle = "#ffffff";
         c.fill();
         c.shadowColor = "transparent";
@@ -739,11 +881,29 @@ export class Reader {
         c.textBaseline = "middle";
         c.font = `600 15px ${FONT}`;
         c.fillStyle = "#0f172a";
-        c.fillText(this.spec.title, 14, TITLE / 2);
-        const after = 14 + c.measureText(this.spec.title).width + 8;
+        const room = field.x - 14 - 14;
+        const title = fit(c, this.title, room);
+        c.fillText(title, 14, TITLE / 2);
+        const after = 14 + c.measureText(title).width + 8;
         c.font = `12px ${FONT}`;
         c.fillStyle = "#64748b";
-        c.fillText(this.spec.subtitle, after, TITLE / 2 + 1);
+        if (room - (after - 14) > 40) c.fillText(fit(c, this.subtitle, room - (after - 14)), after, TITLE / 2 + 1);
+        if (this.spec.onClose) {
+          c.beginPath();
+          c.roundRect(close.x, close.y, close.width, close.height, 6);
+          c.fillStyle = "#f1f5f9";
+          c.fill();
+          c.strokeStyle = "#475569";
+          c.lineWidth = 1.5;
+          c.beginPath();
+          const cx = close.x + close.width / 2;
+          const cy = close.y + close.height / 2;
+          c.moveTo(cx - 5, cy - 5);
+          c.lineTo(cx + 5, cy + 5);
+          c.moveTo(cx + 5, cy - 5);
+          c.lineTo(cx - 5, cy + 5);
+          c.stroke();
+        }
         // The search field.
         c.beginPath();
         c.roundRect(field.x + 0.5, field.y + 0.5, field.width - 1, field.height - 1, 6);
@@ -782,30 +942,33 @@ export class Reader {
           c.textAlign = "left";
         }
         // The contents, beside the text.
-        c.fillStyle = "#f8fafc";
-        c.fillRect(0.5, TITLE, SIDE, BODY);
         c.fillStyle = "#e2e8f0";
-        c.fillRect(0, TITLE, W, 1);
-        c.fillRect(SIDE, TITLE, 1, BODY);
-        c.fillRect(0, TITLE + BODY, W, 1);
-        c.save();
-        c.beginPath();
-        c.rect(0, TITLE + 1, SIDE, BODY - 1);
-        c.clip();
-        const rows = Math.ceil(BODY / ROW);
-        for (let r = 0; r < rows; r++) {
-          const entry = this.entries[s.contents + r];
-          if (!entry) break;
-          const y = TITLE + 4 + r * ROW;
-          if (!entry.group && entry.section === s.current) {
-            c.fillStyle = "#dbeafe";
-            c.fillRect(6, y, SIDE - 12, ROW);
+        c.fillRect(0, TITLE, this.w, 1);
+        c.fillRect(0, TITLE + this.body, this.w, 1);
+        if (this.side > 0) {
+          c.fillStyle = "#f8fafc";
+          c.fillRect(0.5, TITLE + 1, this.side, this.body - 1);
+          c.fillStyle = "#e2e8f0";
+          c.fillRect(this.side, TITLE, 1, this.body);
+          c.save();
+          c.beginPath();
+          c.rect(0, TITLE + 1, this.side, this.body - 1);
+          c.clip();
+          const rows = Math.ceil(this.body / ROW);
+          for (let r = 0; r < rows; r++) {
+            const entry = this.entries[s.contents + r];
+            if (!entry) break;
+            const y = TITLE + 4 + r * ROW;
+            if (!entry.group && entry.section === s.current) {
+              c.fillStyle = "#dbeafe";
+              c.fillRect(6, y, this.side - 12, ROW);
+            }
+            c.font = entry.group ? `600 12.5px ${FONT}` : `12.5px ${FONT}`;
+            c.fillStyle = entry.group ? "#0f172a" : "#475569";
+            c.fillText(fit(c, entry.text, this.side - (entry.group ? 24 : 38)), entry.group ? 14 : 28, y + ROW / 2 + 0.5);
           }
-          c.font = entry.group ? `600 12.5px ${FONT}` : `12.5px ${FONT}`;
-          c.fillStyle = entry.group ? "#0f172a" : "#475569";
-          c.fillText(fit(c, entry.text, SIDE - (entry.group ? 24 : 38)), entry.group ? 14 : 28, y + ROW / 2 + 0.5);
+          c.restore();
         }
-        c.restore();
         // Where the view is in the book.
         const t = thumb(s);
         c.fillStyle = "rgba(100, 116, 139, 0.5)";
@@ -814,26 +977,26 @@ export class Reader {
         c.fill();
         c.font = `12px ${FONT}`;
         c.fillStyle = "#64748b";
-        c.fillText(`${s.note}. Wheel to read, drag to select, Ctrl+C copies, click the contents to go there.`, 14, TITLE + BODY + STATUS / 2);
+        c.fillText(fit(c, `${s.note}. ${hint}`, this.w - 28), 14, TITLE + this.body + STATUS / 2);
       },
       on: {
         wheel: (e, self) => {
           const p = local(e.point);
-          if (p.x > SIDE || p.y < TITLE) return;
+          if (p.x > this.side || p.y < TITLE) return;
           e.stopPropagation();
-          const rows = Math.floor(BODY / ROW);
+          const rows = Math.floor(this.body / ROW);
           const dy = (e.input as { deltaY?: number }).deltaY ?? 0;
           const contents = Math.max(0, Math.min(this.entries.length - rows, self.state.contents + Math.round(dy / ROW)));
           if (contents !== self.state.contents) self.setState({ contents });
         },
         down: (e, self) => {
           const p = local(e.point);
-          if (p.x < W - GUTTER || p.y < TITLE || p.y > TITLE + BODY) return;
+          if (p.x < this.w - GUTTER || p.y < TITLE || p.y > TITLE + this.body) return;
           e.stopPropagation();
           const t = thumb(self.state);
           // A press on the thumb holds it where it was pressed; elsewhere on the track, the thumb's middle comes there.
           grab = p.y >= t.top && p.y <= t.top + t.height ? p.y - t.top : t.height / 2;
-          this.scrollTo(((p.y - grab - track.y) / (track.height - t.height)) * (this.total - BODY));
+          this.scrollTo(((p.y - grab - track.y) / (track.height - t.height)) * (this.total - this.body));
         },
         dragstart: (e) => {
           if (grab !== null) e.stopPropagation();
@@ -842,14 +1005,17 @@ export class Reader {
           if (grab === null) return;
           e.stopPropagation();
           const t = thumb(self.state);
-          this.scrollTo(((local(e.point).y - grab - track.y) / (track.height - t.height)) * (this.total - BODY));
+          this.scrollTo(((local(e.point).y - grab - track.y) / (track.height - t.height)) * (this.total - this.body));
         },
         up: () => {
           grab = null;
         },
         click: (e, self) => {
           const p = local(e.point);
-          if (inside(p, smaller) || inside(p, bigger)) {
+          if (this.spec.onClose && inside(p, close)) {
+            e.stopPropagation();
+            this.spec.onClose();
+          } else if (inside(p, smaller) || inside(p, bigger)) {
             e.stopPropagation();
             this.resize(inside(p, smaller) ? -1 : 1);
           } else if (inside(p, field)) {
@@ -874,7 +1040,7 @@ export class Reader {
               },
               onBlur: () => self.setState({ editing: false }),
             });
-          } else if (p.x < SIDE && p.y > TITLE && p.y < TITLE + BODY) {
+          } else if (p.x < this.side && p.y > TITLE && p.y < TITLE + this.body) {
             e.stopPropagation();
             const entry = this.entries[self.state.contents + Math.floor((p.y - TITLE - 4) / ROW)];
             if (entry) this.jump(entry.section);

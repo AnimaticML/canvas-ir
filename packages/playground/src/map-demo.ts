@@ -5,10 +5,15 @@
 // zoom, decoding each the first time it is needed, so a view of a region
 // reads a few of the eight thousand tiles of the finest level and the whole
 // world reads four coarse ones. Places and country names are labeled
-// biggest first, leaving out any that would overlap.
+// biggest first, leaving out any that would overlap. Zoomed in close, the
+// map asks Wikipedia for the articles about places in view, a cell at a
+// time, and pins them; a click on a pin reads its article in a panel over
+// the map's right side, whose links open more articles and fly to them.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
 import worldUrl from "./map/world.bin" with { type: "file" };
 import { WheelGesture } from "./wheel";
+import { Reader, type ReaderHost, type ReaderSpec } from "./reader";
+import { type Pin, article, articlesIn } from "./wiki";
 
 export const MAP_ID = "world-map";
 export const MAP_AT = { x: -560, y: 3850 };
@@ -19,7 +24,33 @@ const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 /** Zooms as web maps count them: the world is 256 pixels across at 0. */
 const MIN_ZOOM = Math.log2((0.98 * W) / 256);
-const MAX_ZOOM = 9.5;
+const MAX_ZOOM = 16;
+/** Wikipedia's articles show from this zoom, asked for a cell at a time: tiles of zoom 12, about 10 km across at the equator. */
+const WIKI_ZOOM = 11.5;
+const CELL = 12;
+/** Cells asked for at once. */
+const ASKING = 4;
+/** The article panel's width, and its status line's height. */
+const PANEL = 560;
+const PANEL_STATUS = 28;
+const PIN_COLORS: Readonly<Record<string, string>> = {
+  city: "#dc2626",
+  landmark: "#7c3aed",
+  mountain: "#78716c",
+  river: "#0284c7",
+  waterbody: "#0284c7",
+  airport: "#0f766e",
+  railwaystation: "#0f766e",
+  edu: "#ca8a04",
+  isle: "#16a34a",
+  forest: "#16a34a",
+};
+
+const mercator = (lat: number, lon: number): [number, number] => {
+  const phi = (Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI) / 180;
+  return [(lon + 180) / 360, (1 - Math.log(Math.tan(Math.PI / 4 + phi / 2)) / Math.PI) / 2];
+};
+const latitude = (y: number): number => (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI;
 
 interface Country {
   readonly name: string;
@@ -113,7 +144,12 @@ export interface MapHost {
   readonly render: () => void;
   readonly log: (line: string) => void;
   readonly recorder: RecordingContextOptions;
+  /** What the article panel needs from the board. */
+  readonly reader: () => ReaderHost;
 }
+
+/** A cell's articles, placed on the map. */
+type Placed = Pin & { readonly x: number; readonly y: number };
 
 export class WorldMap {
   private x = MAP_AT.x;
@@ -134,6 +170,19 @@ export class WorldMap {
   private points = 0;
   private labels = 0;
   private flight = 0;
+  /** Each cell's articles, by `x/y` at zoom CELL, once Wikipedia answers; "asking" until then. */
+  private readonly cells = new Map<string, Placed[] | "asking" | "failed">();
+  private queue: string[] = [];
+  private asking = 0;
+  /** The last thing Wikipedia said went wrong, until it answers again. */
+  private trouble = "";
+  private pins = 0;
+  /** What a click on a drawn pin reads. */
+  private titles = new Map<string, string>();
+  private panel: Reader | null = null;
+  /** The article read now, and the request for it. */
+  private reading: { title: string; at: [number, number] | null } | null = null;
+  private request = 0;
 
   constructor(
     private scene: Scene,
@@ -171,12 +220,14 @@ export class WorldMap {
     this.scene = scene;
     this.router = router;
     this.sea.bind(scene);
+    this.panel?.bind(scene, router);
     this.listen();
   }
 
   moved(dx: number, dy: number): void {
     this.x += dx;
     this.y += dy;
+    this.panel?.moved(dx, dy);
     this.show();
   }
 
@@ -242,6 +293,8 @@ export class WorldMap {
         e.stopPropagation();
         if (moved) return;
         // The scene names groups drawn in the sea after it: `world-map:sea/<id>`.
+        const title = e.path.map((id) => this.titles.get(id.slice(sea.length + 1))).find((t) => t !== undefined);
+        if (title) return void this.read(title);
         const target = e.path.map((id) => this.targets.get(id.slice(sea.length + 1))).find((t) => t !== undefined);
         if (target) this.fly(target);
       }),
@@ -268,10 +321,12 @@ export class WorldMap {
   }
 
   /** Flies to a point and zoom, zooming at a steady rate. */
-  private fly(to: { x: number; y: number; zoom: number }): void {
+  private fly(target: { x: number; y: number; zoom: number }): void {
     this.land();
     const from = { ...this.camera };
-    const scale = this.clampScale((256 * 2 ** to.zoom) / this.host.zoom());
+    const scale = this.clampScale((256 * 2 ** target.zoom) / this.host.zoom());
+    // With an article open, the middle of what the panel leaves showing.
+    const to = { x: target.x + (this.panel ? PANEL / 2 / scale : 0), y: target.y };
     const start = performance.now();
     const ms = 700 + 120 * Math.abs(Math.log2(scale / from.scale));
     const step = (now: number): void => {
@@ -316,7 +371,13 @@ export class WorldMap {
   private note(ms: number): void {
     if (!this.world) return;
     const zoom = Math.log2((this.camera.scale * this.host.zoom()) / 256);
-    this.frame.setState({ note: `Zoom ${zoom.toFixed(1)}: ${this.points.toLocaleString("en-US")} points and ${this.labels} labels drawn in ${ms.toFixed(1)} ms` });
+    const wiki =
+      zoom < WIKI_ZOOM
+        ? "; zoom in for Wikipedia"
+        : this.trouble
+          ? `; Wikipedia: ${this.trouble}`
+          : `; ${this.pins.toLocaleString("en-US")} Wikipedia articles${this.asking > 0 ? ", asking for more" : ""}`;
+    this.frame.setState({ note: `Zoom ${zoom.toFixed(1)}: ${this.points.toLocaleString("en-US")} points and ${this.labels} labels drawn in ${ms.toFixed(1)} ms${wiki}` });
   }
 
   /** A tooltip's text, made once: formatting numbers on every redraw costs more than drawing the countries. */
@@ -352,8 +413,10 @@ export class WorldMap {
     ctx.fillStyle = SEA;
     ctx.fillRect(window.x, window.y, window.width, window.height);
     this.targets = new Map();
+    this.titles = new Map();
     this.points = 0;
     this.labels = 0;
+    this.pins = 0;
     const world = this.world;
     if (!world) return;
     const c = this.camera;
@@ -418,7 +481,8 @@ export class WorldMap {
       ctx.fillStyle = COUNTRY_COLORS[(country.color - 1) % COUNTRY_COLORS.length]!;
       ctx.fill();
       ctx.endGroup();
-      this.targets.set(id, { x: country.label[0], y: country.label[1], zoom: Math.min(7, Math.max(zoom + 1, country.labelZoom[0] + 1.5)) });
+      // Close in, a click on the land is for what's on it, not a flight out to the whole country.
+      if (zoom < 7) this.targets.set(id, { x: country.label[0], y: country.label[1], zoom: Math.min(7, Math.max(zoom + 1, country.labelZoom[0] + 1.5)) });
     }
     const fillLayer = (name: string, color: string): void => {
       ctx.beginPath();
@@ -515,6 +579,142 @@ export class WorldMap {
       this.targets.set(id, { x: p[4], y: p[5], zoom: Math.max(zoom + 1.5, 7.5) });
       this.labels++;
     }
+    if (zoom >= WIKI_ZOOM) this.drawPins(ctx, { wx0, wy0, wx1, wy1 }, lx, ly, free, z);
+  }
+
+  /** Wikipedia's articles in view, asking for the cells not yet asked; each a pin, named where there's room. */
+  private drawPins(ctx: RecordingContext, view: { wx0: number; wy0: number; wx1: number; wy1: number }, lx: (x: number) => number, ly: (y: number) => number, free: (r: Rect) => boolean, z: number): void {
+    const n = 2 ** CELL;
+    const wanted: string[] = [];
+    const shown: Placed[] = [];
+    const cx = Math.floor(this.camera.x * n);
+    const cy = Math.floor(this.camera.y * n);
+    for (let tx = Math.max(0, Math.floor(view.wx0 * n)); tx <= Math.min(n - 1, Math.floor(view.wx1 * n)); tx++) {
+      for (let ty = Math.max(0, Math.floor(view.wy0 * n)); ty <= Math.min(n - 1, Math.floor(view.wy1 * n)); ty++) {
+        const key = `${tx}/${ty}`;
+        const cell = this.cells.get(key);
+        if (cell === undefined) wanted.push(key);
+        else if (Array.isArray(cell)) for (const pin of cell) if (pin.x >= view.wx0 && pin.x <= view.wx1 && pin.y >= view.wy0 && pin.y <= view.wy1) shown.push(pin);
+      }
+    }
+    // The cells nearest the middle first.
+    const distance = (key: string): number => {
+      const [x, y] = key.split("/").map(Number) as [number, number];
+      return Math.hypot(x - cx, y - cy);
+    };
+    this.want(wanted.sort((a, b) => distance(a) - distance(b)));
+    ctx.textAlign = "left";
+    ctx.font = `${11 / z}px ${FONT}`;
+    const chosen = this.reading?.title;
+    // The article read now last, over the rest.
+    shown.sort((a, b) => Number(a.title === chosen) - Number(b.title === chosen));
+    for (const pin of shown.slice(-3000)) {
+      const x = lx(pin.x);
+      const y = ly(pin.y);
+      const on = pin.title === chosen;
+      const id = `wiki-${pin.id}`;
+      ctx.beginGroup({ id, meta: { datum: `${pin.title}${pin.type ? `\n${pin.type}` : ""}\nClick to read it` } });
+      ctx.beginPath();
+      ctx.arc(x, y, (on ? 7 : 4.5) / z, 0, Math.PI * 2);
+      ctx.fillStyle = on ? "#f97316" : (PIN_COLORS[pin.type] ?? "#2563eb");
+      ctx.fill();
+      ctx.lineWidth = 1.5 / z;
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+      const w = this.width(ctx, pin.title);
+      if (on || free({ x: x - 5 / z, y: y - 8 / z, width: w + 14 / z, height: 16 / z })) {
+        ctx.lineWidth = 3 / z;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+        ctx.strokeText(pin.title, x + 7 / z, y);
+        ctx.fillStyle = on ? "#9a3412" : "#1e3a8a";
+        ctx.fillText(pin.title, x + 7 / z, y);
+      }
+      ctx.endGroup();
+      this.titles.set(id, pin.title);
+      this.pins++;
+    }
+  }
+
+  /** Asks for cells, in order, dropping those asked for before that are out of view now. */
+  private want(keys: string[]): void {
+    this.queue = keys;
+    while (this.asking < ASKING && this.queue.length > 0) void this.ask(this.queue.shift()!);
+  }
+
+  private async ask(key: string): Promise<void> {
+    this.cells.set(key, "asking");
+    this.asking++;
+    const [tx, ty] = key.split("/").map(Number) as [number, number];
+    const n = 2 ** CELL;
+    const box = { north: latitude(ty / n), south: latitude((ty + 1) / n), west: (tx / n) * 360 - 180, east: ((tx + 1) / n) * 360 - 180 };
+    try {
+      const pins = await articlesIn(box);
+      this.cells.set(
+        key,
+        pins.map((p) => {
+          const [x, y] = mercator(p.lat, p.lon);
+          return { ...p, x, y };
+        }),
+      );
+      this.trouble = "";
+    } catch (error) {
+      this.cells.set(key, "failed");
+      this.trouble = String(error instanceof Error ? error.message : error);
+      this.host.log(`world map: Wikipedia didn't answer for cell ${key}: ${this.trouble}`);
+      // A failed cell is asked again when it next comes into view, a while from now.
+      window.setTimeout(() => this.cells.get(key) === "failed" && this.cells.delete(key), 15000);
+    }
+    this.asking--;
+    if (this.queue.length > 0) void this.ask(this.queue.shift()!);
+    this.redraw();
+  }
+
+  /** Reads an article in the panel, opening it first, and flies to its place if it has one. */
+  private read(title: string): void {
+    const request = ++this.request;
+    if (!this.panel?.alive) {
+      this.panel = new Reader(this.scene, this.router, this.host.reader(), this.panelSpec());
+    }
+    this.panel.wait(title, "Asking Wikipedia for the article");
+    this.reading = { title, at: null };
+    this.redraw();
+    article(title).then(
+      (a) => {
+        if (request !== this.request || !this.panel?.alive) return;
+        this.panel.open(a.title, "from Wikipedia", a.doc);
+        this.reading = { title: a.title, at: a.at ? mercator(a.at.lat, a.at.lon) : null };
+        const zoom = Math.log2((this.camera.scale * this.host.zoom()) / 256);
+        if (this.reading.at) this.fly({ x: this.reading.at[0], y: this.reading.at[1], zoom: Math.max(zoom, 13) });
+        else this.redraw();
+      },
+      (error: unknown) => {
+        if (request !== this.request || !this.panel?.alive) return;
+        this.panel.wait(title, `Wikipedia couldn't be reached from this page: ${error instanceof Error ? error.message : String(error)}`);
+      },
+    );
+  }
+
+  private panelSpec(): ReaderSpec {
+    return {
+      id: `${MAP_ID}:article`,
+      parent: MAP_ID,
+      at: { x: this.x + W - PANEL, y: this.y + TITLE },
+      size: { width: PANEL, body: H - TITLE - PANEL_STATUS, side: 0 },
+      title: "",
+      subtitle: "",
+      sections: "sections",
+      font: "Georgia, 'Iowan Old Style', 'Times New Roman', serif",
+      hint: "Click a link to read on",
+      parse: () => ({ paragraphs: [], sections: [], entries: [] }),
+      onLink: (title) => this.read(title),
+      onClose: () => {
+        this.request++;
+        this.panel?.close();
+        this.panel = null;
+        this.reading = null;
+        this.redraw();
+      },
+    };
   }
 
   private frameSpec(): ComponentSpec<FrameState> {
@@ -540,11 +740,11 @@ export class WorldMap {
         c.textBaseline = "middle";
         c.font = `600 15px ${FONT}`;
         c.fillStyle = "#0f172a";
-        c.fillText("A world map, made with Natural Earth", 14, TITLE / 2);
+        c.fillText("A world map, made with Natural Earth and Wikipedia", 14, TITLE / 2);
         c.font = `12px ${FONT}`;
         c.fillStyle = "#64748b";
         c.textAlign = "right";
-        c.fillText(`${s.note}. Wheel zooms, drag pans, click a country or place to fly there.`, button.x - 14, TITLE / 2);
+        c.fillText(`${s.note}. Wheel zooms, drag pans, click a place to fly there or a pin to read it.`, button.x - 14, TITLE / 2);
         c.beginPath();
         c.roundRect(button.x, button.y, button.width, button.height, 6);
         c.fillStyle = "#f1f5f9";
