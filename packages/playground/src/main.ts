@@ -232,7 +232,15 @@ const followMove = (moved: string, dx: number, dy: number): void => {
 };
 
 let stepped = false;
+let frame = 0;
+/** Draws the board at the next frame, once however many changes come before it: a mouse wheel can send several events a frame. */
 const render = (): void => {
+  if (!frame) frame = requestAnimationFrame(draw);
+};
+const draw = (): void => {
+  // What the map records now is drawn in this frame, not the next.
+  worldMap?.flush();
+  frame = 0;
   const dpr = window.devicePixelRatio || 1;
   const { width, height } = stage.getBoundingClientRect();
   for (const c of [canvas, cardCanvas, overlay]) {

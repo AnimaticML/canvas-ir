@@ -184,6 +184,7 @@ export class WorldMap {
   /** The article read now, and the request for it. */
   private reading: { title: string; at: [number, number] | null } | null = null;
   private request = 0;
+  private stale = false;
 
   constructor(
     private scene: Scene,
@@ -349,11 +350,19 @@ export class WorldMap {
     this.fly({ x: 0.5, y: 0.42, zoom: MIN_ZOOM });
   }
 
+  /** Draws the map again at the board's next frame. */
   private redraw(): void {
+    this.stale = true;
+    this.host.render();
+  }
+
+  /** Records the map if it changed since the board last drew, just before the board draws it. */
+  flush(): void {
+    if (!this.stale || !this.alive) return;
+    this.stale = false;
     const t0 = performance.now();
     this.sea.refresh();
     this.note(performance.now() - t0);
-    this.host.render();
   }
 
   private show(): void {
