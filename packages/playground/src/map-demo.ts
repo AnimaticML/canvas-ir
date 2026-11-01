@@ -11,6 +11,7 @@
 // the map's right side, whose links open more articles and fly to them.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
 import worldUrl from "./map/world.bin" with { type: "file" };
+import { fit } from "./ui/kit";
 import { WheelGesture } from "./wheel";
 import { Reader, type ReaderHost, type ReaderSpec } from "./reader";
 import { type Pin, article, articlesIn } from "./wiki";
@@ -373,11 +374,12 @@ export class WorldMap {
     const zoom = Math.log2((this.camera.scale * this.host.zoom()) / 256);
     const wiki =
       zoom < WIKI_ZOOM
-        ? "; zoom in for Wikipedia"
+        ? `; Wikipedia shows from zoom ${WIKI_ZOOM}, click a town twice`
         : this.trouble
           ? `; Wikipedia: ${this.trouble}`
           : `; ${this.pins.toLocaleString("en-US")} Wikipedia articles${this.asking > 0 ? ", asking for more" : ""}`;
-    this.frame.setState({ note: `Zoom ${zoom.toFixed(1)}: ${this.points.toLocaleString("en-US")} points and ${this.labels} labels drawn in ${ms.toFixed(1)} ms${wiki}` });
+    // What to do about Wikipedia first: a narrow header cuts the end.
+    this.frame.setState({ note: `Zoom ${zoom.toFixed(1)}${wiki}; ${this.points.toLocaleString("en-US")} points and ${this.labels} labels drawn in ${ms.toFixed(1)} ms` });
   }
 
   /** A tooltip's text, made once: formatting numbers on every redraw costs more than drawing the countries. */
@@ -576,7 +578,8 @@ export class WorldMap {
       ctx.fillStyle = "#111827";
       ctx.fillText(p[0], x + 6 / z, y);
       ctx.endGroup();
-      this.targets.set(id, { x: p[4], y: p[5], zoom: Math.max(zoom + 1.5, 7.5) });
+      // A town flies close; clicked again, close enough for Wikipedia's articles.
+      this.targets.set(id, { x: p[4], y: p[5], zoom: zoom < 7 ? Math.max(zoom + 1.5, 7.5) : Math.max(zoom + 1.5, 13) });
       this.labels++;
     }
     if (zoom >= WIKI_ZOOM) this.drawPins(ctx, { wx0, wy0, wx1, wy1 }, lx, ly, free, z);
@@ -740,11 +743,13 @@ export class WorldMap {
         c.textBaseline = "middle";
         c.font = `600 15px ${FONT}`;
         c.fillStyle = "#0f172a";
-        c.fillText("A world map, made with Natural Earth and Wikipedia", 14, TITLE / 2);
+        const title = "A world map, made with Natural Earth and Wikipedia";
+        c.fillText(title, 14, TITLE / 2);
+        const room = button.x - 14 - (14 + c.measureText(title).width + 24);
         c.font = `12px ${FONT}`;
         c.fillStyle = "#64748b";
         c.textAlign = "right";
-        c.fillText(`${s.note}. Wheel zooms, drag pans, click a place to fly there or a pin to read it.`, button.x - 14, TITLE / 2);
+        c.fillText(fit(c, `${s.note}. Wheel zooms, drag pans, click a place to fly there or a pin to read it.`, room), button.x - 14, TITLE / 2);
         c.beginPath();
         c.roundRect(button.x, button.y, button.width, button.height, 6);
         c.fillStyle = "#f1f5f9";

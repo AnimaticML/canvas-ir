@@ -611,12 +611,16 @@ canvas.addEventListener(
     e.preventDefault();
     const p = point(e);
     // A card or anything on the board that scrolls (the million rows) keeps the wheel; anywhere else it zooms the board.
-    const input = { ...p, deltaX: e.deltaX, deltaY: e.deltaY, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
+    // Firefox counts a mouse wheel's notches in lines, three a notch; the rest of the board reads pixels, about a hundred a notch.
+    const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? canvas.clientHeight : 1;
+    const deltaX = e.deltaX * unit;
+    const deltaY = e.deltaY * unit;
+    const input = { ...p, deltaX, deltaY, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
     if (cards.hits(p) && cards.wheel(input)) return;
     wheelFree = false;
     router.wheel(input);
     if (!wheelFree) return;
-    const k = Math.exp(-e.deltaY * 0.0015);
+    const k = Math.exp(-deltaY * 0.0015);
     setView(multiply({ a: k, b: 0, c: 0, d: k, e: p.x - k * p.x, f: p.y - k * p.y }, view));
   },
   { passive: false },
