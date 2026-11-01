@@ -15,6 +15,7 @@ import { fit } from "./ui/kit";
 import { WheelGesture } from "./wheel";
 import { Reader, type ReaderHost, type ReaderSpec } from "./reader";
 import { type Pin, article, articlesIn, titleOf } from "./wiki";
+import { LAND, type Paint, type TileFeature, paint, tile, tileZoom } from "./osm";
 
 export const MAP_ID = "world-map";
 export const MAP_AT = { x: -560, y: 3850 };
@@ -31,6 +32,10 @@ const WIKI_ZOOM = 11.5;
 const CELL = 12;
 /** Cells asked for at once. */
 const ASKING = 4;
+/** OpenStreetMap's tiles draw over Natural Earth from this zoom, a few at a time, and this many are kept. */
+const OSM_ZOOM = 9;
+const OSM_ASKING = 6;
+const OSM_KEEP = 300;
 /** The article panel's width, and its status line's height. */
 const PANEL = 560;
 const PANEL_STATUS = 28;
@@ -201,6 +206,13 @@ export class WorldMap {
   private reading: { title: string; at: [number, number] | null } | null = null;
   private request = 0;
   private stale = false;
+  /** OpenStreetMap's tiles by `z/x/y`, once they come. */
+  private readonly osm = new Map<string, TileFeature[] | "asking" | "failed">();
+  private osmQueue: string[] = [];
+  private osmAsking = 0;
+  private osmTrouble = "";
+  private osmMax = 14;
+  private osmDrawn = 0;
 
   constructor(
     private scene: Scene,
@@ -404,8 +416,9 @@ export class WorldMap {
         : this.trouble
           ? `; Wikipedia: ${this.trouble}`
           : `; ${this.pins.toLocaleString("en-US")} Wikipedia articles${this.asking > 0 ? ", asking for more" : ""}`;
+    const streets = zoom < OSM_ZOOM ? "" : this.osmTrouble ? `; OpenStreetMap: ${this.osmTrouble}` : `; ${this.osmDrawn} OpenStreetMap tiles${this.osmAsking > 0 ? ", asking for more" : ""}`;
     // What to do about Wikipedia first: a narrow header cuts the end.
-    this.frame.setState({ note: `Zoom ${zoom.toFixed(1)}${wiki}; ${this.points.toLocaleString("en-US")} points and ${this.labels} labels drawn in ${ms.toFixed(1)} ms` });
+    this.frame.setState({ note: `Zoom ${zoom.toFixed(1)}${wiki}${streets}; ${this.points.toLocaleString("en-US")} points and ${this.labels} labels drawn in ${ms.toFixed(1)} ms` });
   }
 
   /** A tooltip's text, made once: formatting numbers on every redraw costs more than drawing the countries. */
@@ -547,6 +560,8 @@ export class WorldMap {
       strokeLayer("roads", road.color, width, road.dash ?? [], (k) => k === kind);
     }
     ctx.endGroup();
+    if (zoom >= OSM_ZOOM) this.drawStreets(ctx, zoom, { wx0, wy0, wx1, wy1 }, lx, ly, z);
+    else this.osmDrawn = 0;
 
     // Labels, biggest first, each kept only where it overlaps none before it.
     const taken: Rect[] = [];
@@ -642,6 +657,152 @@ export class WorldMap {
       this.labels++;
     }
     if (zoom >= WIKI_ZOOM) this.drawPins(ctx, { wx0, wy0, wx1, wy1 }, lx, ly, free, z);
+    if (this.osmDrawn > 0) {
+      // OpenFreeMap's terms: credit OpenMapTiles and OpenStreetMap's contributors.
+      const credit = "© OpenMapTiles © OpenStreetMap contributors";
+      ctx.font = `${10 / z}px ${FONT}`;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "bottom";
+      const w = this.width(ctx, credit);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+      ctx.fillRect(window.x, window.y + window.height - 15 / z, w + 10 / z, 15 / z);
+      ctx.fillStyle = "#475569";
+      ctx.fillText(credit, window.x + 5 / z, window.y + window.height - 2 / z);
+      ctx.textBaseline = "middle";
+    }
+  }
+
+  /**
+   * OpenStreetMap over Natural Earth: each tile in view, or the nearest tile
+   * above it that has come while it hasn't, filled with land and then drawn
+   * style by style across all of them, so a road crossing tiles is one path.
+   */
+  private drawStreets(ctx: RecordingContext, zoom: number, view: { wx0: number; wy0: number; wx1: number; wy1: number }, lx: (x: number) => number, ly: (y: number) => number, z: number): void {
+    // Tiles about 512 pixels across, as OpenFreeMap makes them.
+    const tz = Math.max(0, Math.min(this.osmMax, Math.floor(zoom) - 1));
+    const n = 2 ** tz;
+    const wanted: string[] = [];
+    const drawn = new Set<string>();
+    for (let tx = Math.max(0, Math.floor(view.wx0 * n)); tx <= Math.min(n - 1, Math.floor(view.wx1 * n)); tx++) {
+      for (let ty = Math.max(0, Math.floor(view.wy0 * n)); ty <= Math.min(n - 1, Math.floor(view.wy1 * n)); ty++) {
+        const key = `${tz}/${tx}/${ty}`;
+        const got = this.osm.get(key);
+        if (Array.isArray(got)) {
+          drawn.add(key);
+          continue;
+        }
+        if (got === undefined) wanted.push(key);
+        for (let up = 1; up <= 4 && tz - up >= 0; up++) {
+          const above = `${tz - up}/${tx >> up}/${ty >> up}`;
+          if (Array.isArray(this.osm.get(above))) {
+            drawn.add(above);
+            break;
+          }
+        }
+      }
+    }
+    const cx = this.camera.x * n;
+    const cy = this.camera.y * n;
+    const distance = (key: string): number => {
+      const [, x, y] = key.split("/").map(Number) as [number, number, number];
+      return Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+    };
+    this.wantStreets(wanted.sort((a, b) => distance(a) - distance(b)));
+    // Coarser tiles first, standing in where finer ones haven't come.
+    const tiles = [...drawn].map((key) => {
+      const [tz2, x, y] = key.split("/").map(Number) as [number, number, number];
+      return { key, z: tz2, x, y, features: this.osm.get(key) as TileFeature[] };
+    });
+    tiles.sort((a, b) => a.z - b.z);
+    this.osmDrawn = tiles.filter((t) => t.features.length > 0).length;
+    if (this.osmDrawn === 0) return;
+    const scale = Math.max(0.35, Math.min(2.2, 2 ** ((zoom - 14) / 2)));
+    const near = 0.8 / z;
+    const styles = new Map<string, { paint: Paint; parts: { parts: readonly Float32Array[]; t: (typeof tiles)[number] }[] }>();
+    ctx.beginGroup({ id: "streets", meta: { hit: false } });
+    for (const t of tiles) {
+      // A tile with nothing in it is open sea, or not drawn by OpenFreeMap: Natural Earth shows there.
+      if (t.features.length === 0) continue;
+      const size = 1 / 2 ** t.z;
+      const x0 = lx(t.x * size);
+      const y0 = ly(t.y * size);
+      ctx.fillStyle = LAND;
+      ctx.fillRect(x0, y0, lx((t.x + 1) * size) - x0, ly((t.y + 1) * size) - y0);
+      for (const f of t.features) {
+        const p = paint(f);
+        if (!p || (p.from !== undefined && zoom < p.from)) continue;
+        const key = `${p.order}|${p.fill ?? ""}|${p.stroke ?? ""}|${p.width ?? 0}|${p.dash?.join(",") ?? ""}`;
+        let style = styles.get(key);
+        if (!style) styles.set(key, (style = { paint: p, parts: [] }));
+        style.parts.push({ parts: f.parts, t });
+      }
+    }
+    for (const { paint: p, parts } of [...styles.values()].sort((a, b) => a.paint.order - b.paint.order)) {
+      ctx.beginPath();
+      for (const { parts: rings, t } of parts) {
+        const size = 1 / 2 ** t.z;
+        for (const ring of rings) {
+          let px = lx((t.x + ring[0]!) * size);
+          let py = ly((t.y + ring[1]!) * size);
+          ctx.moveTo(px, py);
+          const last = ring.length - 2;
+          for (let i = 2; i <= last; i += 2) {
+            const x = lx((t.x + ring[i]!) * size);
+            const y = ly((t.y + ring[i + 1]!) * size);
+            if (i < last && Math.abs(x - px) < near && Math.abs(y - py) < near) continue;
+            ctx.lineTo(x, y);
+            px = x;
+            py = y;
+            this.points++;
+          }
+        }
+      }
+      if (p.fill) {
+        ctx.fillStyle = p.fill;
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = p.stroke!;
+        ctx.lineWidth = ((p.width ?? 1) * scale) / z;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.setLineDash((p.dash ?? []).map((d) => (d * scale) / z));
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    ctx.endGroup();
+  }
+
+  /** Asks for tiles, in order, dropping those asked for before that are out of view now. */
+  private wantStreets(keys: string[]): void {
+    this.osmQueue = keys;
+    while (this.osmAsking < OSM_ASKING && this.osmQueue.length > 0) void this.askStreets(this.osmQueue.shift()!);
+  }
+
+  private async askStreets(key: string): Promise<void> {
+    this.osm.set(key, "asking");
+    this.osmAsking++;
+    const [z, x, y] = key.split("/").map(Number) as [number, number, number];
+    try {
+      this.osmMax = await tileZoom();
+      this.osm.set(key, await tile(z, x, y));
+      this.osmTrouble = "";
+    } catch (error) {
+      this.osm.set(key, "failed");
+      this.osmTrouble = String(error instanceof Error ? error.message : error);
+      this.host.log(`world map: OpenFreeMap didn't answer for tile ${key}: ${this.osmTrouble}`);
+      window.setTimeout(() => this.osm.get(key) === "failed" && this.osm.delete(key), 15000);
+    }
+    // The oldest tiles go first when there are too many.
+    if (this.osm.size > OSM_KEEP) {
+      for (const [k, v] of this.osm) {
+        if (this.osm.size <= OSM_KEEP - 50) break;
+        if (v !== "asking") this.osm.delete(k);
+      }
+    }
+    this.osmAsking--;
+    if (this.osmQueue.length > 0) void this.askStreets(this.osmQueue.shift()!);
+    this.redraw();
   }
 
   /** Wikipedia's articles in view, asking for the cells not yet asked; each a pin, named where there's room. */
