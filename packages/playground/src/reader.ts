@@ -229,6 +229,7 @@ export class Reader {
     this.unlisten = [];
     window.clearTimeout(this.pump);
     cancelAnimationFrame(this.edge);
+    this.host.components().unmount(`${this.spec.id}:frame`);
     if (this.alive) this.scene.remove(this.spec.id);
     this.host.render();
   }

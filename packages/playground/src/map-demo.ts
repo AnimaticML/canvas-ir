@@ -14,7 +14,7 @@ import worldUrl from "./map/world.bin" with { type: "file" };
 import { fit } from "./ui/kit";
 import { WheelGesture } from "./wheel";
 import { Reader, type ReaderHost, type ReaderSpec } from "./reader";
-import { type Pin, article, articlesIn } from "./wiki";
+import { type Pin, article, articlesIn, titleOf } from "./wiki";
 
 export const MAP_ID = "world-map";
 export const MAP_AT = { x: -560, y: 3850 };
@@ -60,14 +60,18 @@ interface Country {
   readonly color: number;
   readonly label: readonly [number, number];
   readonly labelZoom: readonly [number, number];
+  readonly wikidata: string;
 }
-type Place = readonly [name: string, country: string, population: number, minZoom: number, x: number, y: number, capital: number];
+type Place = readonly [name: string, country: string, population: number, minZoom: number, x: number, y: number, capital: number, wikidata: string];
+/** A sea, a region, a lake or a peak, with the zooms its name shows at. */
+type Named = readonly [name: string, kind: string, minZoom: number, maxZoom: number, x: number, y: number, wikidata: string];
 interface World {
   readonly layers: readonly string[];
   readonly countries: readonly Country[];
   /** For each line or area layer: each feature's smallest zoom and its kind, in pairs. */
   readonly kinds: Readonly<Record<string, readonly number[]>>;
   readonly places: readonly Place[];
+  readonly named: readonly Named[];
   readonly lods: readonly { zoom: number; tiles: number; step: number; offsets: Readonly<Record<string, readonly [number, number]>> }[];
 }
 interface Piece {
@@ -152,6 +156,16 @@ export interface MapHost {
 /** A cell's articles, placed on the map. */
 type Placed = Pin & { readonly x: number; readonly y: number };
 
+/** What a click reads: an article by its title, or by a map feature's Wikidata id; and where to fly, if not to the article's own place. */
+interface Subject {
+  readonly name: string;
+  readonly title?: string;
+  readonly wikidata?: string;
+  readonly fly?: { x: number; y: number; zoom: number };
+}
+
+const MARINE = new Set(["ocean", "sea", "gulf", "bay", "strait", "sound", "channel", "generic", "lagoon", "fjord", "inlet", "river", "reef"]);
+
 export class WorldMap {
   private x = MAP_AT.x;
   private y = MAP_AT.y;
@@ -179,7 +193,9 @@ export class WorldMap {
   private trouble = "";
   private pins = 0;
   /** What a click on a drawn pin reads. */
-  private titles = new Map<string, string>();
+  private subjects = new Map<string, Subject>();
+  /** Towns on the map by name, to leave out Wikipedia's pins for the same towns. */
+  private towns = new Map<string, Place[]>();
   private panel: Reader | null = null;
   /** The article read now, and the request for it. */
   private reading: { title: string; at: [number, number] | null } | null = null;
@@ -247,6 +263,7 @@ export class WorldMap {
     const length = new DataView(file.buffer).getUint32(0, true);
     this.world = JSON.parse(new TextDecoder().decode(file.subarray(4, 4 + length))) as World;
     this.bytes = file.subarray(4 + length);
+    for (const p of this.world.places) (this.towns.get(p[0].toLowerCase()) ?? (this.towns.set(p[0].toLowerCase(), []), this.towns.get(p[0].toLowerCase())!)).push(p);
     this.host.log(`world map: ${(file.length / 1e6).toFixed(1)} MB of Natural Earth unpacked in ${(performance.now() - t0).toFixed(0)} ms`);
     this.redraw();
   }
@@ -295,8 +312,8 @@ export class WorldMap {
         e.stopPropagation();
         if (moved) return;
         // The scene names groups drawn in the sea after it: `world-map:sea/<id>`.
-        const title = e.path.map((id) => this.titles.get(id.slice(sea.length + 1))).find((t) => t !== undefined);
-        if (title) return void this.read(title);
+        const subject = e.path.map((id) => this.subjects.get(id.slice(sea.length + 1))).find((t) => t !== undefined);
+        if (subject) return void this.read(subject);
         const target = e.path.map((id) => this.targets.get(id.slice(sea.length + 1))).find((t) => t !== undefined);
         if (target) this.fly(target);
       }),
@@ -424,7 +441,7 @@ export class WorldMap {
     ctx.fillStyle = SEA;
     ctx.fillRect(window.x, window.y, window.width, window.height);
     this.targets = new Map();
-    this.titles = new Map();
+    this.subjects = new Map();
     this.points = 0;
     this.labels = 0;
     this.pins = 0;
@@ -541,22 +558,53 @@ export class WorldMap {
     const inside = (x: number, y: number) => x >= window.x - 50 && x <= window.x + window.width + 50 && y >= window.y - 20 && y <= window.y + window.height + 20;
     ctx.textBaseline = "middle";
     ctx.textAlign = "center";
-    // Country names, where the country is big enough on screen for one; a click on one reaches the country.
+    // Country names, where the country is big enough on screen for one; a click on one reads about the country.
     ctx.font = `600 ${12 / z}px ${FONT}`;
-    ctx.beginGroup({ id: "names", meta: { hit: false } });
-    for (const country of world.countries) {
+    for (const [i, country] of world.countries.entries()) {
       if (zoom < country.labelZoom[0] - 0.5 || zoom > country.labelZoom[1]) continue;
       const x = lx(country.label[0]);
       const y = ly(country.label[1]);
       if (!inside(x, y)) continue;
       const text = country.name.toUpperCase();
       const w = this.width(ctx, text);
-      if (!free({ x: x - w / 2 - 4 / z, y: y - 9 / z, width: w + 8 / z, height: 18 / z })) continue;
+      const box = { x: x - w / 2 - 4 / z, y: y - 9 / z, width: w + 8 / z, height: 18 / z };
+      if (!free(box)) continue;
+      const id = `name-${i}`;
+      this.label(ctx, id, box, () => `${country.name}\nClick to read about it`);
       ctx.fillStyle = "rgba(51, 65, 85, 0.75)";
       ctx.fillText(text, x, y);
+      ctx.endGroup();
+      const fly = zoom < 7 ? this.targets.get(`country-${i}`) : undefined;
+      if (country.wikidata) this.subjects.set(id, { name: country.name, wikidata: country.wikidata, ...(fly ? { fly } : {}) });
       this.labels++;
     }
-    ctx.endGroup();
+    // Seas, regions, lakes and peaks, by the zooms that suit their size; a click reads about them.
+    for (const [i, f] of world.named.entries()) {
+      const [name, kind, min, max, fx, fy, wikidata] = f;
+      if (zoom < min - 0.5 || zoom > max + 1) continue;
+      const x = lx(fx);
+      const y = ly(fy);
+      if (!inside(x, y)) continue;
+      const marine = MARINE.has(kind);
+      const peak = kind === "mountain" || kind === "volcano";
+      const point = !marine && min >= 6 && !peak && kind !== "lake" && !/^[A-Z]/.test(kind);
+      const size = kind === "ocean" ? 15 : kind === "sea" ? 13 : 11;
+      ctx.font = `italic ${marine || kind === "lake" ? "" : "600 "}${size / z}px ${FONT}`;
+      const text = peak ? `▲ ${name}` : name;
+      const w = this.width(ctx, text);
+      const box = { x: x - w / 2 - 3 / z, y: y - (size * 0.75) / z, width: w + 6 / z, height: (size * 1.5) / z };
+      if (!free(box)) continue;
+      const id = `named-${i}`;
+      this.label(ctx, id, box, () => `${name}\n${kind.toLowerCase()}\nClick to read about it`);
+      ctx.lineWidth = 3 / z;
+      ctx.strokeStyle = marine || kind === "lake" ? "rgba(169, 211, 234, 0.8)" : "rgba(255, 255, 255, 0.7)";
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = marine || kind === "lake" ? "#1e5a8a" : point ? "#57534e" : "#78350f";
+      ctx.fillText(text, x, y);
+      ctx.endGroup();
+      this.subjects.set(id, { name, wikidata, fly: { x: fx, y: fy, zoom: Math.max(zoom, Math.min(max, min + 1.5)) } });
+      this.labels++;
+    }
     // Places: capitals and the biggest towns first.
     const places = world.places
       .filter((p) => p[3] <= zoom + 1 && inside(lx(p[4]), ly(p[5])))
@@ -587,8 +635,10 @@ export class WorldMap {
       ctx.fillStyle = "#111827";
       ctx.fillText(p[0], x + 6 / z, y);
       ctx.endGroup();
-      // A town flies close; clicked again, close enough for Wikipedia's articles.
-      this.targets.set(id, { x: p[4], y: p[5], zoom: zoom < 7 ? Math.max(zoom + 1.5, 7.5) : Math.max(zoom + 1.5, 13) });
+      // A town reads about itself and flies close; clicked again, close enough for Wikipedia's articles.
+      const fly = { x: p[4], y: p[5], zoom: zoom < 7 ? Math.max(zoom + 1.5, 7.5) : Math.max(zoom + 1.5, 13) };
+      if (p[7]) this.subjects.set(id, { name: p[0], wikidata: p[7], fly });
+      else this.targets.set(id, fly);
       this.labels++;
     }
     if (zoom >= WIKI_ZOOM) this.drawPins(ctx, { wx0, wy0, wx1, wy1 }, lx, ly, free, z);
@@ -606,7 +656,7 @@ export class WorldMap {
         const key = `${tx}/${ty}`;
         const cell = this.cells.get(key);
         if (cell === undefined) wanted.push(key);
-        else if (Array.isArray(cell)) for (const pin of cell) if (pin.x >= view.wx0 && pin.x <= view.wx1 && pin.y >= view.wy0 && pin.y <= view.wy1) shown.push(pin);
+        else if (Array.isArray(cell)) for (const pin of cell) if (pin.x >= view.wx0 && pin.x <= view.wx1 && pin.y >= view.wy0 && pin.y <= view.wy1 && !this.onMap(pin)) shown.push(pin);
       }
     }
     // The cells nearest the middle first.
@@ -642,9 +692,22 @@ export class WorldMap {
         ctx.fillText(pin.title, x + 7 / z, y);
       }
       ctx.endGroup();
-      this.titles.set(id, pin.title);
+      this.subjects.set(id, { name: pin.title, title: pin.title });
       this.pins++;
     }
+  }
+
+  /** Whether a pin is a town the map already shows: one of its places of the same name, close by. */
+  private onMap(pin: Placed): boolean {
+    const name = pin.title.split(",")[0]!.toLowerCase();
+    return (this.towns.get(name) ?? []).some((p) => Math.abs(p[4] - pin.x) < 3e-4 && Math.abs(p[5] - pin.y) < 3e-4);
+  }
+
+  /** Starts a label's group, with a box that takes clicks and its tooltip; the caller draws it and ends the group. */
+  private label(ctx: RecordingContext, id: string, box: Rect, datum: () => string): void {
+    ctx.beginGroup({ id, meta: { datum: this.datum(id, datum) } });
+    ctx.fillStyle = "transparent";
+    ctx.fillRect(box.x, box.y, box.width, box.height);
   }
 
   /** Asks for cells, in order, dropping those asked for before that are out of view now. */
@@ -681,29 +744,43 @@ export class WorldMap {
     this.redraw();
   }
 
-  /** Reads an article in the panel, opening it first, and flies to its place if it has one. */
-  private read(title: string): void {
+  /**
+   * Reads an article in the panel, opening it first, and flies to the
+   * subject: where the click said, or to the article's place at a zoom
+   * that suits its size, a sea farther out than a statue.
+   */
+  private read(subject: Subject): void {
     const request = ++this.request;
     if (!this.panel?.alive) {
       this.panel = new Reader(this.scene, this.router, this.host.reader(), this.panelSpec());
     }
-    this.panel.wait(title, "Asking Wikipedia for the article");
-    this.reading = { title, at: null };
+    this.panel.wait(subject.name, "Asking Wikipedia for the article");
+    this.reading = { title: subject.title ?? subject.name, at: null };
+    if (subject.fly) this.fly(subject.fly);
     this.redraw();
-    article(title).then(
-      (a) => {
-        if (request !== this.request || !this.panel?.alive) return;
-        this.panel.open(a.title, "from Wikipedia", a.doc);
-        this.reading = { title: a.title, at: a.at ? mercator(a.at.lat, a.at.lon) : null };
-        const zoom = Math.log2((this.camera.scale * this.host.zoom()) / 256);
-        if (this.reading.at) this.fly({ x: this.reading.at[0], y: this.reading.at[1], zoom: Math.max(zoom, 13) });
-        else this.redraw();
-      },
-      (error: unknown) => {
-        if (request !== this.request || !this.panel?.alive) return;
-        this.panel.wait(title, `Wikipedia couldn't be reached from this page: ${error instanceof Error ? error.message : String(error)}`);
-      },
-    );
+    const title = subject.title !== undefined ? Promise.resolve(subject.title) : titleOf(subject.wikidata!);
+    title
+      .then((t) => {
+        if (t === null) throw new Error(`the English Wikipedia has no article on ${subject.name}`);
+        return article(t);
+      })
+      .then(
+        (a) => {
+          if (request !== this.request || !this.panel?.alive) return;
+          this.panel.open(a.title, "from Wikipedia", a.doc);
+          this.reading = { title: a.title, at: a.at ? mercator(a.at.lat, a.at.lon) : null };
+          if (a.at && !subject.fly) {
+            // Half the view across the subject; 13 when Wikipedia doesn't say how big it is.
+            const meters = 40075016 * Math.cos((a.at.lat * Math.PI) / 180);
+            const zoom = a.at.dim ? Math.log2((W * meters) / (256 * 2 * a.at.dim)) : 13;
+            this.fly({ x: this.reading.at![0], y: this.reading.at![1], zoom: Math.max(2, Math.min(15, zoom)) });
+          } else this.redraw();
+        },
+        (error: unknown) => {
+          if (request !== this.request || !this.panel?.alive) return;
+          this.panel.wait(subject.name, `Wikipedia couldn't be reached from this page: ${error instanceof Error ? error.message : String(error)}`);
+        },
+      );
   }
 
   private panelSpec(): ReaderSpec {
@@ -718,14 +795,16 @@ export class WorldMap {
       font: "Georgia, 'Iowan Old Style', 'Times New Roman', serif",
       hint: "Click a link to read on",
       parse: () => ({ paragraphs: [], sections: [], entries: [] }),
-      onLink: (title) => this.read(title),
-      onClose: () => {
-        this.request++;
-        this.panel?.close();
-        this.panel = null;
-        this.reading = null;
-        this.redraw();
-      },
+      onLink: (title) => this.read({ name: title, title }),
+      // Closed after the click that asked for it has finished going through the panel.
+      onClose: () =>
+        window.setTimeout(() => {
+          this.request++;
+          this.panel?.close();
+          this.panel = null;
+          this.reading = null;
+          this.redraw();
+        }),
     };
   }
 

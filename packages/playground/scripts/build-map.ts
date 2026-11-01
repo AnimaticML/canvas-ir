@@ -183,6 +183,7 @@ const countries = countryFeatures.map((f) => {
     color: num(prop(p, "MAPCOLOR7"), 1),
     label: [+lx.toFixed(6), +ly.toFixed(6)],
     labelZoom: [num(prop(p, "MIN_LABEL"), 3), num(prop(p, "MAX_LABEL"), 10)],
+    wikidata: String(prop(p, "WIKIDATAID") ?? ""),
   };
 });
 
@@ -323,15 +324,106 @@ for (const [k, lod] of LODS.entries()) {
   console.log(`level ${k} (zoom ${lod.zoom}): ${tiles.size} tiles, ${(bytes.length / 1e6).toFixed(1)} MB so far`);
 }
 
-// Places: name, country, population, smallest zoom, where, and whether a capital.
-const places = (await read("ne_10m_populated_places_simple")).map((f) => {
+// Places: name, country, population, smallest zoom, where, whether a capital, and its Wikidata id.
+const places = (await read("ne_10m_populated_places")).map((f) => {
   const p = f.properties;
   const [lon, lat] = (f.geometry!.coordinates as number[]) ?? [0, 0];
   const [x, y] = mercator(lon!, lat!);
-  return [String(prop(p, "name")), String(prop(p, "adm0name") ?? ""), num(prop(p, "pop_max"), 0), num(prop(p, "min_zoom"), 10), +x.toFixed(7), +y.toFixed(7), String(prop(p, "featurecla")).includes("Admin-0 capital") ? 1 : 0];
+  return [
+    String(prop(p, "name")),
+    String(prop(p, "adm0name") ?? ""),
+    num(prop(p, "pop_max"), 0),
+    num(prop(p, "min_zoom"), 10),
+    +x.toFixed(7),
+    +y.toFixed(7),
+    String(prop(p, "featurecla")).includes("Admin-0 capital") ? 1 : 0,
+    String(prop(p, "wikidataid") ?? ""),
+  ];
 });
 
-const json = new TextEncoder().encode(JSON.stringify({ layers: LAYERS, roadKinds: ROAD_KINDS, countries, kinds, places, ...index }));
+/**
+ * A point well inside a polygon, for its label: of a grid over its biggest
+ * part, the point inside farthest from the part's outline. Centroids of
+ * crescents and bays fall outside them.
+ */
+const inner = (polygons: number[][][][]): [number, number] => {
+  const rings = polygons.map((poly) => poly[0]!.map(([lon, lat]) => mercator(lon!, lat!)));
+  const box = (r: [number, number][]) => {
+    const xs = r.map((q) => q[0]);
+    const ys = r.map((q) => q[1]);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] as const;
+  };
+  const ring = rings.reduce((a, b) => {
+    const [ax0, ay0, ax1, ay1] = box(a);
+    const [bx0, by0, bx1, by1] = box(b);
+    return (bx1 - bx0) * (by1 - by0) > (ax1 - ax0) * (ay1 - ay0) ? b : a;
+  });
+  const [x0, y0, x1, y1] = box(ring);
+  const inside = (x: number, y: number): boolean => {
+    let odd = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i]!;
+      const [xj, yj] = ring[j]!;
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) odd = !odd;
+    }
+    return odd;
+  };
+  const edge = (x: number, y: number): number => {
+    let d = Infinity;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [ax, ay] = ring[j]!;
+      const [bx, by] = ring[i]!;
+      const dx = bx - ax;
+      const dy = by - ay;
+      const t = dx === 0 && dy === 0 ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
+      d = Math.min(d, Math.hypot(x - ax - t * dx, y - ay - t * dy));
+    }
+    return d;
+  };
+  let best: [number, number] = [(x0 + x1) / 2, (y0 + y1) / 2];
+  let far = -1;
+  const N = 24;
+  for (let i = 0; i <= N; i++) {
+    for (let j = 0; j <= N; j++) {
+      const x = x0 + ((x1 - x0) * i) / N;
+      const y = y0 + ((y1 - y0) * j) / N;
+      if (!inside(x, y)) continue;
+      const d = edge(x, y);
+      if (d > far) [best, far] = [[x, y], d];
+    }
+  }
+  return best;
+};
+const polygonsOf = (g: { type: string; coordinates: unknown }): number[][][][] => (g.type === "Polygon" ? [g.coordinates as number[][][]] : (g.coordinates as number[][][][]));
+
+// Named features to label and read about: seas, regions, peaks, capes and lakes, with the zooms their names show at and their Wikidata ids.
+// Each is [name, kind, smallest zoom, biggest zoom, x, y, Wikidata id].
+const named: [string, string, number, number, number, number, string][] = [];
+const add = (p: Record<string, unknown>, kind: string, min: number, max: number, at: [number, number]): void => {
+  const wikidata = String(prop(p, "wikidataid") ?? "");
+  const name = String(prop(p, "name_en", "name") ?? "");
+  if (!wikidata || !name) return;
+  named.push([name, kind, min, max, +at[0].toFixed(7), +at[1].toFixed(7), wikidata]);
+};
+for (const f of await read("ne_10m_geography_marine_polys")) {
+  if (f.geometry) add(f.properties, String(prop(f.properties, "featurecla")), num(prop(f.properties, "min_label"), 4), num(prop(f.properties, "max_label"), 10), inner(polygonsOf(f.geometry)));
+}
+for (const f of await read("ne_10m_geography_regions_polys")) {
+  if (f.geometry) add(f.properties, String(prop(f.properties, "featurecla")), num(prop(f.properties, "min_label"), 5), num(prop(f.properties, "max_label"), 11), inner(polygonsOf(f.geometry)));
+}
+for (const f of await read("ne_10m_lakes")) {
+  if (f.geometry) add(f.properties, "lake", num(prop(f.properties, "min_label"), 6), 13, inner(polygonsOf(f.geometry)));
+}
+for (const file of ["ne_10m_geography_regions_points", "ne_10m_geography_regions_elevation_points"]) {
+  for (const f of await read(file)) {
+    const [lon, lat] = (f.geometry?.coordinates as number[]) ?? [];
+    if (lon === undefined || lat === undefined) continue;
+    add(f.properties, String(prop(f.properties, "featurecla")), num(prop(f.properties, "min_zoom"), 7), 16, mercator(lon, lat));
+  }
+}
+console.log(`${named.length} named features with Wikidata ids`);
+
+const json = new TextEncoder().encode(JSON.stringify({ layers: LAYERS, roadKinds: ROAD_KINDS, countries, kinds, places, named, ...index }));
 const head = new Uint8Array(4);
 new DataView(head.buffer).setUint32(0, json.length, true);
 const file = new Uint8Array(4 + json.length + bytes.length);

@@ -1,7 +1,8 @@
 // Wikipedia, read live: the articles about places in a box of the map, from
 // the GeoData extension's geosearch, and an article's text and links, from
 // its parsed HTML, split into a reader's sections. Both ask the English
-// Wikipedia's API, which answers any page that asks with origin=*.
+// Wikipedia's API, which answers any page that asks with origin=*; a map
+// feature known by its Wikidata id finds its article's title from Wikidata.
 import type { Entry, Link, ReaderDocument, SectionSource } from "./reader";
 
 const API = "https://en.wikipedia.org/w/api.php";
@@ -19,8 +20,8 @@ export interface Pin {
 export interface Article {
   readonly title: string;
   readonly doc: ReaderDocument;
-  /** Where the article's subject is, when it has a place. */
-  readonly at: { readonly lat: number; readonly lon: number } | null;
+  /** Where the article's subject is, when it has a place, and how big it is in meters, when Wikipedia knows. */
+  readonly at: { readonly lat: number; readonly lon: number; readonly dim: number | null } | null;
 }
 
 const ask = async (params: Record<string, string>, signal?: AbortSignal): Promise<unknown> => {
@@ -45,10 +46,20 @@ export const articlesIn = async (box: { north: number; west: number; south: numb
 export const article = async (title: string, signal?: AbortSignal): Promise<Article> => {
   const [parsed, place] = await Promise.all([
     ask({ action: "parse", page: title, prop: "text", redirects: "1", disableeditsection: "1", disabletoc: "1" }, signal) as Promise<{ parse: { title: string; text: string } }>,
-    ask({ action: "query", prop: "coordinates", titles: title, redirects: "1" }, signal) as Promise<{ query?: { pages?: { coordinates?: { lat: number; lon: number }[] }[] } }>,
+    ask({ action: "query", prop: "coordinates", coprop: "dim", titles: title, redirects: "1" }, signal) as Promise<{ query?: { pages?: { coordinates?: { lat: number; lon: number; dim?: number | string }[] }[] } }>,
   ]);
   const at = place.query?.pages?.[0]?.coordinates?.[0];
-  return { title: parsed.parse.title, doc: fromHtml(parsed.parse.title, parsed.parse.text), at: at ? { lat: at.lat, lon: at.lon } : null };
+  const dim = Number(at?.dim);
+  return { title: parsed.parse.title, doc: fromHtml(parsed.parse.title, parsed.parse.text), at: at ? { lat: at.lat, lon: at.lon, dim: dim > 0 ? dim : null } : null };
+};
+
+/** The English Wikipedia article's title for a Wikidata item, or null when it has none. */
+export const titleOf = async (wikidata: string, signal?: AbortSignal): Promise<string | null> => {
+  const url = `https://www.wikidata.org/w/api.php?${new URLSearchParams({ action: "wbgetentities", ids: wikidata, props: "sitelinks", sitefilter: "enwiki", format: "json", origin: "*" })}`;
+  const response = await fetch(url, signal ? { signal } : {});
+  if (!response.ok) throw new Error(`Wikidata answered ${response.status}`);
+  const body = (await response.json()) as { entities?: Record<string, { sitelinks?: { enwiki?: { title: string } } }> };
+  return body.entities?.[wikidata]?.sitelinks?.enwiki?.title ?? null;
 };
 
 /** What an article's link points at: another article's title, or null for a file, a category, a citation or another site. */
