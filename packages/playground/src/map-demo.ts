@@ -14,8 +14,8 @@ import worldUrl from "./map/world.bin" with { type: "file" };
 import { fit } from "./ui/kit";
 import { WheelGesture } from "./wheel";
 import { Reader, type ReaderHost, type ReaderSpec } from "./reader";
-import { type Pin, article, articlesIn, titleOf } from "./wiki";
-import { LAND, type Paint, type TileFeature, paint, tile, tileZoom } from "./osm";
+import { type Pin, article, articlesIn, titleNear, titleOf } from "./wiki";
+import { LAND, PLACE_ZOOM, type Paint, type TileFeature, paint, placeOf, tile, tileZoom } from "./osm";
 
 export const MAP_ID = "world-map";
 export const MAP_AT = { x: -560, y: 3850 };
@@ -166,7 +166,18 @@ interface Subject {
   readonly name: string;
   readonly title?: string;
   readonly wikidata?: string;
+  /** Where a place known only by its name is, to find its article among those near it. */
+  readonly near?: { x: number; y: number };
   readonly fly?: { x: number; y: number; zoom: number };
+}
+
+/** A place OpenStreetMap names, on the map. */
+interface Town {
+  readonly name: string;
+  readonly kind: string;
+  readonly rank: number;
+  readonly x: number;
+  readonly y: number;
 }
 
 const MARINE = new Set(["ocean", "sea", "gulf", "bay", "strait", "sound", "channel", "generic", "lagoon", "fjord", "inlet", "river", "reef"]);
@@ -213,6 +224,13 @@ export class WorldMap {
   private osmTrouble = "";
   private osmMax = 14;
   private osmDrawn = 0;
+  /** OpenStreetMap's places in the tiles drawn, and those named this frame by name, to leave out Wikipedia's pins for them. */
+  private osmPlaces: Town[] = [];
+  private named = new Map<string, Town[]>();
+  /** The wait for the view to settle before asking for anything. */
+  private settle = 0;
+  /** Where the view was when the wait began. */
+  private settledAt = "";
 
   constructor(
     private scene: Scene,
@@ -620,41 +638,45 @@ export class WorldMap {
       this.subjects.set(id, { name, wikidata, fly: { x: fx, y: fy, zoom: Math.max(zoom, Math.min(max, min + 1.5)) } });
       this.labels++;
     }
-    // Places: capitals and the biggest towns first.
-    const places = world.places
-      .filter((p) => p[3] <= zoom + 1 && inside(lx(p[4]), ly(p[5])))
-      .sort((a, b) => b[6] - a[6] || b[2] - a[2])
-      .slice(0, 400);
-    ctx.textAlign = "left";
-    for (const [i, p] of places.entries()) {
-      const x = lx(p[4]);
-      const y = ly(p[5]);
-      const big = p[6] === 1 || p[2] > 2e6;
-      ctx.font = `${big ? "600 " : ""}${(big ? 12 : 11) / z}px ${FONT}`;
-      const w = this.width(ctx, p[0]);
-      if (!free({ x: x - 4 / z, y: y - 8 / z, width: w + 12 / z, height: 16 / z })) continue;
-      const id = `place-${i}-${p[0]}`;
-      ctx.beginGroup({ id, meta: { datum: this.datum(id, () => `${p[0]}\n${p[1]}${p[2] > 0 ? `\npopulation ${people(p[2])}` : ""}`) } });
-      ctx.beginPath();
-      if (p[6] === 1) ctx.rect(x - 3.5 / z, y - 3.5 / z, 7 / z, 7 / z);
-      else ctx.arc(x, y, (big ? 3.2 : 2.4) / z, 0, Math.PI * 2);
-      ctx.fillStyle = "#ffffff";
-      ctx.fill();
-      ctx.lineWidth = 1.4 / z;
-      ctx.strokeStyle = "#1f2937";
-      ctx.stroke();
-      // A halo keeps the name readable over roads and borders.
-      ctx.lineWidth = 3 / z;
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
-      ctx.strokeText(p[0], x + 6 / z, y);
-      ctx.fillStyle = "#111827";
-      ctx.fillText(p[0], x + 6 / z, y);
-      ctx.endGroup();
-      // A town reads about itself and flies close; clicked again, close enough for Wikipedia's articles.
-      const fly = { x: p[4], y: p[5], zoom: zoom < 7 ? Math.max(zoom + 1.5, 7.5) : Math.max(zoom + 1.5, 13) };
-      if (p[7]) this.subjects.set(id, { name: p[0], wikidata: p[7], fly });
-      else this.targets.set(id, fly);
-      this.labels++;
+    this.named = new Map();
+    if (zoom >= OSM_ZOOM && this.osmDrawn > 0) this.drawTowns(ctx, zoom, lx, ly, inside, free, z);
+    else {
+      // Natural Earth's places, farther out: capitals and the biggest towns first.
+      const places = world.places
+        .filter((p) => p[3] <= zoom + 1 && inside(lx(p[4]), ly(p[5])))
+        .sort((a, b) => b[6] - a[6] || b[2] - a[2])
+        .slice(0, 400);
+      ctx.textAlign = "left";
+      for (const [i, p] of places.entries()) {
+        const x = lx(p[4]);
+        const y = ly(p[5]);
+        const big = p[6] === 1 || p[2] > 2e6;
+        ctx.font = `${big ? "600 " : ""}${(big ? 12 : 11) / z}px ${FONT}`;
+        const w = this.width(ctx, p[0]);
+        if (!free({ x: x - 4 / z, y: y - 8 / z, width: w + 12 / z, height: 16 / z })) continue;
+        const id = `place-${i}-${p[0]}`;
+        ctx.beginGroup({ id, meta: { datum: this.datum(id, () => `${p[0]}\n${p[1]}${p[2] > 0 ? `\npopulation ${people(p[2])}` : ""}`) } });
+        ctx.beginPath();
+        if (p[6] === 1) ctx.rect(x - 3.5 / z, y - 3.5 / z, 7 / z, 7 / z);
+        else ctx.arc(x, y, (big ? 3.2 : 2.4) / z, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+        ctx.lineWidth = 1.4 / z;
+        ctx.strokeStyle = "#1f2937";
+        ctx.stroke();
+        // A halo keeps the name readable over roads and borders.
+        ctx.lineWidth = 3 / z;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+        ctx.strokeText(p[0], x + 6 / z, y);
+        ctx.fillStyle = "#111827";
+        ctx.fillText(p[0], x + 6 / z, y);
+        ctx.endGroup();
+        // A town reads about itself and flies close; clicked again, close enough for Wikipedia's articles.
+        const fly = { x: p[4], y: p[5], zoom: zoom < 7 ? Math.max(zoom + 1.5, 7.5) : Math.max(zoom + 1.5, 13) };
+        if (p[7]) this.subjects.set(id, { name: p[0], wikidata: p[7], fly });
+        else this.targets.set(id, fly);
+        this.labels++;
+      }
     }
     if (zoom >= WIKI_ZOOM) this.drawPins(ctx, { wx0, wy0, wx1, wy1 }, lx, ly, free, z);
     if (this.osmDrawn > 0) {
@@ -715,6 +737,22 @@ export class WorldMap {
     });
     tiles.sort((a, b) => a.z - b.z);
     this.osmDrawn = tiles.filter((t) => t.features.length > 0).length;
+    // Their places, once each: a tile repeats those near its edges.
+    const seen = new Set<string>();
+    this.osmPlaces = [];
+    for (const t of tiles) {
+      const size = 1 / 2 ** t.z;
+      for (const f of t.features) {
+        const p = placeOf(f);
+        if (!p || p.x < 0 || p.x >= 1 || p.y < 0 || p.y >= 1) continue;
+        const x = (t.x + p.x) * size;
+        const y = (t.y + p.y) * size;
+        const key = `${p.name}|${Math.round(x * 2e4)}|${Math.round(y * 2e4)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        this.osmPlaces.push({ name: p.name, kind: p.kind, rank: p.rank, x, y });
+      }
+    }
     if (this.osmDrawn === 0) return;
     const scale = Math.max(0.35, Math.min(2.2, 2 ** ((zoom - 14) / 2)));
     const near = 0.8 / z;
@@ -773,10 +811,72 @@ export class WorldMap {
     ctx.endGroup();
   }
 
+  /**
+   * OpenStreetMap's places, the most important first: cities from zoom 9,
+   * towns from 10, villages and districts closer in. A click reads about
+   * one, finding its article among those near it, and flies close.
+   */
+  private drawTowns(ctx: RecordingContext, zoom: number, lx: (x: number) => number, ly: (y: number) => number, inside: (x: number, y: number) => boolean, free: (r: Rect) => boolean, z: number): void {
+    const towns = this.osmPlaces
+      .filter((t) => (PLACE_ZOOM[t.kind] ?? 99) <= zoom && inside(lx(t.x), ly(t.y)))
+      .sort((a, b) => a.rank - b.rank)
+      .slice(0, 400);
+    ctx.textAlign = "left";
+    for (const [i, t] of towns.entries()) {
+      const x = lx(t.x);
+      const y = ly(t.y);
+      const big = t.kind === "city";
+      const small = t.kind !== "city" && t.kind !== "town";
+      ctx.font = `${big ? "600 " : ""}${(big ? 12.5 : small ? 10.5 : 11.5) / z}px ${FONT}`;
+      const w = this.width(ctx, t.name);
+      if (!free({ x: x - 4 / z, y: y - 8 / z, width: w + 12 / z, height: 16 / z })) continue;
+      const id = `town-${i}-${t.name}`;
+      ctx.beginGroup({ id, meta: { datum: this.datum(id, () => `${t.name}\n${t.kind}\nClick to read about it`) } });
+      if (!small) {
+        ctx.beginPath();
+        ctx.arc(x, y, (big ? 3.2 : 2.6) / z, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+        ctx.lineWidth = 1.4 / z;
+        ctx.strokeStyle = "#1f2937";
+        ctx.stroke();
+      }
+      const at = small ? x - w / 2 : x + 6 / z;
+      ctx.lineWidth = 3 / z;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.strokeText(t.name, at, y);
+      ctx.fillStyle = small ? "#4b5563" : "#111827";
+      ctx.fillText(t.name, at, y);
+      ctx.endGroup();
+      this.subjects.set(id, { name: t.name, near: { x: t.x, y: t.y }, fly: { x: t.x, y: t.y, zoom: Math.max(zoom, 13) } });
+      const key = t.name.toLowerCase();
+      (this.named.get(key) ?? (this.named.set(key, []), this.named.get(key)!)).push(t);
+      this.labels++;
+    }
+  }
+
+  /** Asks for anything wanted once the view has rested a moment: a flight or a fast zoom passes over cells and tiles it needn't. */
+  private quiet(): void {
+    const send = (): void => {
+      this.settle = 0;
+      while (this.asking < ASKING && this.queue.length > 0) void this.ask(this.queue.shift()!);
+      while (this.osmAsking < OSM_ASKING && this.osmQueue.length > 0) void this.askStreets(this.osmQueue.shift()!);
+    };
+    // Only a move starts the wait over: a redraw for an answer that came leaves it running.
+    const at = `${this.camera.x}|${this.camera.y}|${this.camera.scale}`;
+    if (at === this.settledAt) {
+      if (this.settle === 0) send();
+      return;
+    }
+    this.settledAt = at;
+    window.clearTimeout(this.settle);
+    this.settle = window.setTimeout(send, 150);
+  }
+
   /** Asks for tiles, in order, dropping those asked for before that are out of view now. */
   private wantStreets(keys: string[]): void {
     this.osmQueue = keys;
-    while (this.osmAsking < OSM_ASKING && this.osmQueue.length > 0) void this.askStreets(this.osmQueue.shift()!);
+    if (keys.length > 0) this.quiet();
   }
 
   private async askStreets(key: string): Promise<void> {
@@ -831,7 +931,11 @@ export class WorldMap {
     const chosen = this.reading?.title;
     // The article read now last, over the rest.
     shown.sort((a, b) => Number(a.title === chosen) - Number(b.title === chosen));
+    const done = new Set<number>();
     for (const pin of shown.slice(-3000)) {
+      // An article Wikipedia places in two cells is pinned once.
+      if (done.has(pin.id)) continue;
+      done.add(pin.id);
       const x = lx(pin.x);
       const y = ly(pin.y);
       const on = pin.title === chosen;
@@ -861,7 +965,8 @@ export class WorldMap {
   /** Whether a pin is a town the map already shows: one of its places of the same name, close by. */
   private onMap(pin: Placed): boolean {
     const name = pin.title.split(",")[0]!.toLowerCase();
-    return (this.towns.get(name) ?? []).some((p) => Math.abs(p[4] - pin.x) < 3e-4 && Math.abs(p[5] - pin.y) < 3e-4);
+    if ((this.named.get(name) ?? []).some((t) => Math.abs(t.x - pin.x) < 3e-4 && Math.abs(t.y - pin.y) < 3e-4)) return true;
+    return this.osmDrawn === 0 && (this.towns.get(name) ?? []).some((p) => Math.abs(p[4] - pin.x) < 3e-4 && Math.abs(p[5] - pin.y) < 3e-4);
   }
 
   /** Starts a label's group, with a box that takes clicks and its tooltip; the caller draws it and ends the group. */
@@ -874,7 +979,7 @@ export class WorldMap {
   /** Asks for cells, in order, dropping those asked for before that are out of view now. */
   private want(keys: string[]): void {
     this.queue = keys;
-    while (this.asking < ASKING && this.queue.length > 0) void this.ask(this.queue.shift()!);
+    if (keys.length > 0) this.quiet();
   }
 
   private async ask(key: string): Promise<void> {
@@ -919,7 +1024,12 @@ export class WorldMap {
     this.reading = { title: subject.title ?? subject.name, at: null };
     if (subject.fly) this.fly(subject.fly);
     this.redraw();
-    const title = subject.title !== undefined ? Promise.resolve(subject.title) : titleOf(subject.wikidata!);
+    const title =
+      subject.title !== undefined
+        ? Promise.resolve(subject.title)
+        : subject.wikidata
+          ? titleOf(subject.wikidata)
+          : titleNear(subject.name, latitude(subject.near!.y), subject.near!.x * 360 - 180);
     title
       .then((t) => {
         if (t === null) throw new Error(`the English Wikipedia has no article on ${subject.name}`);

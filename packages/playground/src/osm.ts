@@ -4,6 +4,8 @@
 // map draws them over Natural Earth when close in, where Natural Earth's
 // coastlines, drawn for a 1:10 million map, are off by hundreds of meters.
 
+import { keep, kept } from "./kept";
+
 const TILEJSON = "https://tiles.openfreemap.org/planet";
 
 /** A feature: its layer, kind, the properties a style needs, and its geometry as rings or lines of x, y pairs, 0 to 1 across the tile. */
@@ -166,10 +168,40 @@ export const tileZoom = async (): Promise<number> => (await tiles()).maxzoom;
 /** A tile's features; none where the tile has nothing, as at sea. */
 export const tile = async (z: number, x: number, y: number): Promise<TileFeature[]> => {
   const { url } = await tiles();
-  const response = await fetch(url.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y)));
+  const at = url.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y));
+  // A build's tiles never change, and the URL names the build: a kept tile is as good as a new one.
+  const hit = await kept(at);
+  if (hit) return decodeTile(new Uint8Array(await hit.arrayBuffer()));
+  const response = await fetch(at);
   if (response.status === 204 || response.status === 404) return [];
   if (!response.ok) throw new Error(`OpenFreeMap answered ${response.status}`);
-  return decodeTile(new Uint8Array(await response.arrayBuffer()));
+  const bytes = await response.arrayBuffer();
+  keep(at, bytes, "application/x-protobuf");
+  return decodeTile(new Uint8Array(bytes));
+};
+
+/** A town, village or district, ranked: lower ranks are more important, and cities come before towns before villages. */
+export interface TilePlace {
+  readonly name: string;
+  readonly kind: string;
+  readonly rank: number;
+  readonly x: number;
+  readonly y: number;
+}
+
+const PLACE_KINDS = ["city", "town", "village", "suburb", "hamlet", "neighbourhood", "quarter", "isolated_dwelling"];
+/** The zoom each kind of place is named from. */
+export const PLACE_ZOOM: Readonly<Record<string, number>> = { city: 0, town: 10, village: 12, suburb: 12, hamlet: 14, neighbourhood: 14.5, quarter: 13.5, isolated_dwelling: 15 };
+
+/** A feature's place, in tile coordinates, if it is one: OpenMapTiles' place layer or Mapbox Streets' place_label. */
+export const placeOf = (f: TileFeature): TilePlace | null => {
+  if ((f.layer !== "place" && f.layer !== "place_label") || f.type !== 1 || !f.parts[0]) return null;
+  const kind = String(f.props.class ?? f.props.type ?? "");
+  if (!PLACE_KINDS.includes(kind)) return null;
+  const name = String(f.props["name:en"] ?? f.props.name_en ?? f.props["name:latin"] ?? f.props.name ?? "");
+  if (!name) return null;
+  const rank = Number(f.props.rank ?? f.props.localrank ?? f.props.scalerank ?? 10);
+  return { name, kind, rank: PLACE_KINDS.indexOf(kind) * 100 + rank, x: f.parts[0][0]!, y: f.parts[0][1]! };
 };
 
 /**

@@ -3,6 +3,7 @@
 // its parsed HTML, split into a reader's sections. Both ask the English
 // Wikipedia's API, which answers any page that asks with origin=*; a map
 // feature known by its Wikidata id finds its article's title from Wikidata.
+import { keep, kept } from "./kept";
 import type { Entry, Link, ReaderDocument, SectionSource } from "./reader";
 
 const API = "https://en.wikipedia.org/w/api.php";
@@ -24,12 +25,20 @@ export interface Article {
   readonly at: { readonly lat: number; readonly lon: number; readonly dim: number | null } | null;
 }
 
-const ask = async (params: Record<string, string>, signal?: AbortSignal): Promise<unknown> => {
+/** Who is asking, as Wikimedia's API etiquette asks a page to say; browsers don't let a page set User-Agent itself. */
+const AGENT = { "Api-User-Agent": "CanvasIR playground (https://github.com/AnimaticML/canvas-ir)" };
+
+/** Asks the API; with `keeping`, a good answer is kept for the next visit and a kept one answers instead. */
+const ask = async (params: Record<string, string>, signal?: AbortSignal, keeping = false): Promise<unknown> => {
   const url = `${API}?${new URLSearchParams({ ...params, format: "json", formatversion: "2", origin: "*" })}`;
-  const response = await fetch(url, signal ? { signal } : {});
+  const hit = keeping ? await kept(url) : null;
+  if (hit) return hit.json();
+  const response = await fetch(url, { headers: AGENT, ...(signal ? { signal } : {}) });
   if (!response.ok) throw new Error(`Wikipedia answered ${response.status}`);
-  const body = (await response.json()) as { error?: { info?: string } };
+  const text = await response.text();
+  const body = JSON.parse(text) as { error?: { info?: string } };
   if (body.error) throw new Error(body.error.info ?? "Wikipedia refused the request");
+  if (keeping) keep(url, text, "application/json");
   return body;
 };
 
@@ -38,8 +47,21 @@ export const articlesIn = async (box: { north: number; west: number; south: numb
   const body = (await ask(
     { action: "query", list: "geosearch", gsbbox: `${box.north}|${box.west}|${box.south}|${box.east}`, gslimit: "500", gsprop: "type" },
     signal,
+    true,
   )) as { query?: { geosearch?: { pageid: number; title: string; lat: number; lon: number; type?: string }[] } };
   return (body.query?.geosearch ?? []).map((g) => ({ id: g.pageid, title: g.title, lat: g.lat, lon: g.lon, type: g.type ?? "" }));
+};
+
+/**
+ * The article about a place known only by its name, as OpenStreetMap names
+ * towns: of the articles within 10 km, the one whose title is the name
+ * ("Springfield, Illinois" for a Springfield there), or else the name itself.
+ */
+export const titleNear = async (name: string, lat: number, lon: number, signal?: AbortSignal): Promise<string> => {
+  const body = (await ask({ action: "query", list: "geosearch", gscoord: `${lat}|${lon}`, gsradius: "10000", gslimit: "100" }, signal)) as { query?: { geosearch?: { title: string }[] } };
+  const want = name.toLowerCase();
+  const found = (body.query?.geosearch ?? []).find((g) => g.title.toLowerCase() === want || g.title.split(",")[0]!.toLowerCase() === want);
+  return found?.title ?? name;
 };
 
 /** An article, by title, with where its subject is. */
