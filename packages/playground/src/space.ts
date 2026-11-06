@@ -56,20 +56,10 @@ export const startSpace = (host: SpaceHost): void => {
     ring: shape("ring", new THREE.TorusGeometry(0.42, 0.16, 24, 64), PALETTE[2]!, 2.2, 1.1, 0.62),
   };
 
-  // The panel: a plane on a stand, its front a drawing, its back plain. The back is unnamed, so it is hit as the stand.
-  const stand = new THREE.Group();
-  stand.name = "stand";
-  stand.position.set(0, 1.45, -1.2);
-  root.add(stand);
+  // The panel: a plane on a stand, its front a drawing, its back plain. The back and the pole are unnamed, so they are hit as the stand.
   const panel = new THREE.Mesh(new THREE.PlaneGeometry(2.88, 1.8), new THREE.MeshBasicMaterial({ toneMapped: false }));
   panel.name = "panel";
-  stand.add(panel);
-  const back = new THREE.Mesh(new THREE.PlaneGeometry(2.88, 1.8), new THREE.MeshStandardMaterial({ color: "#64748b" }));
-  back.rotation.y = Math.PI;
-  stand.add(back);
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.55), new THREE.MeshStandardMaterial({ color: "#64748b" }));
-  pole.position.y = -1.18;
-  stand.add(pole);
+  const { stand, board } = easel(root, { name: "stand", x: 0, z: -1.2, yaw: 0, face: panel, legs: [0], height: 0.55, color: "#64748b" });
 
   const size = { width: 1, height: 1 };
   const world = new World({ root, camera, size: () => size });
@@ -123,7 +113,7 @@ export const startSpace = (host: SpaceHost): void => {
         ctx.fillStyle = "#475569";
         ctx.font = `13px ${FONT}`;
         ctx.fillText("Click a shape to pick it, drag it over the floor. Drag the", 24, 62);
-        ctx.fillText("floor to look around; walk with WASD, Q and E.", 24, 78);
+        ctx.fillText("floor to look around. WASD walks, E or Space rises, Q or C sinks.", 24, 78);
       },
     }),
   );
@@ -137,6 +127,7 @@ export const startSpace = (host: SpaceHost): void => {
   button("home", 324, 132, () => "Reset view", () => {
     home();
     stand.rotation.set(0, 0, 0);
+    board.rotation.set(0, 0, 0);
   });
 
   // The speed slider: its drags come in the drawing's units, wherever the panel is turned.
@@ -329,10 +320,15 @@ export const startSpace = (host: SpaceHost): void => {
     walker.pitch = look.x;
   };
   home();
-  router.on("stand", "drag", (e) => {
-    stand.rotation.y += e.delta!.x * 0.008;
-    e.stopPropagation();
-  });
+  // Sideways turns a stand, up and down tilts its board on the hinge at the top of its legs.
+  const turnable = (name: string, stand: THREE.Object3D, board: THREE.Object3D): void => {
+    router.on(name, "drag", (e) => {
+      stand.rotation.y += e.delta!.x * 0.008;
+      board.rotation.x = Math.max(-1.2, Math.min(1.2, board.rotation.x + e.delta!.y * 0.006));
+      e.stopPropagation();
+    });
+  };
+  turnable("stand", stand, board);
   router.on("*", "drag", (e) => {
     if (e.target !== null) return;
     walker.yaw += e.delta!.x * 0.004;
@@ -347,7 +343,7 @@ export const startSpace = (host: SpaceHost): void => {
   const MOVES: Record<string, [number, number, number]> = {
     KeyW: [0, 0, -1], ArrowUp: [0, 0, -1], KeyS: [0, 0, 1], ArrowDown: [0, 0, 1],
     KeyA: [-1, 0, 0], ArrowLeft: [-1, 0, 0], KeyD: [1, 0, 0], ArrowRight: [1, 0, 0],
-    KeyE: [0, 1, 0], KeyQ: [0, -1, 0],
+    KeyE: [0, 1, 0], Space: [0, 1, 0], PageUp: [0, 1, 0], KeyQ: [0, -1, 0], KeyC: [0, -1, 0], PageDown: [0, -1, 0],
   };
   // While the playground has the keyboard its keys go to it, in its own window; these come only while this page has it.
   window.addEventListener("keydown", (e) => {
@@ -371,6 +367,7 @@ export const startSpace = (host: SpaceHost): void => {
   window.addEventListener("keyup", (e) => (shift = e.shiftKey));
 
   const playground = showPlayground(root, world);
+  turnable("screen-stand", playground.stand, playground.board);
 
   // The host's input, in CSS pixels over the canvas.
   let pointerId: number | null = null;
@@ -472,11 +469,6 @@ const PAGE = { width: 1280, height: 800 };
  * under the ray, and a press on it gives it the keyboard.
  */
 const showPlayground = (root: THREE.Object3D, world: World) => {
-  const stand = new THREE.Group();
-  stand.name = "screen-stand";
-  stand.position.set(-4.6, 2.3, -3.6);
-  stand.rotation.y = 0.55;
-  root.add(stand);
   const geometry = new THREE.PlaneGeometry(4.8, 3);
   const shot = document.createElement("canvas");
   shot.width = PAGE.width;
@@ -493,15 +485,7 @@ const showPlayground = (root: THREE.Object3D, world: World) => {
   texture.anisotropy = 8;
   const screen = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map: texture, toneMapped: false }));
   screen.name = "playground";
-  stand.add(screen);
-  const back = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: "#475569" }));
-  back.rotation.y = Math.PI;
-  stand.add(back);
-  for (const x of [-1.6, 1.6]) {
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.8), new THREE.MeshStandardMaterial({ color: "#475569" }));
-    leg.position.set(x, -1.9, 0);
-    stand.add(leg);
-  }
+  const { stand, board } = easel(root, { name: "screen-stand", x: -4.6, z: -3.6, yaw: 0.55, face: screen, legs: [-1.6, 1.6], height: 0.8, color: "#475569" });
 
   // The page, laid out at its size but covered by the 3D canvas, so the browser keeps running it.
   const frame = document.createElement("iframe");
@@ -536,6 +520,8 @@ const showPlayground = (root: THREE.Object3D, world: World) => {
     return on ? { clientX: r.left + on.x, clientY: r.top + on.y } : null;
   };
   return {
+    stand,
+    board,
     /** Whether the screen is what a host pixel shows. */
     under: (p: { x: number; y: number }): boolean => world.intersect(p)?.object === screen,
     /** Sends a pointer or wheel event to the page's board where the ray meets the screen. */
@@ -580,4 +566,35 @@ const showPlayground = (root: THREE.Object3D, world: World) => {
       texture.needsUpdate = true;
     },
   };
+};
+
+/**
+ * A board on legs: the stand stands on the floor and turns, and the board,
+ * the face and a plain back, tilts on a hinge at the top of the legs.
+ */
+const easel = (
+  root: THREE.Object3D,
+  o: { name: string; x: number; z: number; yaw: number; face: THREE.Mesh; legs: number[]; height: number; color: string },
+): { stand: THREE.Group; board: THREE.Group } => {
+  const material = new THREE.MeshStandardMaterial({ color: o.color });
+  const stand = new THREE.Group();
+  stand.name = o.name;
+  stand.position.set(o.x, 0, o.z);
+  stand.rotation.y = o.yaw;
+  root.add(stand);
+  for (const x of o.legs) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, o.height + 0.1), material);
+    leg.position.set(x, (o.height + 0.1) / 2, 0);
+    stand.add(leg);
+  }
+  const board = new THREE.Group();
+  board.position.y = o.height;
+  stand.add(board);
+  const { height } = (o.face.geometry as THREE.PlaneGeometry).parameters;
+  o.face.position.y = height / 2;
+  const back = new THREE.Mesh(o.face.geometry, material);
+  back.rotation.y = Math.PI;
+  back.position.y = height / 2;
+  board.add(o.face, back);
+  return { stand, board };
 };
