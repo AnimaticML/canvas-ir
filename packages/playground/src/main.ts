@@ -244,7 +244,7 @@ const render = (): void => {
  * whole page at the device's pixel ratio. The host reads what was drawn from
  * `canvasIrDrawn`, as the canvases change size a frame after it asks.
  */
-type Capture = { x: number; y: number; width: number; height: number; scale: number };
+type Capture = { x: number; y: number; width: number; height: number; scale: number; ui?: number };
 let capture: Capture | null = null;
 const host = window as unknown as { canvasIrCapture?: (c: Capture | null) => void; canvasIrDrawn?: Capture };
 host.canvasIrCapture = (c) => {
@@ -258,6 +258,8 @@ const draw = (): void => {
   const { width, height } = stage.getBoundingClientRect();
   const part = capture ?? { x: 0, y: 0, width, height, scale: window.devicePixelRatio || 1 };
   const dpr = part.scale;
+  // Outlines and marks are as thin on the host's screen as on this one: canvas pixels per pixel of whoever is looking.
+  const ui = part.ui ?? dpr;
   for (const c of [canvas, cardCanvas, overlay]) {
     if (c.width !== Math.round(part.width * dpr) || c.height !== Math.round(part.height * dpr)) {
       c.width = Math.round(part.width * dpr);
@@ -303,8 +305,8 @@ const draw = (): void => {
     ctx.filter = "none";
     ctx.shadowColor = "transparent";
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5 * dpr;
-    ctx.setLineDash(dash.map((d) => d * dpr));
+    ctx.lineWidth = 1.5 * ui;
+    ctx.setLineDash(dash.map((d) => d * ui));
     ctx.strokeRect(Math.round(p.x) + 0.5, Math.round(p.y) + 0.5, Math.round(q.x - p.x), Math.round(q.y - p.y));
   };
   const style = getComputedStyle(document.documentElement);
@@ -323,25 +325,25 @@ const draw = (): void => {
     ctx.fillStyle = accent;
     ctx.fill();
     ctx.globalAlpha = 1;
-    ctx.lineWidth = dpr;
+    ctx.lineWidth = ui;
     ctx.stroke();
   }
-  devtools.preview(octx, device, dpr);
-  tools.preview(octx, device, dpr);
+  devtools.preview(octx, device, ui);
+  tools.preview(octx, device, ui);
   if (snapMark) {
     const q = applyToPoint(device, snapMark.x, snapMark.y);
-    const r = 6 * dpr;
+    const r = 6 * ui;
     ctx.strokeStyle = "#e11d48";
-    ctx.lineWidth = 1.5 * dpr;
+    ctx.lineWidth = 1.5 * ui;
     ctx.beginPath();
     ctx.moveTo(q.x - r, q.y - r);
     ctx.lineTo(q.x + r, q.y + r);
     ctx.moveTo(q.x + r, q.y - r);
     ctx.lineTo(q.x - r, q.y + r);
     ctx.stroke();
-    ctx.font = `${11 * dpr}px system-ui, sans-serif`;
+    ctx.font = `${11 * ui}px system-ui, sans-serif`;
     ctx.fillStyle = "#e11d48";
-    ctx.fillText(snapMark.kind, q.x + r + 2 * dpr, q.y - r);
+    ctx.fillText(snapMark.kind, q.x + r + 2 * ui, q.y - r);
   }
   if (tooltip) {
     ctx.setTransform(dpr, 0, 0, dpr, -part.x * dpr, -part.y * dpr);

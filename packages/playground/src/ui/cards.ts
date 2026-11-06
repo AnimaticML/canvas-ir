@@ -105,7 +105,10 @@ export class CardLayer {
     this.router.setView(view);
     this.a11y.setView(view);
     this.renderer.setView(device, this.canvas.width, this.canvas.height);
-    this.render();
+    // Drawn now, in the board's frame: the canvas was just resized and cleared, and a frame without the cards would flicker.
+    if (this.frame) cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    this.renderer.render();
   }
 
   /** The world box the cards and everything else on this layer cover. */

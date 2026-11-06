@@ -5,7 +5,7 @@
 // the panel mesh to the stand that holds it, a click on a shape goes to the
 // shape, and both reach the same "*" handlers.
 import { Components, EventRouter, type ComponentHandle, type RecordingContext, type RouterEvent, type WheelInput } from "canvas-ir";
-import { Focus, type Region, Surface, World, fitRegion } from "@canvas-ir/three";
+import { Focus, type Region, Surface, World, fitRegion, noMipmaps } from "@canvas-ir/three";
 import * as THREE from "three";
 
 const PALETTE = ["#f97316", "#0ea5e9", "#8b5cf6", "#22c55e", "#ef4444", "#eab308", "#ec4899", "#14b8a6"];
@@ -490,6 +490,7 @@ const showPlayground = (root: THREE.Object3D, world: World) => {
   const texture = new THREE.CanvasTexture(shot);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;
+  noMipmaps(texture);
   const screen = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map: texture, toneMapped: false }));
   screen.name = "playground";
   const { stand, board } = easel(root, { name: "screen-stand", x: -4.6, z: -3.6, yaw: 0.55, face: screen, legs: [-1.6, 1.6], height: 0.8, color: "#475569" });

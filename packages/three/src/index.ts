@@ -37,7 +37,15 @@ export interface Region {
   readonly width: number;
   readonly height: number;
   readonly scale: number;
+  /** Texture pixels per CSS pixel of the host where the content is closest: how wide to draw lines meant to look the same on any screen, as a hover outline. */
+  readonly ui?: number;
 }
+
+/** Turns a texture's mipmaps off: for one drawn at the detail the view needs, as a focus draws it. */
+export const noMipmaps = (texture: THREE.Texture): void => {
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+};
 
 /** Fits a texture holding a region of a `width` by `height` drawing onto a mesh whose uvs span the whole drawing. */
 export const fitRegion = (texture: THREE.Texture, region: Region, width: number, height: number): void => {
@@ -81,6 +89,8 @@ export class Surface {
     this.sharp = sharp === false ? null : sharp === true ? {} : sharp;
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.colorSpace = THREE.SRGBColorSpace;
+    // Drawn at the detail the view needs, it is never shown much smaller than drawn: mipmaps would only cost an extra pass per upload.
+    if (this.sharp) noMipmaps(this.texture);
     const material = this.mesh.material as THREE.MeshBasicMaterial | THREE.MeshStandardMaterial;
     material.map = this.texture;
     material.needsUpdate = true;
@@ -198,12 +208,13 @@ export class World implements Pickable {
     const inside = (uv: THREE.Vector2 | null | undefined): uv is THREE.Vector2 => uv != null && uv.x >= -0.001 && uv.x <= 1.001 && uv.y >= -0.001 && uv.y <= 1.001;
     // Rays on a grid over the host: where they meet the plane, and how far apart they land there.
     const N = 12;
+    const inverse = mesh.matrixWorld.clone().invert();
     const grid: (THREE.Vector2 | null)[][] = [];
     for (let i = 0; i <= N; i++) {
       grid.push([]);
       for (let j = 0; j <= N; j++) {
         this.aim({ x: (i / N) * sw, y: (j / N) * sh });
-        const uv = this.uvOnPlane(mesh);
+        const uv = this.uvOnPlane(mesh, inverse);
         grid[i]!.push(uv);
         if (inside(uv)) take(uv.x, uv.y);
       }
@@ -235,6 +246,16 @@ export class World implements Pickable {
     }
     if (!(x1 > x0 && y1 > y0) || density === 0) return null;
     return { x0, y0, x1, y1, density };
+  }
+
+  /** The camera, as the world sees from it. */
+  get camera(): THREE.Camera {
+    return this.options.camera;
+  }
+
+  /** The host's size in CSS pixels. */
+  get viewSize(): { width: number; height: number } {
+    return this.options.size();
   }
 
   /** The camera's ray through a host pixel. */
@@ -347,11 +368,11 @@ export class World implements Pickable {
   }
 
   /** Where the last aimed ray meets a plane mesh's plane, as a uv beyond 0 to 1 off its edges; null for other shapes or a ray along the plane. */
-  private uvOnPlane(mesh: THREE.Mesh): THREE.Vector2 | null {
+  private uvOnPlane(mesh: THREE.Mesh, inverse: THREE.Matrix4 = mesh.matrixWorld.clone().invert()): THREE.Vector2 | null {
     const geometry = mesh.geometry;
     if (!(geometry instanceof THREE.PlaneGeometry)) return null;
     const { width, height } = geometry.parameters;
-    const ray = this.raycaster.ray.clone().applyMatrix4(mesh.matrixWorld.clone().invert());
+    const ray = this.raycaster.ray.clone().applyMatrix4(inverse);
     const at = ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), new THREE.Vector3());
     return at ? new THREE.Vector2(at.x / width + 0.5, at.y / height + 0.5) : null;
   }
@@ -360,13 +381,21 @@ export class World implements Pickable {
 export interface FocusOptions {
   /** The longest side of the texture, in pixels. Default 4096, which every WebGL 2 device has. */
   readonly maxSide?: number;
-  /** The most pixels in the texture: memory is four bytes each. Default 8 million, 32 MB. */
+  /** The most pixels in the texture: memory is four bytes each. Default twice the host's device pixels, at least a million and at most 8 million (32 MB): more than that can't show. */
   readonly maxPixels?: number;
   /** Texture pixels per unit of the drawing, at the least and at the most. Default 0.5 and 16. */
   readonly minScale?: number;
   readonly maxScale?: number;
   /** Device pixels per CSS pixel of the host. Default `devicePixelRatio`. */
   readonly pixelRatio?: () => number;
+  /**
+   * How long the camera and the plane must rest, in milliseconds, before more
+   * detail is drawn: while they move, the region follows at the detail it has,
+   * so walking up to a board costs no redraws until you stop. Default 150.
+   */
+  readonly settle?: number;
+  /** The time now, in milliseconds. Default `performance.now()`. */
+  readonly now?: () => number;
 }
 
 /**
@@ -379,6 +408,8 @@ export interface FocusOptions {
 export class Focus {
   private region: Region | null = null;
   private level = 0;
+  private pose = "";
+  private moved = -Infinity;
 
   constructor(
     private readonly world: World,
@@ -401,24 +432,38 @@ export class Focus {
     const min = this.options.minScale ?? 0.5;
     const max = this.options.maxScale ?? 16;
     const want = Math.log2(Math.min(max, Math.max(min, seen.density * ratio)));
-    // A step of detail is taken once the view is most of a step past the one held.
-    const level = this.level > 0 && Math.abs(want - Math.log2(this.level)) < 0.75 ? this.level : 2 ** Math.round(want);
+    // A step of detail is taken once the view is most of a step past the one held, and a step up only once the view rests.
+    const now = this.options.now?.() ?? performance.now();
+    const pose = [...this.world.camera.matrixWorld.elements, ...this.mesh.matrixWorld.elements].join(",");
+    if (pose !== this.pose) {
+      this.pose = pose;
+      this.moved = now;
+    }
+    const resting = now - this.moved >= (this.options.settle ?? 150);
+    let level = this.level > 0 && Math.abs(want - Math.log2(this.level)) < 0.75 ? this.level : 2 ** Math.round(want);
+    if (level > this.level && this.level > 0 && !resting) level = this.level;
     const r = this.region;
     if (r && level === this.level && seen.x0 >= r.x - 1e-6 && seen.y0 >= r.y - 1e-6 && seen.x1 <= r.x + r.width + 1e-6 && seen.y1 <= r.y + r.height + 1e-6) return null;
-    // The part in view, a quarter again on each side, snapped outward to a 64th of the content.
-    const padX = (seen.x1 - seen.x0) * 0.25;
-    const padY = (seen.y1 - seen.y0) * 0.25;
+    // The part in view, a sixth again on each side, snapped outward to a 64th of the content.
+    const padX = (seen.x1 - seen.x0) / 6;
+    const padY = (seen.y1 - seen.y0) / 6;
     const g = Math.max(width, height) / 64;
     const x0 = Math.max(0, Math.floor((seen.x0 - padX) / g) * g);
     const y0 = Math.max(0, Math.floor((seen.y0 - padY) / g) * g);
     const x1 = Math.min(width, Math.ceil((seen.x1 + padX) / g) * g);
     const y1 = Math.min(height, Math.ceil((seen.y1 + padY) / g) * g);
-    const w = x1 - x0;
-    const h = y1 - y0;
     const side = this.options.maxSide ?? 4096;
-    const scale = Math.min(level, side / w, side / h, Math.sqrt((this.options.maxPixels ?? 8_388_608) / (w * h)));
+    const host = this.world.viewSize;
+    const budget = this.options.maxPixels ?? Math.min(8_388_608, Math.max(1 << 20, 2 * host.width * host.height * ratio * ratio));
+    const scale = Math.min(level, side / (x1 - x0), side / (y1 - y0), Math.sqrt(budget / ((x1 - x0) * (y1 - y0))));
+    // The texture's size goes in steps of 256 pixels and the region grows to fill it, so most moves keep the size, and the GPU its storage.
+    const STEP = 256;
+    const w = Math.min(width, Math.min(side, Math.ceil(((x1 - x0) * scale) / STEP) * STEP) / scale);
+    const h = Math.min(height, Math.min(side, Math.ceil(((y1 - y0) * scale) / STEP) * STEP) / scale);
+    const x = Math.max(0, Math.min(width - w, (x0 + x1) / 2 - w / 2));
+    const y = Math.max(0, Math.min(height - h, (y0 + y1) / 2 - h / 2));
     this.level = level;
-    this.region = { x: x0, y: y0, width: w, height: h, scale };
+    this.region = { x, y, width: w, height: h, scale, ui: Math.min(scale * 8, Math.max(scale / 8, scale / seen.density)) };
     return this.region;
   }
 }

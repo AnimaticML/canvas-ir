@@ -84,7 +84,8 @@ describe("focus", () => {
     const { world } = setup();
     const surface = world.all[0]!;
     const camera = (world as unknown as { options: { camera: THREE.PerspectiveCamera } }).options.camera;
-    const focus = new Focus(world, surface.mesh, () => surface, { pixelRatio: () => 1 });
+    let t = 0;
+    const focus = new Focus(world, surface.mesh, () => surface, { pixelRatio: () => 1, now: () => t });
     const far = focus.update()!;
     expect([far.x, far.y, far.width, far.height]).toEqual([0, 0, 200, 100]);
     // Seen 5 away by a 50° camera on 400 pixels, the panel's 2 meters are about 172 pixels for 200 units: 0.86 a unit, so a step of 1.
@@ -93,12 +94,21 @@ describe("focus", () => {
 
     camera.position.set(-0.8, 0.3, 0.4);
     camera.updateMatrixWorld(true);
+    // While the camera moves, the region follows at the detail it had; the detail comes once it rests.
+    t = 16;
+    expect(focus.update()?.scale ?? 1).toBe(1);
+    t = 200;
     const near = focus.update()!;
     expect(near.scale).toBeGreaterThanOrEqual(8);
     expect(near.x).toBe(0);
     expect(near.y).toBe(0);
     expect(near.width).toBeLessThan(100);
-    expect(near.height).toBeLessThan(60);
-    expect(near.width * near.scale).toBeLessThanOrEqual(4096);
+    expect(near.height).toBeLessThan(100);
+    // The texture's size in steps of 256 pixels, within the default budget for a 400 by 400 host: a million pixels.
+    expect((near.width * near.scale) % 256).toBeCloseTo(0, 6);
+    expect((near.height * near.scale) % 256).toBeCloseTo(0, 6);
+    expect(near.width * near.scale * near.height * near.scale).toBeLessThanOrEqual(2 ** 20 + 512 * 1024);
+    // Lines meant to look one pixel wide on the host: texture pixels per host pixel where the panel is closest.
+    expect(near.ui).toBeGreaterThan(0);
   });
 });
