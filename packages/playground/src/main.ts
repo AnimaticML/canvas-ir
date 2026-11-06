@@ -237,19 +237,35 @@ let frame = 0;
 const render = (): void => {
   if (!frame) frame = requestAnimationFrame(draw);
 };
+/**
+ * The part of the page a host showing it on a 3D screen wants, in CSS pixels,
+ * and how many canvas pixels to draw per CSS pixel: the canvases then hold
+ * only that part, as sharp as the host's view of it needs. Null draws the
+ * whole page at the device's pixel ratio. The host reads what was drawn from
+ * `canvasIrDrawn`, as the canvases change size a frame after it asks.
+ */
+type Capture = { x: number; y: number; width: number; height: number; scale: number };
+let capture: Capture | null = null;
+const host = window as unknown as { canvasIrCapture?: (c: Capture | null) => void; canvasIrDrawn?: Capture };
+host.canvasIrCapture = (c) => {
+  capture = c;
+  render();
+};
 const draw = (): void => {
   // What the map records now is drawn in this frame, not the next.
   worldMap?.flush();
   frame = 0;
-  const dpr = window.devicePixelRatio || 1;
   const { width, height } = stage.getBoundingClientRect();
+  const part = capture ?? { x: 0, y: 0, width, height, scale: window.devicePixelRatio || 1 };
+  const dpr = part.scale;
   for (const c of [canvas, cardCanvas, overlay]) {
-    if (c.width !== Math.round(width * dpr) || c.height !== Math.round(height * dpr)) {
-      c.width = Math.round(width * dpr);
-      c.height = Math.round(height * dpr);
+    if (c.width !== Math.round(part.width * dpr) || c.height !== Math.round(part.height * dpr)) {
+      c.width = Math.round(part.width * dpr);
+      c.height = Math.round(part.height * dpr);
     }
   }
-  const device = multiply({ a: dpr, b: 0, c: 0, d: dpr, e: 0, f: 0 }, view);
+  host.canvasIrDrawn = part;
+  const device = multiply({ a: dpr, b: 0, c: 0, d: dpr, e: -part.x * dpr, f: -part.y * dpr }, view);
   // The board redraws only what changed since the last frame; selection marks go on the overlay, redrawn whole.
   const key = `${canvas.width}x${canvas.height} ${Object.values(device).join(",")}`;
   if (key !== viewKey) {
@@ -328,7 +344,7 @@ const draw = (): void => {
     ctx.fillText(snapMark.kind, q.x + r + 2 * dpr, q.y - r);
   }
   if (tooltip) {
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, -part.x * dpr, -part.y * dpr);
     ctx.font = "12px system-ui, sans-serif";
     const lines = tooltip.text.split("\n");
     const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 16;

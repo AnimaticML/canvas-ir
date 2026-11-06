@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { EventRouter, RecordingContext } from "canvas-ir";
 import * as THREE from "three";
-import { Surface, World } from "../src/index";
+import { Focus, Surface, World } from "../src/index";
 
 /** A 2-by-1 panel facing the camera, in a stand, with a 200-by-100 drawing: a button in its top left corner. A cube stands in front of its right end. */
 const setup = () => {
@@ -76,5 +76,29 @@ describe("a mesh that shows something else", () => {
     const off = world.pointOn(panel, screen(1.5, 0), 1280, 800)!;
     expect(off.x).toBeCloseTo(1600, 3);
     expect(off.y).toBeCloseTo(400, 3);
+  });
+});
+
+describe("focus", () => {
+  test("far away the whole panel is drawn at the detail its size on screen needs; up close only the part in view, finer", () => {
+    const { world } = setup();
+    const surface = world.all[0]!;
+    const camera = (world as unknown as { options: { camera: THREE.PerspectiveCamera } }).options.camera;
+    const focus = new Focus(world, surface.mesh, () => surface, { pixelRatio: () => 1 });
+    const far = focus.update()!;
+    expect([far.x, far.y, far.width, far.height]).toEqual([0, 0, 200, 100]);
+    // Seen 5 away by a 50° camera on 400 pixels, the panel's 2 meters are about 172 pixels for 200 units: 0.86 a unit, so a step of 1.
+    expect(far.scale).toBe(1);
+    expect(focus.update()).toBeNull();
+
+    camera.position.set(-0.8, 0.3, 0.4);
+    camera.updateMatrixWorld(true);
+    const near = focus.update()!;
+    expect(near.scale).toBeGreaterThanOrEqual(8);
+    expect(near.x).toBe(0);
+    expect(near.y).toBe(0);
+    expect(near.width).toBeLessThan(100);
+    expect(near.height).toBeLessThan(60);
+    expect(near.width * near.scale).toBeLessThanOrEqual(4096);
   });
 });

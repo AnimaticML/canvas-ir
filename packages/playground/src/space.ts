@@ -5,7 +5,7 @@
 // the panel mesh to the stand that holds it, a click on a shape goes to the
 // shape, and both reach the same "*" handlers.
 import { Components, EventRouter, type ComponentHandle, type RecordingContext, type RouterEvent, type WheelInput } from "canvas-ir";
-import { Surface, World } from "@canvas-ir/three";
+import { Focus, type Region, Surface, World, fitRegion } from "@canvas-ir/three";
 import * as THREE from "three";
 
 const PALETTE = ["#f97316", "#0ea5e9", "#8b5cf6", "#22c55e", "#ef4444", "#eab308", "#ec4899", "#14b8a6"];
@@ -320,6 +320,13 @@ export const startSpace = (host: SpaceHost): void => {
     walker.pitch = look.x;
   };
   home();
+  // A view to start from, as #view=x,y,z,yaw,pitch: a place to come back to, and how the page is checked up close.
+  const start = /^#view=([-\d.,]+)$/.exec(location.hash)?.[1]?.split(",").map(Number);
+  if (start?.length === 5 && start.every(Number.isFinite)) {
+    walker.at.set(start[0]!, start[1]!, start[2]!);
+    walker.yaw = start[3]!;
+    walker.pitch = start[4]!;
+  }
   // Sideways turns a stand, up and down tilts its board on the hinge at the top of its legs.
   const turnable = (name: string, stand: THREE.Object3D, board: THREE.Object3D): void => {
     router.on(name, "drag", (e) => {
@@ -498,6 +505,8 @@ const showPlayground = (root: THREE.Object3D, world: World) => {
   let dirty = false;
   let over = false;
   let background = "#ffffff";
+  // Less than a CanvasIR surface's budget: the whole board redraws into it as things move.
+  const focus = new Focus(world, screen, () => page?.board.getBoundingClientRect() ?? PAGE, { maxPixels: 4_194_304 });
   frame.addEventListener("load", () => {
     const win = frame.contentWindow as (Window & typeof globalThis) | null;
     const board = win?.document.getElementById("board") as HTMLCanvasElement | null;
@@ -552,13 +561,21 @@ const showPlayground = (root: THREE.Object3D, world: World) => {
     cursor: (): string | null => page?.board.style.cursor || null,
     /** Copies the page's canvases into the screen, if it drew since the last time. */
     draw: (): void => {
-      if (!page || !dirty) return;
+      if (!page) return;
+      // The page draws the part of itself in view, at the detail the view needs.
+      const host = page.win as unknown as { canvasIrCapture?: (r: Region) => void; canvasIrDrawn?: Region };
+      const wanted = focus.update();
+      if (wanted) host.canvasIrCapture?.(wanted);
+      if (!dirty) return;
       dirty = false;
       const { board, layers } = page;
       if (shot.width !== board.width || shot.height !== board.height) {
         shot.width = board.width;
         shot.height = board.height;
+        texture.dispose();
       }
+      const rect = board.getBoundingClientRect();
+      if (host.canvasIrDrawn) fitRegion(texture, host.canvasIrDrawn, rect.width, rect.height);
       // The board's canvas is transparent over the page's own background.
       sctx.fillStyle = background;
       sctx.fillRect(0, 0, shot.width, shot.height);

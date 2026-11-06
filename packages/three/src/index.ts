@@ -6,7 +6,7 @@
 // button's op through its groups into the panel mesh and the 3D objects that
 // hold it, and a click on a plain mesh goes to the mesh: the same events,
 // handlers and components for both.
-import { type Op, type Pickable, type Point, Scene, replayDocument, type IRDocument, type ReplayOptions } from "canvas-ir";
+import { type Op, type Pickable, type Point, Scene, multiply, replayDocument, type IRDocument, type ReplayOptions } from "canvas-ir";
 import * as THREE from "three";
 
 export interface SurfaceOptions {
@@ -22,7 +22,30 @@ export interface SurfaceOptions {
   readonly replay?: ReplayOptions;
   /** The canvas to draw into; a new one by default. */
   readonly canvas?: HTMLCanvasElement;
+  /**
+   * Whether a plane surface follows the camera: drawn again at the detail the
+   * view needs, and only the part of it in view, so it stays sharp up close.
+   * Default true for a plane; other shapes always draw whole at `pixelRatio`.
+   */
+  readonly sharp?: boolean | FocusOptions;
 }
+
+/** A part of a drawing, in its units, and how many texture pixels to draw per unit. */
+export interface Region {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly scale: number;
+}
+
+/** Fits a texture holding a region of a `width` by `height` drawing onto a mesh whose uvs span the whole drawing. */
+export const fitRegion = (texture: THREE.Texture, region: Region, width: number, height: number): void => {
+  const rx = width / region.width;
+  const ry = height / region.height;
+  texture.repeat.set(rx, ry);
+  texture.offset.set(-(region.x / width) * rx, -(1 - (region.y + region.height) / height) * ry);
+};
 
 /** A CanvasIR scene drawn to a canvas texture on a mesh. */
 export class Surface {
@@ -37,6 +60,9 @@ export class Surface {
   private readonly background: string | null;
   private readonly replay: ReplayOptions;
   private dirty = true;
+  /** What the canvas holds: the whole drawing at `pixelRatio` until a focus asks for a part. */
+  region: Region;
+  readonly sharp: FocusOptions | null;
 
   constructor(document: IRDocument | Scene, options: SurfaceOptions) {
     this.mesh = options.mesh;
@@ -50,6 +76,9 @@ export class Surface {
     this.canvas.width = Math.round(this.width * this.ratio);
     this.canvas.height = Math.round(this.height * this.ratio);
     this.ctx = this.canvas.getContext("2d")!;
+    this.region = { x: 0, y: 0, width: this.width, height: this.height, scale: this.ratio };
+    const sharp = options.sharp ?? this.mesh.geometry instanceof THREE.PlaneGeometry;
+    this.sharp = sharp === false ? null : sharp === true ? {} : sharp;
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.colorSpace = THREE.SRGBColorSpace;
     const material = this.mesh.material as THREE.MeshBasicMaterial | THREE.MeshStandardMaterial;
@@ -62,20 +91,36 @@ export class Surface {
     this.dirty = true;
   }
 
+  /** Draws a region of the drawing from now on, at its scale; the texture is fitted so the mesh shows the drawing where it was. */
+  show(region: Region): void {
+    this.region = region;
+    this.dirty = true;
+  }
+
   /** Repaints the canvas and uploads it, if anything changed since the last time. Returns whether it did. */
   draw(): boolean {
     if (!this.dirty) return false;
     this.dirty = false;
     const ctx = this.ctx;
+    const region = this.region;
+    const w = Math.max(1, Math.round(region.width * region.scale));
+    const h = Math.max(1, Math.round(region.height * region.scale));
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+      // three.js allocates a texture's storage once: a new size needs a new texture on the GPU.
+      this.texture.dispose();
+    }
+    fitRegion(this.texture, region, this.width, this.height);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     if (this.background) {
       ctx.fillStyle = this.background;
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     }
-    const r = this.ratio;
-    const view = this.replay.view ?? { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
-    replayDocument(ctx, this.scene.document, { ...this.replay, view: { a: view.a * r, b: view.b * r, c: view.c * r, d: view.d * r, e: view.e * r, f: view.f * r } });
+    const k = region.scale;
+    const place = { a: k, b: 0, c: 0, d: k, e: -region.x * k, f: -region.y * k };
+    replayDocument(ctx, this.scene.document, { ...this.replay, view: multiply(place, this.replay.view ?? { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }) });
     this.texture.needsUpdate = true;
     return true;
   }
@@ -103,25 +148,93 @@ export interface WorldOptions {
 export class World implements Pickable {
   private readonly raycaster = new THREE.Raycaster();
   private readonly surfaces = new Map<THREE.Object3D, Surface>();
+  private readonly focuses = new Map<Surface, Focus>();
 
   constructor(private readonly options: WorldOptions) {}
 
   add(surface: Surface): Surface {
     this.surfaces.set(surface.mesh, surface);
+    if (surface.sharp) this.focuses.set(surface, new Focus(this, surface.mesh, () => surface, surface.sharp));
     return surface;
   }
 
   remove(surface: Surface): void {
     this.surfaces.delete(surface.mesh);
+    this.focuses.delete(surface);
   }
 
   get all(): Surface[] {
     return [...this.surfaces.values()];
   }
 
-  /** Repaints the surfaces that changed. Call it before rendering a frame. */
+  /** Repaints the surfaces that changed, or whose view needs another region or more detail. Call it before rendering a frame, after the camera moved. */
   draw(): void {
+    for (const [s, focus] of this.focuses) {
+      const region = focus.update();
+      if (region) s.show(region);
+    }
     for (const s of this.surfaces.values()) s.draw();
+  }
+
+  /**
+   * What of a plane mesh's content (`width` by `height`, from the top left)
+   * the camera sees, and how many CSS pixels of the host one unit of it
+   * covers where it is closest; null when none of its front is in view.
+   */
+  inView(mesh: THREE.Mesh, width: number, height: number): { x0: number; y0: number; x1: number; y1: number; density: number } | null {
+    const geometry = mesh.geometry;
+    if (!(geometry instanceof THREE.PlaneGeometry)) return null;
+    const camera = this.options.camera;
+    const { width: sw, height: sh } = this.options.size();
+    const normal = new THREE.Vector3(0, 0, 1).transformDirection(mesh.matrixWorld);
+    const toCamera = camera.getWorldPosition(new THREE.Vector3()).sub(mesh.getWorldPosition(new THREE.Vector3()));
+    if (normal.dot(toCamera) <= 0) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, density = 0;
+    const take = (u: number, v: number): void => {
+      const x = Math.min(1, Math.max(0, u)) * width;
+      const y = (1 - Math.min(1, Math.max(0, v))) * height;
+      x0 = Math.min(x0, x), y0 = Math.min(y0, y), x1 = Math.max(x1, x), y1 = Math.max(y1, y);
+    };
+    const inside = (uv: THREE.Vector2 | null | undefined): uv is THREE.Vector2 => uv != null && uv.x >= -0.001 && uv.x <= 1.001 && uv.y >= -0.001 && uv.y <= 1.001;
+    // Rays on a grid over the host: where they meet the plane, and how far apart they land there.
+    const N = 12;
+    const grid: (THREE.Vector2 | null)[][] = [];
+    for (let i = 0; i <= N; i++) {
+      grid.push([]);
+      for (let j = 0; j <= N; j++) {
+        this.aim({ x: (i / N) * sw, y: (j / N) * sh });
+        const uv = this.uvOnPlane(mesh);
+        grid[i]!.push(uv);
+        if (inside(uv)) take(uv.x, uv.y);
+      }
+    }
+    const spread = (a: THREE.Vector2 | null | undefined, b: THREE.Vector2 | null | undefined, pixels: number): void => {
+      if (!inside(a) || !inside(b)) return;
+      const units = Math.hypot((a.x - b.x) * width, (a.y - b.y) * height);
+      if (units > 0) density = Math.max(density, pixels / units);
+    };
+    for (let i = 0; i <= N; i++) {
+      for (let j = 0; j <= N; j++) {
+        spread(grid[i]![j], grid[i + 1]?.[j], sw / N);
+        spread(grid[i]![j], grid[i]![j + 1], sh / N);
+      }
+    }
+    // Its corners on the host: all of a mesh small enough to fall between the rays, and its size there.
+    const { width: gw, height: gh } = geometry.parameters;
+    const corners = [[-0.5, 0.5], [0.5, 0.5], [0.5, -0.5], [-0.5, -0.5]].map(([a, b]) => {
+      const p = new THREE.Vector3(a! * gw, b! * gh, 0).applyMatrix4(mesh.matrixWorld).project(camera);
+      return { u: a! + 0.5, v: b! + 0.5, x: ((p.x + 1) / 2) * sw, y: ((1 - p.y) / 2) * sh, front: p.z > -1 && p.z < 1 };
+    });
+    for (const c of corners) if (c.front && c.x >= 0 && c.x <= sw && c.y >= 0 && c.y <= sh) take(c.u, c.v);
+    if (corners.every((c) => c.front)) {
+      for (let k = 0; k < 4; k++) {
+        const a = corners[k]!;
+        const b = corners[(k + 1) % 4]!;
+        density = Math.max(density, Math.hypot(a.x - b.x, a.y - b.y) / (k % 2 === 0 ? width : height));
+      }
+    }
+    if (!(x1 > x0 && y1 > y0) || density === 0) return null;
+    return { x0, y0, x1, y1, density };
   }
 
   /** The camera's ray through a host pixel. */
@@ -241,5 +354,71 @@ export class World implements Pickable {
     const ray = this.raycaster.ray.clone().applyMatrix4(mesh.matrixWorld.clone().invert());
     const at = ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), new THREE.Vector3());
     return at ? new THREE.Vector2(at.x / width + 0.5, at.y / height + 0.5) : null;
+  }
+}
+
+export interface FocusOptions {
+  /** The longest side of the texture, in pixels. Default 4096, which every WebGL 2 device has. */
+  readonly maxSide?: number;
+  /** The most pixels in the texture: memory is four bytes each. Default 8 million, 32 MB. */
+  readonly maxPixels?: number;
+  /** Texture pixels per unit of the drawing, at the least and at the most. Default 0.5 and 16. */
+  readonly minScale?: number;
+  readonly maxScale?: number;
+  /** Device pixels per CSS pixel of the host. Default `devicePixelRatio`. */
+  readonly pixelRatio?: () => number;
+}
+
+/**
+ * Which part of a plane's content to draw, and at what detail, so it stays as
+ * sharp as the screen up close and costs little far away. The detail goes in
+ * steps of two, so walking about doesn't draw it again every frame; the region
+ * is the part in view with a margin, snapped to a grid, and is asked for again
+ * only when the view leaves it or needs another step of detail.
+ */
+export class Focus {
+  private region: Region | null = null;
+  private level = 0;
+
+  constructor(
+    private readonly world: World,
+    private readonly mesh: THREE.Mesh,
+    private readonly content: () => { readonly width: number; readonly height: number },
+    private readonly options: FocusOptions = {},
+  ) {}
+
+  /** What it holds now. */
+  get current(): Region | null {
+    return this.region;
+  }
+
+  /** A new region to draw when the view needs one, or null to keep the last. */
+  update(): Region | null {
+    const { width, height } = this.content();
+    const seen = this.world.inView(this.mesh, width, height);
+    if (!seen) return null;
+    const ratio = this.options.pixelRatio?.() ?? (typeof window === "undefined" ? 1 : window.devicePixelRatio || 1);
+    const min = this.options.minScale ?? 0.5;
+    const max = this.options.maxScale ?? 16;
+    const want = Math.log2(Math.min(max, Math.max(min, seen.density * ratio)));
+    // A step of detail is taken once the view is most of a step past the one held.
+    const level = this.level > 0 && Math.abs(want - Math.log2(this.level)) < 0.75 ? this.level : 2 ** Math.round(want);
+    const r = this.region;
+    if (r && level === this.level && seen.x0 >= r.x - 1e-6 && seen.y0 >= r.y - 1e-6 && seen.x1 <= r.x + r.width + 1e-6 && seen.y1 <= r.y + r.height + 1e-6) return null;
+    // The part in view, a quarter again on each side, snapped outward to a 64th of the content.
+    const padX = (seen.x1 - seen.x0) * 0.25;
+    const padY = (seen.y1 - seen.y0) * 0.25;
+    const g = Math.max(width, height) / 64;
+    const x0 = Math.max(0, Math.floor((seen.x0 - padX) / g) * g);
+    const y0 = Math.max(0, Math.floor((seen.y0 - padY) / g) * g);
+    const x1 = Math.min(width, Math.ceil((seen.x1 + padX) / g) * g);
+    const y1 = Math.min(height, Math.ceil((seen.y1 + padY) / g) * g);
+    const w = x1 - x0;
+    const h = y1 - y0;
+    const side = this.options.maxSide ?? 4096;
+    const scale = Math.min(level, side / w, side / h, Math.sqrt((this.options.maxPixels ?? 8_388_608) / (w * h)));
+    this.level = level;
+    this.region = { x: x0, y: y0, width: w, height: h, scale };
+    return this.region;
   }
 }
