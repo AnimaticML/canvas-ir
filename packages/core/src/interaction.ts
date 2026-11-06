@@ -1,4 +1,3 @@
-import type { Scene } from "./geometry/scene";
 import { IDENTITY, applyToPoint, invert } from "./math";
 import type { Matrix2D, Op, Point } from "./types";
 
@@ -64,6 +63,28 @@ export interface RouterEvent {
 
 export type RouterHandler = (event: RouterEvent) => void;
 
+/**
+ * What a router picks from and finds ids in. A `Scene` is one; so is anything
+ * that answers the same questions, such as a 3D world whose meshes carry
+ * scenes of their own, so that one router serves both the meshes and the
+ * drawings on them.
+ */
+export interface Pickable {
+  /** What is under a point in the router's world (a host pixel through the inverse view), topmost first. */
+  hitTest(point: Point, options?: { tolerance?: number }): readonly { readonly id: string; readonly groups: readonly string[] }[];
+  get(id: string): Op | undefined;
+  getGroup(id: string): unknown;
+  /** The groups an op or group is in, innermost first. */
+  groupChain(id: string): string[];
+  /**
+   * Where a host pixel lands in the space a target is drawn in, when that isn't
+   * the router's world: a point on a drawing on a tilted 3D surface, so drags
+   * and `point` stay in the drawing's own units. Null, or no method, means the
+   * router's world.
+   */
+  pointAt?(screen: Point, target: string | null): Point | null;
+}
+
 export interface EventRouterOptions {
   /** Maps world space to the host's pixels (pan and zoom). Default identity. */
   readonly view?: Matrix2D;
@@ -108,7 +129,7 @@ export class EventRouter {
   private lastPointer: PointerInput | null = null;
 
   constructor(
-    private readonly scene: Scene,
+    private readonly scene: Pickable,
     options: EventRouterOptions = {},
   ) {
     this.view = options.view ?? IDENTITY;
@@ -166,6 +187,11 @@ export class EventRouter {
     return applyToPoint(this.inverse, screen.x, screen.y);
   }
 
+  /** Where a host pixel lands for a target: in its own drawing's space when the scene says so, else the router's world. */
+  private worldFor(screen: Point, target: string | null): Point {
+    return this.scene.pointAt?.(screen, target) ?? this.toWorld(screen);
+  }
+
   /** The topmost op under a host pixel, with its group path. */
   pick(screen: Point): { target: string | null; path: string[] } {
     const world = this.toWorld(screen);
@@ -180,7 +206,7 @@ export class EventRouter {
     this.updateHover(this.pick(screen).path, input);
     const press = this.press;
     if (!press) return;
-    const world = this.toWorld(screen);
+    const world = this.worldFor(screen, press.target);
     if (!press.dragging) {
       if (Math.hypot(screen.x - press.startScreen.x, screen.y - press.startScreen.y) < this.dragThreshold) return;
       press.dragging = true;
@@ -195,7 +221,7 @@ export class EventRouter {
     const screen = { x: input.x, y: input.y };
     const { target, path } = this.pick(screen);
     this.updateHover(path, input);
-    const world = this.toWorld(screen);
+    const world = this.worldFor(screen, target);
     this.press = { target, path, startScreen: screen, startWorld: world, lastWorld: world, dragging: false };
     this.focus = target;
     this.focusPath = path;
@@ -210,7 +236,7 @@ export class EventRouter {
     const press = this.press;
     this.press = null;
     if (press?.dragging) {
-      const world = this.toWorld(screen);
+      const world = this.worldFor(screen, press.target);
       this.dispatch("dragend", press.target, input, screen, { delta: sub(world, press.lastWorld), total: sub(world, press.startWorld) }, press.path);
     }
     this.dispatch("up", target, input, screen);
@@ -333,7 +359,7 @@ export class EventRouter {
   ): RouterEvent {
     const op = target === null ? null : this.scene.get(target) ?? null;
     const at = screen ?? { x: NaN, y: NaN };
-    const point = screen ? this.toWorld(screen) : { x: NaN, y: NaN };
+    const point = screen ? this.worldFor(screen, target) : { x: NaN, y: NaN };
     const toLocal = op && screen ? invert(op.transform) : null;
     return {
       type,

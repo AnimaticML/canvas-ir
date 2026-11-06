@@ -227,3 +227,62 @@ describe("pointer cancellation", () => {
     expect(events).not.toContain("click");
   });
 });
+
+describe("a router over another pickable", () => {
+  // Two "surfaces" side by side, each a scene of its own, joined by one pickable as a 3D world joins its meshes:
+  // the right one's drawing is scaled by 2, as a surface seen at a slant maps host pixels to its own.
+  const surface = (id: string): Scene => {
+    const ctx = new RecordingContext();
+    ctx.beginGroup({ id: `${id}-panel` });
+    ctx.fillRect(10, 10, 20, 20);
+    ctx.endGroup();
+    const doc = ctx.getDocument();
+    return new Scene({ ...doc, ops: doc.ops.map((op) => ({ ...op, id: `${id}-${op.id}` })) });
+  };
+  const left = surface("l");
+  const right = surface("r");
+  const sceneOf = (id: string): Scene | null => (left.get(id) || left.getGroup(id) ? left : right.get(id) || right.getGroup(id) ? right : null);
+  const local = (p: { x: number; y: number }) => (p.x < 100 ? { scene: left, mesh: "left", at: p } : { scene: right, mesh: "right", at: { x: (p.x - 100) / 2, y: p.y / 2 } });
+  const world = {
+    hitTest: (p: { x: number; y: number }) => {
+      const { scene, mesh, at } = local(p);
+      const [hit] = scene.hitTest(at);
+      return [hit ? { id: hit.id, groups: [...hit.groups, mesh, "world"] } : { id: mesh, groups: ["world"] }];
+    },
+    get: (id: string) => sceneOf(id)?.get(id),
+    getGroup: (id: string) => (id === "left" || id === "right" || id === "world" ? {} : sceneOf(id)?.getGroup(id)),
+    groupChain: (id: string) => {
+      if (id === "world") return [];
+      if (id === "left" || id === "right") return ["world"];
+      const scene = sceneOf(id)!;
+      return [...scene.groupChain(id), scene === left ? "left" : "right", "world"];
+    },
+    pointAt: (screen: { x: number; y: number }, target: string | null) => (target && sceneOf(target) ? local(screen).at : null),
+  };
+
+  test("hits bubble from a drawing's op through its groups into the meshes that hold it", () => {
+    const router = new EventRouter(world);
+    const clicks: string[][] = [];
+    router.on("*", "click", (e) => clicks.push([...e.path]));
+    router.pointerDown({ x: 140, y: 40 });
+    router.pointerUp({ x: 140, y: 40 });
+    router.pointerDown({ x: 180, y: 90 });
+    router.pointerUp({ x: 180, y: 90 });
+    expect(clicks).toEqual([
+      ["r-o0", "r-panel", "right", "world"],
+      ["right", "world"],
+    ]);
+  });
+
+  test("points and drags on a drawing are in its own units", () => {
+    const router = new EventRouter(world);
+    const seen: { type: string; x: number; y: number }[] = [];
+    for (const type of ["down", "drag"] as const) router.on("r-o0", type, (e) => seen.push({ type, x: (type === "drag" ? e.total! : e.point).x, y: (type === "drag" ? e.total! : e.point).y }));
+    router.pointerDown({ x: 140, y: 40 });
+    router.pointerMove({ x: 160, y: 50 });
+    expect(seen).toEqual([
+      { type: "down", x: 20, y: 20 },
+      { type: "drag", x: 10, y: 5 },
+    ]);
+  });
+});

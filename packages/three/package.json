@@ -1,0 +1,20 @@
+{
+  "name": "@canvas-ir/three",
+  "version": "0.0.0",
+  "private": true,
+  "description": "CanvasIR drawings on three.js meshes: each a canvas texture, picked by the 3D scene's rays, with one event router for the meshes and the drawings on them",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "canvas-ir": "workspace:*"
+  },
+  "peerDependencies": {
+    "three": ">=0.160.0"
+  },
+  "devDependencies": {
+    "three": "0.170.0",
+    "@types/three": "0.170.0"
+  }
+}

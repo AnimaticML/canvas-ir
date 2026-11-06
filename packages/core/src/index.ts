@@ -98,6 +98,7 @@ export { EventRouter } from "./interaction";
 export type {
   EventRouterOptions,
   KeyInput,
+  Pickable,
   PointerInput,
   RouterEvent,
   RouterEventType,

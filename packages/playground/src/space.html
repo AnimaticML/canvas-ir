@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Drawings in 3D</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: #dbe4ee; color: #0f172a; font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+      #space { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+      .hud { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; pointer-events: none; }
+      .chip { background: rgba(255, 255, 255, 0.85); border-radius: 999px; padding: 6px 12px; backdrop-filter: blur(4px); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #event { font: 12px/1.4 ui-monospace, monospace; }
+      .title { margin-left: auto; color: #475569; }
+      .title a { color: inherit; pointer-events: auto; }
+    </style>
+  </head>
+  <body>
+    <canvas id="space" aria-label="A 3D room with three shapes and a panel of controls drawn with CanvasIR"></canvas>
+    <div class="hud">
+      <span class="chip" id="event">Click or drag anything</span>
+      <span class="title chip">Drawings in 3D · three.js with CanvasIR · <a href="./">playground</a></span>
+    </div>
+    <script type="module" src="./space-main.ts"></script>
+  </body>
+</html>
