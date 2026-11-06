@@ -154,7 +154,7 @@ canvas.addEventListener("pointerdown", (e) => router.pointerDown({ x: e.offsetX,
 // ...each frame: router.refreshHover(), world.draw(), renderer.render(scene3d, camera)
 ```
 
-The playground's **Drawings in 3D** page is the demo: three shapes and a panel of buttons, a slider and color swatches drawn with CanvasIR, and a cube with a drawing on every face that counts its clicks.
+The playground's **Drawings in 3D** page is the demo: three shapes and a panel of buttons, a slider and color swatches drawn with CanvasIR, a cube with a drawing on every face that counts its clicks, and the whole playground on a big screen. That one is the playground's own page running in a frame behind the 3D canvas: its canvases are copied into the screen's texture whenever it draws, and pointer and wheel input over the screen goes to its board at the point under the ray (`world.pointOn`), so it zooms, pans and opens its features there; a press on it gives it the keyboard, and a press elsewhere takes it back for walking with WASD, Q and E. Its HTML and WebGL embeds are DOM elements, so they don't show on the screen.
 
 ## Rendering
 

@@ -549,7 +549,10 @@ const pointer = (e: PointerEvent) => ({ ...point(e), button: e.button, altKey: e
 
 // The cards get the pointer where they are; the board gets it everywhere else, and keeps a press it began.
 canvas.addEventListener("pointerdown", (e) => {
-  canvas.setPointerCapture(e.pointerId);
+  // A pointer a host page forwards, as the 3D page does when it shows the playground on a panel, can't be captured here.
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch {}
   // Keeps focus where it is, so the text tool's hidden textarea keeps the keyboard.
   e.preventDefault();
   textSink().release();

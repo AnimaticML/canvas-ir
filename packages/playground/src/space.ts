@@ -122,8 +122,8 @@ export const startSpace = (host: SpaceHost): void => {
         ctx.fillText("One router for 3D and 2D", 24, 40);
         ctx.fillStyle = "#475569";
         ctx.font = `13px ${FONT}`;
-        ctx.fillText("Click a shape to pick it, drag shapes over the floor,", 24, 62);
-        ctx.fillText("drag the panel's margin to turn it, the floor to look around.", 24, 78);
+        ctx.fillText("Click a shape to pick it, drag it over the floor. Drag the", 24, 62);
+        ctx.fillText("floor to look around; walk with WASD, Q and E.", 24, 78);
       },
     }),
   );
@@ -135,9 +135,7 @@ export const startSpace = (host: SpaceHost): void => {
     for (const name of SHAPES) paint(name, PALETTE[Math.floor(Math.random() * PALETTE.length)]!);
   });
   button("home", 324, 132, () => "Reset view", () => {
-    orbit.theta = 0.35;
-    orbit.phi = 1.1;
-    orbit.radius = 7.5;
+    home();
     stand.rotation.set(0, 0, 0);
   });
 
@@ -320,48 +318,104 @@ export const startSpace = (host: SpaceHost): void => {
       shapes[name].position.set(to.x, shapes[name].position.y, to.z);
     });
   }
-  // The panel's margin, or its back, turns the stand; the floor turns the camera; the wheel moves it in and out.
-  const orbit = { theta: 0.35, phi: 1.1, radius: 7.5 };
+  // The panel's margin, or its back, turns the stand; the floor turns the camera; the wheel and the keys walk.
+  const walker = { at: new THREE.Vector3(), yaw: 0, pitch: 0 };
+  const home = (): void => {
+    walker.at.setFromSphericalCoords(7.5, 1.1, 0.35).add(new THREE.Vector3(0, 0.9, 0));
+    camera.position.copy(walker.at);
+    camera.lookAt(-0.6, 1.1, -1);
+    const look = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
+    walker.yaw = look.y;
+    walker.pitch = look.x;
+  };
+  home();
   router.on("stand", "drag", (e) => {
     stand.rotation.y += e.delta!.x * 0.008;
     e.stopPropagation();
   });
   router.on("*", "drag", (e) => {
     if (e.target !== null) return;
-    orbit.theta -= e.delta!.x * 0.006;
-    orbit.phi = Math.max(0.25, Math.min(1.45, orbit.phi - e.delta!.y * 0.006));
+    walker.yaw += e.delta!.x * 0.004;
+    walker.pitch = Math.max(-1.4, Math.min(1.4, walker.pitch + e.delta!.y * 0.004));
   });
   router.on("*", "wheel", (e) => {
     const dy = (e.input as WheelInput).deltaY;
-    orbit.radius = Math.max(3, Math.min(16, orbit.radius * Math.exp(dy * 0.0015)));
+    walker.at.addScaledVector(camera.getWorldDirection(new THREE.Vector3()), -dy * 0.004);
+    walker.at.y = Math.max(0.3, walker.at.y);
   });
+  const held = new Set<string>();
+  const MOVES: Record<string, [number, number, number]> = {
+    KeyW: [0, 0, -1], ArrowUp: [0, 0, -1], KeyS: [0, 0, 1], ArrowDown: [0, 0, 1],
+    KeyA: [-1, 0, 0], ArrowLeft: [-1, 0, 0], KeyD: [1, 0, 0], ArrowRight: [1, 0, 0],
+    KeyE: [0, 1, 0], KeyQ: [0, -1, 0],
+  };
+  // While the playground has the keyboard its keys go to it, in its own window; these come only while this page has it.
+  window.addEventListener("keydown", (e) => {
+    if (!MOVES[e.code] || e.ctrlKey || e.metaKey || e.altKey) return;
+    held.add(e.code);
+    e.preventDefault();
+  });
+  window.addEventListener("keyup", (e) => held.delete(e.code));
+  window.addEventListener("blur", () => held.clear());
+  const walk = (dt: number, fast: boolean): void => {
+    if (held.size === 0) return;
+    const step = new THREE.Vector3();
+    for (const code of held) step.add(new THREE.Vector3(...MOVES[code]!));
+    if (step.lengthSq() === 0) return;
+    step.normalize().multiplyScalar(dt * (fast ? 7 : 3));
+    walker.at.add(new THREE.Vector3(step.x, 0, step.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), walker.yaw));
+    walker.at.y = Math.max(0.3, Math.min(12, walker.at.y + step.y));
+  };
+  let shift = false;
+  window.addEventListener("keydown", (e) => (shift = e.shiftKey));
+  window.addEventListener("keyup", (e) => (shift = e.shiftKey));
+
+  const playground = showPlayground(root, world);
 
   // The host's input, in CSS pixels over the canvas.
   let pointerId: number | null = null;
   const pointer = (e: PointerEvent | WheelEvent) => ({ x: e.offsetX, y: e.offsetY, button: e.button, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey });
+  // A press on the playground's screen keeps going to it until it's released, as the playground's own pointer capture would.
+  let pressOnScreen = false;
   canvas.addEventListener("pointerdown", (e) => {
     if (pointerId !== null) return;
     pointerId = e.pointerId;
     canvas.setPointerCapture(e.pointerId);
+    pressOnScreen = playground.under(pointer(e));
+    if (pressOnScreen) playground.forward(e, pointer(e));
+    else playground.release();
     router.pointerDown(pointer(e));
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (pointerId === null || e.pointerId === pointerId) router.pointerMove(pointer(e));
+    if (pointerId !== null && e.pointerId !== pointerId) return;
+    if (pointerId !== null ? pressOnScreen : playground.under(pointer(e))) playground.forward(e, pointer(e));
+    else playground.leave();
+    router.pointerMove(pointer(e));
   });
   canvas.addEventListener("pointerup", (e) => {
     if (e.pointerId !== pointerId) return;
     pointerId = null;
+    if (pressOnScreen) playground.forward(e, pointer(e));
+    pressOnScreen = false;
     router.pointerUp(pointer(e));
   });
-  canvas.addEventListener("pointercancel", () => {
+  canvas.addEventListener("pointercancel", (e) => {
     pointerId = null;
+    if (pressOnScreen) playground.forward(e, pointer(e));
+    pressOnScreen = false;
     router.pointerCancel();
   });
-  canvas.addEventListener("pointerleave", (e) => pointerId === null && router.pointerLeave(pointer(e)));
+  canvas.addEventListener("pointerleave", (e) => {
+    if (pointerId !== null) return;
+    playground.leave();
+    router.pointerLeave(pointer(e));
+  });
   canvas.addEventListener(
     "wheel",
     (e) => {
       e.preventDefault();
+      // Over the screen the wheel is the playground's: it zooms its board, or scrolls what scrolls there.
+      if (playground.under(pointer(e))) return playground.forward(e, pointer(e));
       const scale = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? size.height : 1;
       router.wheel({ ...pointer(e), deltaX: e.deltaX * scale, deltaY: e.deltaY * scale });
     },
@@ -389,17 +443,141 @@ export const startSpace = (host: SpaceHost): void => {
       shapes.ring.rotation.x += turn;
       shapes.ring.rotation.y += turn * 0.6;
     }
-    const target = new THREE.Vector3(0, 0.9, 0);
-    camera.position.setFromSphericalCoords(orbit.radius, orbit.phi, orbit.theta).add(target);
-    camera.lookAt(target);
+    walk(dt, shift);
+    camera.position.copy(walker.at);
+    camera.rotation.set(walker.pitch, walker.yaw, 0, "YXZ");
     root.updateMatrixWorld();
+    camera.updateMatrixWorld();
     // What is under a still pointer changes as things turn: hover follows.
     if (pointerId === null) router.refreshHover();
     const hovered = router.hoveredPath;
-    canvas.style.cursor = panelUi.cursor ?? cubeUi.cursor ?? (hovered.some((id) => SHAPES.includes(id as ShapeName) || id === "stand") ? "grab" : "");
+    canvas.style.cursor =
+      (hovered[0] === "playground" ? playground.cursor() : null) ?? panelUi.cursor ?? cubeUi.cursor ?? (hovered.some((id) => SHAPES.includes(id as ShapeName) || id === "stand") ? "grab" : "");
     world.draw();
+    playground.draw();
     renderer.render(root, camera);
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
+};
+
+/** The playground's page size on the screen, in CSS pixels: 16 by 10, as the screen is. */
+const PAGE = { width: 1280, height: 800 };
+
+/**
+ * The whole playground on a big screen in the room: its page runs in a frame
+ * of its own behind the 3D canvas, and its three canvases (the board, the
+ * cards, the marks) are copied into the screen's texture whenever it draws.
+ * Pointer and wheel input over the screen is sent to its board at the point
+ * under the ray, and a press on it gives it the keyboard.
+ */
+const showPlayground = (root: THREE.Object3D, world: World) => {
+  const stand = new THREE.Group();
+  stand.name = "screen-stand";
+  stand.position.set(-4.6, 2.3, -3.6);
+  stand.rotation.y = 0.55;
+  root.add(stand);
+  const geometry = new THREE.PlaneGeometry(4.8, 3);
+  const shot = document.createElement("canvas");
+  shot.width = PAGE.width;
+  shot.height = PAGE.height;
+  const sctx = shot.getContext("2d")!;
+  sctx.fillStyle = "#f8fafc";
+  sctx.fillRect(0, 0, shot.width, shot.height);
+  sctx.fillStyle = "#475569";
+  sctx.font = "600 40px system-ui, sans-serif";
+  sctx.textAlign = "center";
+  sctx.fillText("Loading the playground…", shot.width / 2, shot.height / 2);
+  const texture = new THREE.CanvasTexture(shot);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  const screen = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map: texture, toneMapped: false }));
+  screen.name = "playground";
+  stand.add(screen);
+  const back = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: "#475569" }));
+  back.rotation.y = Math.PI;
+  stand.add(back);
+  for (const x of [-1.6, 1.6]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.8), new THREE.MeshStandardMaterial({ color: "#475569" }));
+    leg.position.set(x, -1.9, 0);
+    stand.add(leg);
+  }
+
+  // The page, laid out at its size but covered by the 3D canvas, so the browser keeps running it.
+  const frame = document.createElement("iframe");
+  frame.src = "./index.html";
+  frame.title = "The playground, shown on the screen";
+  frame.tabIndex = -1;
+  Object.assign(frame.style, { position: "fixed", left: "0", top: "0", width: `${PAGE.width}px`, height: `${PAGE.height}px`, border: "0", zIndex: "-1", pointerEvents: "none" });
+  document.body.append(frame);
+  let page: { win: Window & typeof globalThis; board: HTMLCanvasElement; layers: HTMLCanvasElement[] } | null = null;
+  let dirty = false;
+  let over = false;
+  let background = "#ffffff";
+  frame.addEventListener("load", () => {
+    const win = frame.contentWindow as (Window & typeof globalThis) | null;
+    const board = win?.document.getElementById("board") as HTMLCanvasElement | null;
+    if (!win || !board) return;
+    const layers = ["board", "cards", "overlay"].map((id) => win.document.getElementById(id) as HTMLCanvasElement).filter(Boolean);
+    page = { win, board, layers };
+    const behind = [board.parentElement, win.document.body, win.document.documentElement].map((e) => (e ? win.getComputedStyle(e).backgroundColor : ""));
+    background = behind.find((c) => c && c !== "transparent" && c !== "rgba(0, 0, 0, 0)") ?? "#ffffff";
+    // The page draws in its animation frames: each one marks the screen to copy again.
+    const raf = win.requestAnimationFrame.bind(win);
+    win.requestAnimationFrame = (callback) => raf((t) => (callback(t), (dirty = true)));
+    dirty = true;
+  });
+
+  /** Where a host pixel lands on the page, in its client pixels, or null off the screen. */
+  const at = (p: { x: number; y: number }) => {
+    if (!page) return null;
+    const r = page.board.getBoundingClientRect();
+    const on = world.pointOn(screen, p, r.width, r.height);
+    return on ? { clientX: r.left + on.x, clientY: r.top + on.y } : null;
+  };
+  return {
+    /** Whether the screen is what a host pixel shows. */
+    under: (p: { x: number; y: number }): boolean => world.intersect(p)?.object === screen,
+    /** Sends a pointer or wheel event to the page's board where the ray meets the screen. */
+    forward: (e: PointerEvent | WheelEvent, p: { x: number; y: number }): void => {
+      const to = at(p);
+      if (!page || !to) return;
+      const keys = { altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey };
+      const common = { ...to, ...keys, button: e.button, buttons: e.buttons, bubbles: true, cancelable: true, composed: true, view: page.win };
+      if (e instanceof WheelEvent) page.board.dispatchEvent(new page.win.WheelEvent("wheel", { ...common, deltaX: e.deltaX, deltaY: e.deltaY, deltaMode: e.deltaMode }));
+      else {
+        if (e.type === "pointerdown") page.win.focus();
+        page.board.dispatchEvent(new page.win.PointerEvent(e.type, { ...common, pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: true }));
+      }
+      over = true;
+      dirty = true;
+    },
+    /** The pointer went off the screen. */
+    leave: (): void => {
+      if (!over || !page) return;
+      over = false;
+      page.board.dispatchEvent(new page.win.PointerEvent("pointerleave", { pointerId: 1, pointerType: "mouse" }));
+    },
+    /** A press elsewhere in the room takes the keyboard back from the page. */
+    release: (): void => {
+      if (document.activeElement === frame) frame.blur();
+      window.focus();
+    },
+    cursor: (): string | null => page?.board.style.cursor || null,
+    /** Copies the page's canvases into the screen, if it drew since the last time. */
+    draw: (): void => {
+      if (!page || !dirty) return;
+      dirty = false;
+      const { board, layers } = page;
+      if (shot.width !== board.width || shot.height !== board.height) {
+        shot.width = board.width;
+        shot.height = board.height;
+      }
+      // The board's canvas is transparent over the page's own background.
+      sctx.fillStyle = background;
+      sctx.fillRect(0, 0, shot.width, shot.height);
+      for (const layer of layers) if (layer.width > 0) sctx.drawImage(layer, 0, 0);
+      texture.needsUpdate = true;
+    },
+  };
 };

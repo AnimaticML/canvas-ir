@@ -65,3 +65,16 @@ describe("a world of meshes and drawings", () => {
     expect(points[1]!.y).toBeCloseTo(10, 4);
   });
 });
+
+describe("a mesh that shows something else", () => {
+  test("pointOn gives the content's point from the top left, and goes on past the edge in the plane", () => {
+    const { world, screen } = setup();
+    const panel = world.object("panel") as THREE.Mesh;
+    const on = world.pointOn(panel, screen(-0.5, 0.25), 1280, 800)!;
+    expect(on.x).toBeCloseTo(320, 3);
+    expect(on.y).toBeCloseTo(200, 3);
+    const off = world.pointOn(panel, screen(1.5, 0), 1280, 800)!;
+    expect(off.x).toBeCloseTo(1600, 3);
+    expect(off.y).toBeCloseTo(400, 3);
+  });
+});

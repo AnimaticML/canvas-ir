@@ -137,6 +137,18 @@ export class World implements Pickable {
     return null;
   }
 
+  /**
+   * Where a host pixel lands on a mesh that shows something other than a
+   * surface, such as another page's canvas, in that content's units (`width`
+   * by `height`, from the top left): on the mesh, or in a plane mesh's plane
+   * past its edges, as a drag that left it. Null when the ray misses.
+   */
+  pointOn(mesh: THREE.Mesh, screen: Point, width: number, height: number): Point | null {
+    const hit = this.intersect(screen, [mesh]);
+    const uv = hit?.object === mesh && hit.uv ? hit.uv : this.uvOnPlane(mesh);
+    return uv ? { x: uv.x * width, y: (1 - uv.y) * height } : null;
+  }
+
   /** The surface whose drawing holds an op or group id. */
   surfaceOf(id: string): Surface | null {
     for (const s of this.surfaces.values()) if (s.scene.get(id) || s.scene.getGroup(id)) return s;
@@ -217,13 +229,17 @@ export class World implements Pickable {
 
   /** Where the last aimed ray meets a plane surface's plane, in drawing units; null for other shapes. */
   private onPlane(surface: Surface): Point | null {
-    const geometry = surface.mesh.geometry;
+    const uv = this.uvOnPlane(surface.mesh);
+    return uv ? surface.pointAtUv(uv) : null;
+  }
+
+  /** Where the last aimed ray meets a plane mesh's plane, as a uv beyond 0 to 1 off its edges; null for other shapes or a ray along the plane. */
+  private uvOnPlane(mesh: THREE.Mesh): THREE.Vector2 | null {
+    const geometry = mesh.geometry;
     if (!(geometry instanceof THREE.PlaneGeometry)) return null;
     const { width, height } = geometry.parameters;
-    const inverse = surface.mesh.matrixWorld.clone().invert();
-    const ray = this.raycaster.ray.clone().applyMatrix4(inverse);
+    const ray = this.raycaster.ray.clone().applyMatrix4(mesh.matrixWorld.clone().invert());
     const at = ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), new THREE.Vector3());
-    if (!at) return null;
-    return surface.pointAtUv(new THREE.Vector2(at.x / width + 0.5, at.y / height + 0.5));
+    return at ? new THREE.Vector2(at.x / width + 0.5, at.y / height + 0.5) : null;
   }
 }
