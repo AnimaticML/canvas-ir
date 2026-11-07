@@ -5,7 +5,7 @@
 // the panel mesh to the stand that holds it, a click on a shape goes to the
 // shape, and both reach the same "*" handlers.
 import { Components, EventRouter, type ComponentHandle, type RecordingContext, type RouterEvent, type WheelInput } from "canvas-ir";
-import { Focus, type Region, Surface, World, fitRegion, noMipmaps } from "@canvas-ir/three";
+import { Focus, type ObjectHandle, Objects, type Region, Surface, World, fitRegion, noMipmaps } from "@canvas-ir/three";
 import * as THREE from "three";
 
 const PALETTE = ["#f97316", "#0ea5e9", "#8b5cf6", "#22c55e", "#ef4444", "#eab308", "#ec4899", "#14b8a6"];
@@ -112,8 +112,8 @@ export const startSpace = (host: SpaceHost): void => {
         ctx.fillText("One router for 3D and 2D", 24, 40);
         ctx.fillStyle = "#475569";
         ctx.font = `13px ${FONT}`;
-        ctx.fillText("Click a shape to pick it, drag it over the floor. Drag the", 24, 62);
-        ctx.fillText("floor to look around. WASD walks, E or Space rises, Q or C sinks.", 24, 78);
+        ctx.fillText("Double-click anything to fly to it. Click a shape to select it,", 24, 62);
+        ctx.fillText("then drag the floor to orbit it, or Shift+drag it to turn it.", 24, 78);
       },
     }),
   );
@@ -126,6 +126,7 @@ export const startSpace = (host: SpaceHost): void => {
   });
   button("home", 324, 132, () => "Reset view", () => {
     home();
+    select(null);
     stand.rotation.set(0, 0, 0);
     board.rotation.set(0, 0, 0);
   });
@@ -221,6 +222,7 @@ export const startSpace = (host: SpaceHost): void => {
     cubeUi.mount({
       id: "cube-face",
       state: { clicks: 0 },
+      on: { click: (_e, c) => c.setState((s: { clicks: number }) => ({ clicks: s.clicks + 1 })) },
       draw: (ctx: RecordingContext, s: { clicks: number }) => {
         ctx.fillStyle = cubeColor.value;
         ctx.fillRect(0, 0, 128, 128);
@@ -255,7 +257,7 @@ export const startSpace = (host: SpaceHost): void => {
       ctx.lineTo(4, 12);
       ctx.stroke();
     },
-    // Kept from the cube, whose own click handler counts.
+    // Kept from the face, whose own click handler counts.
     on: {
       click: (e) => {
         e.stopPropagation();
@@ -270,13 +272,52 @@ export const startSpace = (host: SpaceHost): void => {
       cubeFace.redraw();
     } else (shapes[name].material as THREE.MeshStandardMaterial).color.set(color);
   };
-  const select = (name: ShapeName): void => {
-    state.selected = name;
-    for (const n of SHAPES) (shapes[n].material as THREE.MeshStandardMaterial).emissive.set(n === name ? "#334155" : "#000000");
-    redraw("picked");
+  // The 3D objects are components too: drawn from their state and pointer state, with their own handlers.
+  const objects = new Objects(router);
+  /** What is selected: a shape or a stand. The camera orbits it, and a shape can be turned. */
+  let selected: ObjectHandle<unknown> | null = null;
+  const select = (handle: ObjectHandle<unknown> | null): void => {
+    const before = selected;
+    selected = handle;
+    before?.redraw();
+    handle?.redraw();
+    if (handle && SHAPES.includes(handle.id as ShapeName)) {
+      state.selected = handle.id as ShapeName;
+      redraw("picked");
+    }
   };
-  select("ball");
-
+  const glow = (ui: { hovered: boolean; pressed: boolean }, picked: boolean): string => (ui.pressed ? "#475569" : ui.hovered ? "#334155" : picked ? "#1e293b" : "#000000");
+  // The shapes: a click picks, a drag slides it over the floor, a drag with Shift turns it.
+  for (const name of SHAPES) {
+    const mesh = shapes[name];
+    let grip: THREE.Vector3 | null = null;
+    const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    objects.mount({
+      object: mesh,
+      state: {},
+      cursor: (_s, ui) => (ui.pressed ? "grabbing" : "grab"),
+      draw: (o, _s, ui) => ((o as THREE.Mesh).material as THREE.MeshStandardMaterial).emissive.set(glow(ui, selected?.id === name)),
+      on: {
+        click: (_e, c) => select(c as ObjectHandle<unknown>),
+        dragstart: (e, c) => {
+          select(c as ObjectHandle<unknown>);
+          ground.constant = -mesh.position.y;
+          const p = world.onPlane(e.screen, ground);
+          grip = p ? p.sub(mesh.position) : null;
+        },
+        drag: (e) => {
+          e.stopPropagation();
+          if ((e.input as { shiftKey?: boolean }).shiftKey) return turn(mesh, e.delta!.x, e.delta!.y);
+          const p = world.onPlane(e.screen, ground);
+          if (!p || !grip) return;
+          const to = p.sub(grip);
+          const r = Math.hypot(to.x, to.z);
+          if (r > 9) to.multiplyScalar(9 / r);
+          mesh.position.set(to.x, mesh.position.y, to.z);
+        },
+      },
+    });
+  }
   // Every event, from either world, through one handler: the panel and the HUD show its path.
   for (const type of ["click", "dragstart"] as const) {
     router.on("*", type, (e) => {
@@ -285,30 +326,13 @@ export const startSpace = (host: SpaceHost): void => {
       redraw("log");
     });
   }
-  // The shapes: a click picks and counts, a drag slides it over the floor.
-  for (const name of SHAPES) {
-    router.on(name, "click", () => {
-      select(name);
-      if (name === "cube") cubeFace.setState((s: { clicks: number }) => ({ clicks: s.clicks + 1 }));
-    });
-    let grip: THREE.Vector3 | null = null;
-    const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-    const at = (e: RouterEvent): THREE.Vector3 | null => world.ray(e.screen).intersectPlane(ground, new THREE.Vector3());
-    router.on(name, "dragstart", (e) => {
-      ground.constant = -shapes[name].position.y;
-      const p = at(e);
-      grip = p ? p.sub(shapes[name].position) : null;
-      select(name);
-    });
-    router.on(name, "drag", (e) => {
-      const p = at(e);
-      if (!p || !grip) return;
-      const to = p.sub(grip);
-      const r = Math.hypot(to.x, to.z);
-      if (r > 9) to.multiplyScalar(9 / r);
-      shapes[name].position.set(to.x, shapes[name].position.y, to.z);
-    });
-  }
+  /** Turns an object as a trackball would: sideways about the vertical, up and down about the camera's sideways axis. */
+  const turn = (o: THREE.Object3D, dx: number, dy: number): void => {
+    const side = new THREE.Vector3().crossVectors(camera.getWorldDirection(new THREE.Vector3()), camera.up).normalize();
+    o.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), dx * 0.01);
+    o.rotateOnWorldAxis(side, dy * 0.01);
+  };
+
   // The panel's margin, or its back, turns the stand; the floor turns the camera; the wheel and the keys walk.
   const walker = { at: new THREE.Vector3(), yaw: 0, pitch: 0 };
   const home = (): void => {
@@ -329,24 +353,122 @@ export const startSpace = (host: SpaceHost): void => {
     walker.yaw = start[3]!;
     walker.pitch = start[4]!;
   }
-  // Sideways turns a stand, up and down tilts its board on the hinge at the top of its legs.
-  const turnable = (name: string, stand: THREE.Object3D, board: THREE.Object3D): void => {
-    router.on(name, "drag", (e) => {
-      stand.rotation.y += e.delta!.x * 0.008;
-      board.rotation.x = Math.max(-1.2, Math.min(1.2, board.rotation.x + e.delta!.y * 0.006));
-      e.stopPropagation();
+  // A stand: its legs and back light up under the pointer; dragging them turns it sideways and tilts its board on the hinge at the top of its legs.
+  const standObject = (stand: THREE.Object3D, board: THREE.Object3D): void => {
+    const material = (stand.getObjectByName(`${stand.name}/back`) as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    // Its own parts, not the board's drawing, which is on its path too.
+    const onParts = (ui: { hoveredParts: readonly string[] }): boolean => ui.hoveredParts.some((p) => p.startsWith(`${stand.name}/`));
+    objects.mount({
+      object: stand,
+      state: {},
+      cursor: (_s, ui) => (!onParts(ui) ? null : ui.pressed ? "grabbing" : "grab"),
+      // Lit blue, so legs read as something to take hold of.
+      draw: (_o, _s, ui) => material.emissive.set(ui.pressed && onParts(ui) ? "#1d4ed8" : onParts(ui) ? "#2563eb" : selected?.id === stand.name ? "#1e3a8a" : "#000000"),
+      on: {
+        click: (e, c) => {
+          if (e.path[0]?.startsWith(`${stand.name}/`)) select(c as ObjectHandle<unknown>);
+        },
+        drag: (e) => {
+          stand.rotation.y += e.delta!.x * 0.008;
+          board.rotation.x = Math.max(-1.2, Math.min(1.2, board.rotation.x + e.delta!.y * 0.006));
+          e.stopPropagation();
+        },
+      },
     });
   };
-  turnable("stand", stand, board);
+  standObject(stand, board);
+
+  // The camera: dragging empty space looks around, or, with something selected, orbits it; the wheel walks, or moves in and out toward it.
+  const lookAt = (from: THREE.Vector3, to: THREE.Vector3): { yaw: number; pitch: number } => {
+    const d = to.clone().sub(from);
+    return { yaw: Math.atan2(-d.x, -d.z), pitch: Math.atan2(d.y, Math.hypot(d.x, d.z)) };
+  };
+  const centerOf = (o: THREE.Object3D): THREE.Vector3 => new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3());
+  const orbit = (dx: number, dy: number): void => {
+    if (!selected) return;
+    const c = centerOf(selected.object);
+    const s = new THREE.Spherical().setFromVector3(walker.at.clone().sub(c));
+    s.theta -= dx * 0.006;
+    s.phi = Math.max(0.15, Math.min(Math.PI / 2 - 0.02, s.phi - dy * 0.006));
+    walker.at.copy(new THREE.Vector3().setFromSpherical(s).add(c));
+    Object.assign(walker, lookAt(walker.at, c));
+  };
+  const look = (dx: number, dy: number): void => {
+    walker.yaw += dx * 0.004;
+    walker.pitch = Math.max(-1.4, Math.min(1.4, walker.pitch + dy * 0.004));
+  };
   router.on("*", "drag", (e) => {
     if (e.target !== null) return;
-    walker.yaw += e.delta!.x * 0.004;
-    walker.pitch = Math.max(-1.4, Math.min(1.4, walker.pitch + e.delta!.y * 0.004));
+    if (selected) orbit(e.delta!.x, e.delta!.y);
+    else look(e.delta!.x, e.delta!.y);
   });
-  router.on("*", "wheel", (e) => {
-    const dy = (e.input as WheelInput).deltaY;
-    walker.at.addScaledVector(camera.getWorldDirection(new THREE.Vector3()), -dy * 0.004);
+  const dolly = (amount: number): void => {
+    const toward = selected ? centerOf(selected.object).sub(walker.at) : camera.getWorldDirection(new THREE.Vector3());
+    const room = selected ? toward.length() - 0.8 : Infinity;
+    walker.at.addScaledVector(toward.normalize(), Math.min(amount, room));
     walker.at.y = Math.max(0.3, walker.at.y);
+  };
+  router.on("*", "wheel", (e) => dolly(-(e.input as WheelInput).deltaY * 0.004));
+
+  // A flight: the camera glides to a place and a direction, as a click on the map flies to a town.
+  let flight: { from: { at: THREE.Vector3; yaw: number; pitch: number }; to: { at: THREE.Vector3; yaw: number; pitch: number }; t: number } | null = null;
+  const flyTo = (at: THREE.Vector3, facing: THREE.Vector3): void => {
+    flight = { from: { at: walker.at.clone(), yaw: walker.yaw, pitch: walker.pitch }, to: { at, ...lookAt(at, facing) }, t: 0 };
+    // The shorter way round.
+    const turn = flight.to.yaw - flight.from.yaw;
+    flight.to.yaw -= Math.round(turn / (2 * Math.PI)) * 2 * Math.PI;
+  };
+  const fly = (dt: number): void => {
+    if (!flight) return;
+    flight.t = Math.min(1, flight.t + dt / 0.7);
+    const k = flight.t < 0.5 ? 2 * flight.t * flight.t : 1 - (-2 * flight.t + 2) ** 2 / 2;
+    walker.at.lerpVectors(flight.from.at, flight.to.at, k);
+    walker.yaw = flight.from.yaw + (flight.to.yaw - flight.from.yaw) * k;
+    walker.pitch = flight.from.pitch + (flight.to.pitch - flight.from.pitch) * k;
+    if (flight.t === 1) flight = null;
+  };
+  /** Flies in front of an object: square on to a board, sized to fit the view; to a shape, a little above and a couple of meters off. */
+  const face = (o: THREE.Object3D): void => {
+    const plane = (o.getObjectByName("panel") ?? o.getObjectByName("playground") ?? (o.name === "panel" || o.name === "playground" ? o : null)) as THREE.Mesh | null;
+    if (plane) {
+      const { width, height } = (plane.geometry as THREE.PlaneGeometry).parameters;
+      const c = plane.getWorldPosition(new THREE.Vector3());
+      const normal = new THREE.Vector3(0, 0, 1).transformDirection(plane.matrixWorld);
+      const fov = (camera.fov * Math.PI) / 180;
+      const d = 1.12 * Math.max(height / 2 / Math.tan(fov / 2), width / 2 / (Math.tan(fov / 2) * camera.aspect));
+      flyTo(c.clone().addScaledVector(normal, d), c);
+      return;
+    }
+    const c = centerOf(o);
+    const away = walker.at.clone().sub(c).setY(0).normalize();
+    flyTo(c.clone().addScaledVector(away, 2.4).add(new THREE.Vector3(0, 0.7, 0)), c);
+  };
+  // A click on the floor walks there, and lets go of what was selected; a double click on anything flies in front of it.
+  let lastClick = { at: 0, target: null as string | null };
+  router.on("*", "click", (e) => {
+    const now = performance.now();
+    const twice = now - lastClick.at < 350 && lastClick.target === e.target;
+    lastClick = { at: now, target: e.target };
+    const hit = world.hit(e.screen);
+    if (twice && e.target === null) return;
+    if (twice && e.target !== null) {
+      const named = hit?.named;
+      // The board's own top-level object: the stand that holds it, or the shape.
+      let top: THREE.Object3D | null = named ?? null;
+      while (top?.parent && top.parent !== root) top = top.parent;
+      if (top) face(top);
+      return;
+    }
+    if (e.target === null && hit?.object === floor) {
+      select(null);
+      // Up to six meters at a time, toward the spot, looking the way the camera looked.
+      const step = hit.point.clone().setY(walker.at.y).sub(walker.at);
+      const to = walker.at.clone().add(step.clampLength(0, 6));
+      flyTo(to, to.clone().add(camera.getWorldDirection(new THREE.Vector3())));
+    }
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") select(null);
   });
   const held = new Set<string>();
   const MOVES: Record<string, [number, number, number]> = {
@@ -376,7 +498,7 @@ export const startSpace = (host: SpaceHost): void => {
   window.addEventListener("keyup", (e) => (shift = e.shiftKey));
 
   const playground = showPlayground(root, world);
-  turnable("screen-stand", playground.stand, playground.board);
+  standObject(playground.stand, playground.board);
 
   // The host's input, in CSS pixels over the canvas.
   let pointerId: number | null = null;
@@ -385,10 +507,10 @@ export const startSpace = (host: SpaceHost): void => {
   let pressOnScreen = false;
   // Two fingers: a pinch walks forward and back, sliding them moves sideways, up and down; over the playground's screen a pinch zooms its board.
   const fingers = new Map<number, { x: number; y: number }>();
-  let pinch: { d: number; c: { x: number; y: number }; screen: boolean } | null = null;
-  const spread = (): { d: number; c: { x: number; y: number } } => {
+  let pinch: { d: number; c: { x: number; y: number }; angle: number; screen: boolean } | null = null;
+  const spread = (): { d: number; c: { x: number; y: number }; angle: number } => {
     const [a, b] = [...fingers.values()] as [{ x: number; y: number }, { x: number; y: number }];
-    return { d: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), c: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
+    return { d: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), c: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, angle: Math.atan2(b.y - a.y, b.x - a.x) };
   };
   const twoFingers = (e: PointerEvent): boolean => {
     fingers.set(e.pointerId, pointer(e));
@@ -412,6 +534,13 @@ export const startSpace = (host: SpaceHost): void => {
     if (pinch.screen) {
       // As the playground's wheel zooms: by exp(-deltaY * 0.0015) about the point under it.
       playground.forward(new WheelEvent("wheel", { deltaY: -zoom / 0.0015, deltaMode: 0 }), now.c);
+    } else if (selected) {
+      // With something selected: a pinch moves in and out toward it, a twist turns a selected shape, sliding orbits it.
+      dolly(zoom * 3);
+      let twist = now.angle - pinch.angle;
+      twist -= Math.round(twist / (2 * Math.PI)) * 2 * Math.PI;
+      if (SHAPES.includes(selected.id as ShapeName)) selected.object.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), twist);
+      orbit(now.c.x - pinch.c.x, now.c.y - pinch.c.y);
     } else {
       const ahead = camera.getWorldDirection(new THREE.Vector3());
       const side = new THREE.Vector3().crossVectors(ahead, camera.up).normalize();
@@ -478,6 +607,20 @@ export const startSpace = (host: SpaceHost): void => {
     { passive: false },
   );
 
+  const sticks = thumbsticks({
+    move: (x, y, dt) => {
+      // Floating: forward is where the camera looks, up and down included.
+      const ahead = camera.getWorldDirection(new THREE.Vector3());
+      const side = new THREE.Vector3().crossVectors(ahead, camera.up).normalize();
+      walker.at.addScaledVector(ahead, -y * dt * 3.5).addScaledVector(side, x * dt * 3.5);
+      walker.at.y = Math.max(0.3, Math.min(12, walker.at.y));
+    },
+    look: (x, y, dt) => {
+      walker.yaw -= x * dt * 1.8;
+      walker.pitch = Math.max(-1.4, Math.min(1.4, walker.pitch - y * dt * 1.2));
+    },
+  });
+
   const resize = (): void => {
     size.width = canvas.clientWidth;
     size.height = canvas.clientHeight;
@@ -499,7 +642,10 @@ export const startSpace = (host: SpaceHost): void => {
       shapes.ring.rotation.x += turn;
       shapes.ring.rotation.y += turn * 0.6;
     }
+    if (held.size > 0 || sticks.moving()) flight = null;
     walk(dt, shift);
+    sticks.apply(dt);
+    fly(dt);
     camera.position.copy(walker.at);
     camera.rotation.set(walker.pitch, walker.yaw, 0, "YXZ");
     root.updateMatrixWorld();
@@ -508,7 +654,7 @@ export const startSpace = (host: SpaceHost): void => {
     if (pointerId === null) router.refreshHover();
     const hovered = router.hoveredPath;
     canvas.style.cursor =
-      (hovered[0] === "playground" ? playground.cursor() : null) ?? panelUi.cursor ?? cubeUi.cursor ?? (hovered.some((id) => SHAPES.includes(id as ShapeName) || id === "stand") ? "grab" : "");
+      (hovered[0] === "playground" ? playground.cursor() : null) ?? panelUi.cursor ?? cubeUi.cursor ?? objects.cursor ?? "";
     world.draw();
     playground.draw();
     renderer.render(root, camera);
@@ -646,16 +792,20 @@ const easel = (
   root: THREE.Object3D,
   o: { name: string; x: number; z: number; yaw: number; face: THREE.Mesh; legs: number[]; height: number; color: string },
 ): { stand: THREE.Group; board: THREE.Group } => {
+  // The legs and the back are parts with names of their own, so a stand knows which of them is hovered; each stand has its own material to light up.
   const material = new THREE.MeshStandardMaterial({ color: o.color });
   const stand = new THREE.Group();
   stand.name = o.name;
   stand.position.set(o.x, 0, o.z);
   stand.rotation.y = o.yaw;
   root.add(stand);
+  const legs = new THREE.Group();
+  legs.name = `${o.name}/legs`;
+  stand.add(legs);
   for (const x of o.legs) {
     const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, o.height + 0.1), material);
     leg.position.set(x, (o.height + 0.1) / 2, 0);
-    stand.add(leg);
+    legs.add(leg);
   }
   const board = new THREE.Group();
   board.position.y = o.height;
@@ -663,8 +813,65 @@ const easel = (
   const { height } = (o.face.geometry as THREE.PlaneGeometry).parameters;
   o.face.position.y = height / 2;
   const back = new THREE.Mesh(o.face.geometry, material);
+  back.name = `${o.name}/back`;
   back.rotation.y = Math.PI;
   back.position.y = height / 2;
   board.add(o.face, back);
   return { stand, board };
+};
+
+/**
+ * Two thumbsticks over a touch screen: the left one floats through the room,
+ * the right one looks around, each as far as it's pushed. Nothing shows on a
+ * screen with a mouse.
+ */
+const thumbsticks = (on: { move: (x: number, y: number, dt: number) => void; look: (x: number, y: number, dt: number) => void }) => {
+  const make = (side: "left" | "right") => {
+    const base = document.createElement("div");
+    const knob = document.createElement("div");
+    Object.assign(base.style, {
+      position: "fixed", bottom: "28px", [side]: "24px", width: "112px", height: "112px", borderRadius: "50%",
+      background: "rgba(255,255,255,0.35)", border: "2px solid rgba(255,255,255,0.7)", backdropFilter: "blur(3px)", touchAction: "none",
+    });
+    Object.assign(knob.style, { position: "absolute", left: "34px", top: "34px", width: "44px", height: "44px", borderRadius: "50%", background: "rgba(255,255,255,0.9)", boxShadow: "0 1px 4px rgba(0,0,0,0.25)" });
+    base.append(knob);
+    base.setAttribute("aria-label", side === "left" ? "Move" : "Look");
+    document.body.append(base);
+    const value = { x: 0, y: 0 };
+    const set = (e: PointerEvent): void => {
+      const r = base.getBoundingClientRect();
+      let x = (e.clientX - r.left - r.width / 2) / (r.width / 2);
+      let y = (e.clientY - r.top - r.height / 2) / (r.height / 2);
+      const m = Math.hypot(x, y);
+      if (m > 1) (x /= m), (y /= m);
+      value.x = x;
+      value.y = y;
+      knob.style.transform = `translate(${x * 34}px, ${y * 34}px)`;
+    };
+    const reset = (): void => {
+      value.x = value.y = 0;
+      knob.style.transform = "";
+    };
+    base.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      base.setPointerCapture(e.pointerId);
+      set(e);
+    });
+    base.addEventListener("pointermove", (e) => base.hasPointerCapture(e.pointerId) && set(e));
+    base.addEventListener("pointerup", reset);
+    base.addEventListener("pointercancel", reset);
+    return value;
+  };
+  const touch = matchMedia("(pointer: coarse)").matches;
+  const left = touch ? make("left") : { x: 0, y: 0 };
+  const right = touch ? make("right") : { x: 0, y: 0 };
+  // A little dead zone in the middle, and more speed toward the edge.
+  const curve = (v: number): number => Math.sign(v) * Math.max(0, Math.abs(v) - 0.12) ** 1.5 / 0.88 ** 1.5;
+  return {
+    moving: (): boolean => left.x !== 0 || left.y !== 0 || right.x !== 0 || right.y !== 0,
+    apply: (dt: number): void => {
+      if (left.x !== 0 || left.y !== 0) on.move(curve(left.x), curve(left.y), dt);
+      if (right.x !== 0 || right.y !== 0) on.look(curve(right.x), curve(right.y), dt);
+    },
+  };
 };

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { EventRouter, RecordingContext } from "canvas-ir";
 import * as THREE from "three";
-import { Focus, Surface, World } from "../src/index";
+import { Focus, Objects, Surface, World } from "../src/index";
 
 /** A 2-by-1 panel facing the camera, in a stand, with a 200-by-100 drawing: a button in its top left corner. A cube stands in front of its right end. */
 const setup = () => {
@@ -110,5 +110,33 @@ describe("focus", () => {
     expect(near.width * near.scale * near.height * near.scale).toBeLessThanOrEqual(2 ** 20 + 512 * 1024);
     // Lines meant to look one pixel wide on the host: texture pixels per host pixel where the panel is closest.
     expect(near.ui).toBeGreaterThan(0);
+  });
+});
+
+describe("objects", () => {
+  test("an object is drawn again as it's hovered and pressed, and its handlers run before the router's others", () => {
+    const { world, screen } = setup();
+    const router = new EventRouter(world);
+    const objects = new Objects(router);
+    const cube = world.object("cube")!;
+    const looks: string[] = [];
+    const order: string[] = [];
+    objects.mount({
+      object: cube,
+      state: { clicks: 0 },
+      cursor: "grab",
+      draw: (_o, s, ui) => looks.push(`${s.clicks}${ui.hovered ? " hovered" : ""}${ui.pressed ? " pressed" : ""}`),
+      on: { click: (_e, c) => (order.push("cube"), c.setState((s) => ({ clicks: s.clicks + 1 }))) },
+    });
+    router.on("*", "click", () => order.push("*"));
+    const at = screen(0.7, 0, 1.2);
+    router.pointerMove(at);
+    expect(objects.cursor).toBe("grab");
+    router.pointerDown(at);
+    router.pointerUp(at);
+    router.pointerMove(screen(0, 2));
+    expect(looks).toEqual(["0", "0 hovered", "0 hovered pressed", "0 hovered", "1 hovered", "1"]);
+    expect(order).toEqual(["cube", "*"]);
+    expect(objects.cursor).toBeNull();
   });
 });

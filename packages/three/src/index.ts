@@ -283,6 +283,25 @@ export class World implements Pickable {
     return uv ? { x: uv.x * width, y: (1 - uv.y) * height } : null;
   }
 
+  /**
+   * What a host pixel shows in 3D, for handlers that need more than ids: the
+   * object hit and the nearest named object holding it, where in the world and
+   * in that named object's own space, the surface's normal there, and how far.
+   */
+  hit(screen: Point, objects?: THREE.Object3D[]): { object: THREE.Object3D; named: THREE.Object3D | null; point: THREE.Vector3; local: THREE.Vector3 | null; normal: THREE.Vector3 | null; distance: number } | null {
+    const hit = this.intersect(screen, objects);
+    if (!hit) return null;
+    const named = this.named(hit.object);
+    const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
+    return { object: hit.object, named, point: hit.point.clone(), local: named ? named.worldToLocal(hit.point.clone()) : null, normal, distance: hit.distance };
+  }
+
+  /** Where the camera's ray through a host pixel meets a plane, or null when it runs along it or away. */
+  onPlane(screen: Point, plane: THREE.Plane): THREE.Vector3 | null {
+    this.aim(screen);
+    return this.raycaster.ray.intersectPlane(plane, new THREE.Vector3());
+  }
+
   /** The surface whose drawing holds an op or group id. */
   surfaceOf(id: string): Surface | null {
     for (const s of this.surfaces.values()) if (s.scene.get(id) || s.scene.getGroup(id)) return s;
@@ -334,7 +353,7 @@ export class World implements Pickable {
     if (!surface) return null;
     const hit = this.intersect(screen, [surface.mesh]);
     if (hit?.object === surface.mesh && hit.uv) return surface.pointAtUv(hit.uv);
-    return this.onPlane(surface);
+    return this.onSurfacePlane(surface);
   }
 
   private aim(screen: Point): void {
@@ -362,7 +381,7 @@ export class World implements Pickable {
   }
 
   /** Where the last aimed ray meets a plane surface's plane, in drawing units; null for other shapes. */
-  private onPlane(surface: Surface): Point | null {
+  private onSurfacePlane(surface: Surface): Point | null {
     const uv = this.uvOnPlane(surface.mesh);
     return uv ? surface.pointAtUv(uv) : null;
   }
@@ -467,3 +486,4 @@ export class Focus {
     return this.region;
   }
 }
+export { Objects, type ObjectHandle, type ObjectHandler, type ObjectSpec, type ObjectUi } from "./objects";
