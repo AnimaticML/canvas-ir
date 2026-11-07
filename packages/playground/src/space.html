@@ -11,6 +11,7 @@
       .hud { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; pointer-events: none; }
       .chip { background: rgba(255, 255, 255, 0.85); border-radius: 999px; padding: 6px 12px; backdrop-filter: blur(4px); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       #event { font: 12px/1.4 ui-monospace, monospace; }
+      #hint { white-space: normal; }
       .title { margin-left: auto; color: #475569; }
       .title a { color: inherit; pointer-events: auto; }
     </style>
@@ -19,7 +20,7 @@
     <canvas id="space" aria-label="A 3D room with three shapes and a panel of controls drawn with CanvasIR"></canvas>
     <div class="hud">
       <span class="chip" id="event">Click or drag anything</span>
-      <span class="chip">WASD walk · E/Space up · Q/C down · Shift faster · drag a stand's legs to turn and tilt it</span>
+      <span class="chip" id="hint">WASD walk · E/Space up · Q/C down · Shift faster · drag a stand's legs to turn and tilt it</span>
       <span class="title chip">Drawings in 3D · three.js with CanvasIR · <a href="./">playground</a></span>
     </div>
     <script type="module" src="./space-main.ts"></script>
