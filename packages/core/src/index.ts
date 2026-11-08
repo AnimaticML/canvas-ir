@@ -95,6 +95,8 @@ export {
 export { VirtualGroup } from "./virtual";
 export type { VirtualGroupSpec, VirtualView } from "./virtual";
 export { EventRouter } from "./interaction";
+export { Focus, type FocusOptions, type FocusRegion, type FocusWorld } from "./focus";
+export { Objects, type Named, type ObjectHandle, type ObjectHandler, type ObjectSpec, type ObjectUi } from "./objects";
 export type {
   EventRouterOptions,
   KeyInput,

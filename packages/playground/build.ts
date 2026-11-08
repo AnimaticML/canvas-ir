@@ -1,4 +1,4 @@
-// Builds the playground, the game and the 3D page into self-contained files, dist/index.html, dist/game.html and dist/space.html, with the
+// Builds the playground, the game and the 3D page into self-contained files, dist/index.html, dist/game.html, dist/space.html and dist/babylon.html, with the
 // files they fetch beside them (the world map's data, dist/world.bin; the novel, dist/war-and-peace.txt; the declaration, dist/udhr.txt).
 const page = async (entry: string, html: string, out: string, tag: string): Promise<void> => {
   const result = await Bun.build({
@@ -27,3 +27,4 @@ const page = async (entry: string, html: string, out: string, tag: string): Prom
 await page("main.ts", "index.html", "index.html", '<script type="module" src="./main.ts"></script>');
 await page("game-main.ts", "game.html", "game.html", '<script type="module" src="./game-main.ts"></script>');
 await page("space-main.ts", "space.html", "space.html", '<script type="module" src="./space-main.ts"></script>');
+await page("babylon-main.ts", "babylon.html", "babylon.html", '<script type="module" src="./babylon-main.ts"></script>');

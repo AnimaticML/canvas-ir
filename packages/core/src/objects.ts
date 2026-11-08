@@ -1,12 +1,17 @@
 // Interactive 3D objects drawn from state, as CanvasIR's components are in
-// 2D: each owns an object in the three.js scene, found by its name, and its
+// 2D: each owns an object in a 3D engine's scene (a three.js Object3D, a
+// Babylon node, anything with a name), found by its name, and its
 // `draw` sets the object's materials, transforms or children from its state
 // and its pointer state (hovered, pressed, focused) whenever either changes.
 // Its handlers get the router's events while the object is on their path,
 // before the router's other listeners, so a stand that stops its drags keeps
 // them from turning the camera.
-import type { EventRouter, RouterEvent, RouterEventType } from "canvas-ir";
-import type * as THREE from "three";
+import type { EventRouter, RouterEvent, RouterEventType } from "./interaction";
+
+/** Anything a pickable world names on the router's paths. */
+export interface Named {
+  readonly name: string;
+}
 
 export interface ObjectUi {
   readonly hovered: boolean;
@@ -17,9 +22,9 @@ export interface ObjectUi {
   readonly hoveredParts: readonly string[];
 }
 
-export interface ObjectHandle<S> {
+export interface ObjectHandle<S, O extends Named = Named> {
   readonly id: string;
-  readonly object: THREE.Object3D;
+  readonly object: O;
   readonly state: S;
   readonly ui: ObjectUi;
   /** Changes the state and draws again. A partial object is merged into an object state. */
@@ -27,17 +32,17 @@ export interface ObjectHandle<S> {
   redraw(): void;
 }
 
-export type ObjectHandler<S> = (event: RouterEvent, object: ObjectHandle<S>) => void;
+export type ObjectHandler<S, O extends Named = Named> = (event: RouterEvent, object: ObjectHandle<S, O>) => void;
 
-export interface ObjectSpec<S> {
+export interface ObjectSpec<S, O extends Named = Named> {
   /** The object, named with its id so the world's rays find it. */
-  readonly object: THREE.Object3D;
+  readonly object: O;
   readonly state: S;
   /** The CSS cursor while it's hovered, or a function of its state; null for no preference. */
   readonly cursor?: string | ((state: S, ui: ObjectUi) => string | null);
   /** Sets the object from its state and pointer state, as many times as either changes. */
-  draw?(object: THREE.Object3D, state: S, ui: ObjectUi): void;
-  readonly on?: { readonly [T in RouterEventType]?: ObjectHandler<S> };
+  draw?(object: O, state: S, ui: ObjectUi): void;
+  readonly on?: { readonly [T in RouterEventType]?: ObjectHandler<S, O> };
 }
 
 interface Mounted {
@@ -66,11 +71,11 @@ export class Objects {
     return this.current;
   }
 
-  mount<S>(spec: ObjectSpec<S>): ObjectHandle<S> {
+  mount<S, O extends Named>(spec: ObjectSpec<S, O>): ObjectHandle<S, O> {
     const id = spec.object.name;
     if (!id) throw new Error("an interactive object needs a name: the router finds it by its name");
     if (this.mounted.has(id)) throw new Error(`object ${id} is already mounted`);
-    const m: Mounted = { spec: spec as ObjectSpec<unknown>, state: spec.state, ui: IDLE, handle: null as unknown as ObjectHandle<unknown> };
+    const m: Mounted = { spec: spec as unknown as ObjectSpec<unknown>, state: spec.state, ui: IDLE, handle: null as unknown as ObjectHandle<unknown> };
     const self = this;
     (m as { handle: ObjectHandle<unknown> }).handle = {
       id,
@@ -96,7 +101,7 @@ export class Objects {
     };
     this.mounted.set(id, m);
     this.draw([m]);
-    return m.handle as ObjectHandle<S>;
+    return m.handle as unknown as ObjectHandle<S, O>;
   }
 
   unmount(id: string): void {

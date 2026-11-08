@@ -1,0 +1,19 @@
+{
+  "name": "@canvas-ir/babylon",
+  "version": "0.0.0",
+  "private": true,
+  "description": "CanvasIR drawings on Babylon.js meshes: each a dynamic texture, picked by the scene's rays, with one event router for the meshes and the drawings on them",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "canvas-ir": "workspace:*"
+  },
+  "peerDependencies": {
+    "@babylonjs/core": ">=7.0.0"
+  },
+  "devDependencies": {
+    "@babylonjs/core": "9.31.3"
+  }
+}

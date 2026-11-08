@@ -1190,6 +1190,7 @@ chrome = new Chrome(cards, {
   actions: [
     { text: "Play Pelican Ride", look: "accent", onClick: () => location.assign("./game.html") },
     { text: "Drawings in 3D", onClick: () => location.assign("./space.html") },
+    { text: "Physics in Babylon", onClick: () => location.assign("./babylon.html") },
     { text: "Vectorize image", onClick: vectorizeSelection, title: "select an image, such as the orange sticker, first" },
     { text: "Export SVG", onClick: exportSvg },
     { text: "Export JSON", onClick: () => download("board.json", "application/json", serializeDocument(scene.document)) },
