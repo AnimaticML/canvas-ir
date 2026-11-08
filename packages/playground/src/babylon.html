@@ -3,26 +3,31 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Physics in Babylon</title>
+    <title>Board in 3D</title>
     <style>
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; background: #dbe4ee; color: #0f172a; font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
       #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-      .hud { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; pointer-events: none; }
+      .hud { position: fixed; z-index: 3; top: 12px; left: 12px; right: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; pointer-events: none; }
       .chip { background: rgba(255, 255, 255, 0.85); border-radius: 999px; padding: 6px 12px; backdrop-filter: blur(4px); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       #event { font: 12px/1.4 ui-monospace, monospace; }
       #hint { white-space: normal; }
       .title { margin-left: auto; color: #475569; }
       .title a { color: inherit; pointer-events: auto; }
+      #page { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 2; background: transparent; }
+      #toggle { position: fixed; right: 16px; bottom: 16px; z-index: 3; border: 0; border-radius: 999px; padding: 12px 20px; background: #0f172a; color: #fff; font: 600 15px/1 system-ui, sans-serif; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.25); cursor: pointer; }
+      #toggle:hover { background: #1e293b; }
     </style>
   </head>
   <body>
     <canvas id="scene" aria-label="A Babylon.js scene of crates and balls under Havok physics, with a panel of controls drawn with CanvasIR"></canvas>
     <div class="hud">
       <span class="chip" id="event">Drag a crate or a ball to throw it</span>
-      <span class="chip" id="hint">Drag a crate or ball to throw it · drag the floor to look around · wheel to come closer · double-click to look at one</span>
-      <span class="title chip">Babylon.js and Havok with CanvasIR · <a href="./space.html">three.js</a> · <a href="./">playground</a></span>
+      <span class="chip" id="hint">Click what is drawn on the floor to use it · drag a crate or ball to throw it · drag the floor to look around · wheel to come closer</span>
+      <span class="title chip">The board in 3D · Babylon.js and Havok with CanvasIR · <a href="./space.html">three.js</a> · <a href="./">playground</a></span>
     </div>
+    <iframe id="page" src="./index.html" title="The playground's board"></iframe>
+    <button id="toggle" type="button">View in 3D</button>
     <script type="module" src="./babylon-main.ts"></script>
   </body>
 </html>

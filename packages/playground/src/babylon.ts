@@ -28,7 +28,8 @@ import { Scene as BabylonScene } from "@babylonjs/core/scene";
 import HavokPhysics from "@babylonjs/havok";
 import havokWasm from "@babylonjs/havok/lib/esm/HavokPhysics.wasm" with { type: "file" };
 import { type ObjectHandle, Objects, Surface, World } from "@canvas-ir/babylon";
-import { type ComponentHandle, Components, EventRouter, type RouterEvent } from "canvas-ir";
+import { type ComponentHandle, Components, EventRouter, type Point, type RouterEvent } from "canvas-ir";
+import { Floor, type FloorPage, type FloorThing, UNITS } from "./floor";
 
 const FONT = "system-ui, -apple-system, Segoe UI, sans-serif";
 const PALETTE = ["#f97316", "#0ea5e9", "#8b5cf6", "#10b981", "#ef4444", "#eab308", "#ec4899", "#14b8a6"];
@@ -42,8 +43,19 @@ interface Thing {
   readonly label: { readonly surface: Surface; readonly ui: Components } | undefined;
 }
 
-export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent?: (text: string) => void }): Promise<void> => {
-  const { canvas } = options;
+/** Loads the playground in a frame laid over the whole page, and resolves with its floor hook once its board is drawn. */
+const loadPage = (frame: HTMLIFrameElement): Promise<FloorPage> =>
+  new Promise((resolve) => {
+    const wait = (): void => {
+      const page = (frame.contentWindow as unknown as { canvasIrFloor?: FloorPage } | null)?.canvasIrFloor;
+      if (page?.bounds()) resolve(page);
+      else setTimeout(wait, 50);
+    };
+    wait();
+  });
+
+export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d" }): Promise<void> => {
+  const { canvas, frame, toggle } = options;
   const engine = new Engine(canvas, true, { stencil: true, preserveDrawingBuffer: false }, true);
   engine.setHardwareScalingLevel(1 / Math.min(2, window.devicePixelRatio || 1));
   const scene = new BabylonScene(engine);
@@ -54,7 +66,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent
 
   const camera = new ArcRotateCamera("camera", -Math.PI / 2 - 0.35, 1.12, 8, new Vector3(0, 1.1, 0), scene);
   camera.lowerRadiusLimit = 2;
-  camera.upperRadiusLimit = 30;
+  camera.upperRadiusLimit = 150;
+  camera.lowerBetaLimit = 0.0001;
   camera.minZ = 0.05;
   camera.fov = 0.9;
   const hemi = new HemisphericLight("sky", new Vector3(0, 1, 0), scene);
@@ -67,13 +80,11 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent
   shadows.useBlurExponentialShadowMap = true;
   shadows.blurKernel = 16;
 
-  const ground = CreateGround("ground", { width: 160, height: 160 }, scene);
-  const groundMaterial = new StandardMaterial("ground", scene);
-  groundMaterial.diffuseColor = Color3.FromHexString("#e8edf3");
-  groundMaterial.specularColor = Color3.Black();
-  ground.material = groundMaterial;
-  ground.receiveShadows = true;
-  new PhysicsAggregate(ground, PhysicsShapeType.BOX, { mass: 0, restitution: 0.4, friction: 0.7 }, scene);
+  // The floor's body: the board is drawn on meshes of the floor's own, and this slab is what things land on.
+  const slab = CreateGround("", { width: 160, height: 160 }, scene);
+  slab.isVisible = false;
+  slab.isPickable = false;
+  new PhysicsAggregate(slab, PhysicsShapeType.BOX, { mass: 0, restitution: 0.4, friction: 0.7 }, scene);
 
   // The panel on its stand: a drawing on a plane, facing the camera, and a thin box behind it that the crates bounce off.
   const stand = new TransformNode("stand", scene);
@@ -99,6 +110,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent
 
   const size = { width: canvas.clientWidth || 1, height: canvas.clientHeight || 1 };
   const world = new World({ scene, size: () => size });
+  const page = await loadPage(frame);
+  const floor = new Floor(page, scene, world);
   const router = new EventRouter(world, { dragThreshold: 4 });
   const objects = new Objects(router);
   const panelSurface = world.add(new Surface({ version: 1, ops: [] }, { mesh: panel, width: W, height: H, pixelRatio: 2.5, background: "#f8fafc" }));
@@ -242,8 +255,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent
       ctx.fillText("Babylon.js, Havok and CanvasIR", 24, 40);
       ctx.fillStyle = "#475569";
       ctx.font = `13px ${FONT}`;
-      ctx.fillText("Drag a crate or a ball to pick it up and throw it. Double-click", 24, 62);
-      ctx.fillText("one to look at it; drag the floor to look around.", 24, 78);
+      ctx.fillText("The floor is the playground's board: click what is drawn there.", 24, 62);
+      ctx.fillText("Drag a crate or a ball to throw it; drag the floor to look around.", 24, 78);
     },
   }));
   button("crate", 24, 104, () => "Drop crate", () => drop("crate"));
@@ -353,7 +366,33 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent
     camera.radius = Math.max(camera.lowerRadiusLimit ?? 2, Math.min(camera.upperRadiusLimit ?? 30, camera.radius * factor));
   };
 
-  // Pointer input: one pointer goes to the router; a second finger makes a pinch.
+  // The board under the room: presses on what is drawn there go to the page, at the board point under the pointer.
+  const pageWindow = frame.contentWindow as Window & typeof globalThis;
+  const pageCanvas = (): HTMLCanvasElement | null => frame.contentDocument?.getElementById("board") as HTMLCanvasElement | null;
+  const stageRect = (): DOMRect => (frame.contentDocument?.getElementById("stage") ?? pageCanvas())!.getBoundingClientRect();
+  const sendToPage = (e: PointerEvent, type: string, at: Point): void => {
+    const board = pageCanvas();
+    if (!board) return;
+    const v = page.view();
+    const r = stageRect();
+    const keys = { altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey };
+    board.dispatchEvent(
+      new pageWindow.PointerEvent(type, {
+        clientX: r.left + v.a * at.x + v.c * at.y + v.e,
+        clientY: r.top + v.b * at.x + v.d * at.y + v.f,
+        ...keys, button: e.button, buttons: e.buttons, pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: true, bubbles: true, cancelable: true, composed: true, view: pageWindow,
+      }),
+    );
+  };
+  /** The board point on the floor under a host pixel, or null off the floor. */
+  const onFloor = (p: Point): Point | null => {
+    const at = world.onPlane(p, Vector3.Zero(), Vector3.Up());
+    return at ? floor.toBoard(at) : null;
+  };
+  let forwarding: number | null = null;
+  let overPage = false;
+
+  // Pointer input: one pointer goes to the router, or to the page for what is drawn on the floor; a second finger makes a pinch.
   const pointer = (e: PointerEvent | WheelEvent) => {
     const r = canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top, button: e.button, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
@@ -370,17 +409,28 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent
     if (fingers.size === 2) {
       if (pointerId !== null) router.pointerCancel();
       pointerId = null;
+      forwarding = null;
       held = null;
       orbiting = null;
       pinch = spread();
       return;
     }
-    if (pinch !== null || pointerId !== null) return;
-    pointerId = e.pointerId;
+    if (pinch !== null || pointerId !== null || forwarding !== null || moving) return;
+    const p = pointer(e);
     try {
       canvas.setPointerCapture(e.pointerId);
     } catch {}
-    router.pointerDown(pointer(e));
+    const hit = world.hit(p);
+    if (hit && floor.holds(hit.mesh)) {
+      const at = floor.toBoard(hit.point);
+      if (page.hits(at)) {
+        forwarding = e.pointerId;
+        sendToPage(e, "pointerdown", at);
+        return;
+      }
+    }
+    pointerId = e.pointerId;
+    router.pointerDown(p);
   });
   canvas.addEventListener("pointermove", (e) => {
     if (fingers.has(e.pointerId)) fingers.set(e.pointerId, pointer(e));
@@ -390,13 +440,34 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent
       pinch = now;
       return;
     }
+    const p = pointer(e);
+    if (forwarding !== null) {
+      if (e.pointerId !== forwarding) return;
+      const at = onFloor(p);
+      if (at) sendToPage(e, "pointermove", at);
+      return;
+    }
     if (pointerId !== null && e.pointerId !== pointerId) return;
-    router.pointerMove(pointer(e));
+    router.pointerMove(p);
+    // Hovering what is drawn on the floor lights it up as on the page.
+    if (pointerId === null) {
+      const hit = world.hit(p);
+      const at = hit && floor.holds(hit.mesh) ? floor.toBoard(hit.point) : null;
+      if (at) sendToPage(e, "pointermove", at);
+      else if (overPage) pageCanvas()?.dispatchEvent(new pageWindow.PointerEvent("pointerleave", { pointerId: e.pointerId, pointerType: e.pointerType }));
+      overPage = at !== null;
+    }
   });
   const lift = (e: PointerEvent, cancel: boolean): void => {
     fingers.delete(e.pointerId);
     if (pinch !== null) {
       if (fingers.size === 0) pinch = null;
+      return;
+    }
+    if (e.pointerId === forwarding) {
+      forwarding = null;
+      const at = onFloor(pointer(e));
+      if (at) sendToPage(e, cancel ? "pointercancel" : "pointerup", at);
       return;
     }
     if (e.pointerId !== pointerId) return;
@@ -427,12 +498,113 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent
   window.addEventListener("resize", resize);
   resize();
 
+  // 2D and 3D. In 2D the page is on top, live, and the room only runs its physics; the things show as footprints on the board.
+  // The switch tilts between them: the 3D camera starts straight above the part of the board the page shows, at the size it shows it.
+  let mode: "2d" | "3d" = options.start ?? "2d";
+  let moving = false;
+  const overhead = (): { target: Vector3; radius: number } => {
+    const v = page.view();
+    const r = stageRect();
+    const k = Math.hypot(v.a, v.b) || 1;
+    const center = { x: (r.width / 2 - v.e) / k, y: (r.height / 2 - v.f) / k };
+    const meters = size.height / k / UNITS;
+    return { target: floor.toRoom(center), radius: meters / 2 / Math.tan(camera.fov / 2) };
+  };
+  const SEEN = { alpha: -Math.PI / 2, beta: 0.0001 };
+  /** Points the camera at a target, keeping its angles and distance (setTarget alone keeps its position instead). */
+  const aim = (target: Vector3): void => camera.setTarget(target, false, false, true);
+  type Pose = { alpha: number; beta: number; radius: number; target: Vector3 };
+  const pose = (): Pose => ({ alpha: camera.alpha, beta: camera.beta, radius: camera.radius, target: camera.target.clone() });
+  const glide = (to: Pose, ms: number): Promise<void> =>
+    new Promise((done) => {
+      const from = pose();
+      // The shorter way round.
+      let da = (to.alpha - from.alpha) % (2 * Math.PI);
+      if (da > Math.PI) da -= 2 * Math.PI;
+      if (da < -Math.PI) da += 2 * Math.PI;
+      const t0 = performance.now();
+      const step = (): void => {
+        const t = Math.min(1, (performance.now() - t0) / ms);
+        const e = ease(t);
+        aim(Vector3.Lerp(from.target, to.target, e));
+        camera.alpha = from.alpha + da * e;
+        camera.beta = from.beta + (to.beta - from.beta) * e;
+        // Distance in log space, so a long way out and in feels even.
+        camera.radius = Math.exp(Math.log(from.radius) + (Math.log(to.radius) - Math.log(from.radius)) * e);
+        if (t < 1) requestAnimationFrame(step);
+        else done();
+      };
+      step();
+    });
+  const fade = (page2d: boolean): Promise<void> =>
+    new Promise((done) => {
+      frame.style.transition = "opacity 260ms ease";
+      frame.style.opacity = page2d ? "1" : "0";
+      setTimeout(done, 280);
+    });
+  const show = (m: "2d" | "3d"): void => {
+    mode = m;
+    frame.style.pointerEvents = m === "2d" ? "auto" : "none";
+    canvas.style.visibility = m === "3d" ? "visible" : "hidden";
+    toggle.textContent = m === "2d" ? "View in 3D" : "Back to 2D";
+    options.onMode?.(m);
+  };
+  const footprints = (): FloorThing[] =>
+    [...things.entries()].map(([id, t]) => {
+      const at = floor.toBoard(t.mesh.getAbsolutePosition());
+      const angle = t.mesh.rotationQuaternion?.toEulerAngles().y ?? t.mesh.rotation.y;
+      return { id, kind: id.startsWith("ball") ? "ball" : "crate", x: at.x, y: at.y, angle, size: (id.startsWith("ball") ? 0.6 : 0.7) * UNITS, color: (t.mesh.material as StandardMaterial).diffuseColor.toHexString() };
+    });
+  const to3d = async (): Promise<void> => {
+    moving = true;
+    page.footprints(null);
+    const { target, radius } = overhead();
+    aim(target);
+    camera.alpha = SEEN.alpha;
+    camera.beta = SEEN.beta;
+    camera.radius = radius;
+    floor.drawNow();
+    show("3d");
+    frame.style.opacity = "1";
+    scene.render();
+    await fade(false);
+    await glide({ alpha: SEEN.alpha - 0.35, beta: 1.0, radius: Math.min(radius, 9), target: target.add(new Vector3(0, 0.6, 0)) }, 1400);
+    moving = false;
+  };
+  const to2d = async (): Promise<void> => {
+    moving = true;
+    const { target, radius } = overhead();
+    await glide({ ...SEEN, radius, target }, 1100);
+    page.footprints(footprints());
+    await fade(true);
+    show("2d");
+    moving = false;
+  };
+  toggle.addEventListener("click", () => {
+    if (moving) return;
+    void (mode === "2d" ? to3d() : to2d());
+  });
+  // A footprint dragged on the board drags its thing along the floor.
+  page.onFootprint = (id, phase, point) => {
+    const thing = things.get(id);
+    if (!thing) return;
+    if (phase === "end") {
+      held = null;
+      return;
+    }
+    const at = floor.toRoom(point);
+    at.y = id.startsWith("ball") ? 0.3 : 0.35;
+    if (phase === "start") held = { thing, normal: Vector3.Up(), offset: Vector3.Zero(), target: at };
+    else if (held) held.target = at;
+  };
+
   const ease = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
   const velocity = new Vector3();
-  scene.onBeforeRenderObservable.add(() => {
+  /** What happens each frame in either mode: flights, the held body, things that fell off, and in 2D the footprints. */
+  const tick = (): void => {
     if (flight) {
       const t = Math.min(1, (performance.now() - flight.t0) / 700);
-      camera.setTarget(Vector3.Lerp(flight.from, flight.to, ease(t)));
+      aim(Vector3.Lerp(flight.from, flight.to, ease(t)));
       camera.radius = flight.r0 + (flight.r1 - flight.r0) * ease(t);
       if (t >= 1) flight = null;
     }
@@ -454,13 +626,29 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent
         scene.onAfterPhysicsObservable.addOnce(() => (t.body.body.disablePreStep = true));
       }
     }
-    if (pointerId === null) router.refreshHover();
+    if (mode === "2d" && !moving) page.footprints(footprints());
+  };
+  scene.onBeforeRenderObservable.add(() => {
+    if (pointerId === null && forwarding === null) router.refreshHover();
     world.draw();
-    canvas.style.cursor = panelUi.cursor ?? objects.cursor ?? "";
+    floor.draw();
+    const pageCursor = overPage || forwarding !== null ? pageCanvas()?.style.cursor || null : null;
+    canvas.style.cursor = pageCursor ?? panelUi.cursor ?? objects.cursor ?? "";
   });
 
   for (let i = 0; i < 5; i++) drop(i % 2 === 0 ? "crate" : "ball");
-  engine.runRenderLoop(() => scene.render());
+  show(mode);
+  if (mode === "3d") {
+    aim(new Vector3(0, 1.1, 0));
+    floor.drawNow();
+    frame.style.opacity = "0";
+  }
+  engine.runRenderLoop(() => {
+    tick();
+    // In 2D nothing in the room is seen: it only steps its physics.
+    if (mode === "3d" || moving) scene.render();
+    else (scene as unknown as { _advancePhysicsEngineStep(ms: number): void })._advancePhysicsEngineStep(engine.getDeltaTime());
+  });
   // For tests: where a mesh, or a point of the panel's drawing, is on the host.
   const onHost = (p: Vector3): { x: number; y: number } => {
     const q = Vector3.Project(p, Matrix.Identity(), camera.getViewMatrix().multiply(camera.getProjectionMatrix()), camera.viewport.toGlobal(size.width, size.height));
@@ -469,6 +657,9 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; onEvent
   (window as unknown as { canvasIrBabylon?: unknown }).canvasIrBabylon = {
     scene, camera, world, things, drop,
     at: (id: string) => onHost(things.get(id)!.mesh.getAbsolutePosition()),
+    onBoard: (x: number, y: number) => onHost(floor.toRoom({ x, y })),
+    floor,
+    page,
     onPanel: (x: number, y: number) => onHost(Vector3.TransformCoordinates(new Vector3((x / W - 0.5) * 2.88, (0.5 - y / H) * 1.8, 0), panel.computeWorldMatrix(true))),
   };
 };

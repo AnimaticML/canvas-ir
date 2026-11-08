@@ -251,6 +251,102 @@ host.canvasIrCapture = (c) => {
   capture = c;
   render();
 };
+
+/** A thing standing on the floor of a 3D room the board is laid out as: its footprint on the board, in board units. */
+interface FloorThing {
+  readonly id: string;
+  readonly kind: "ball" | "crate";
+  readonly x: number;
+  readonly y: number;
+  /** Its turn about the vertical, in radians, as seen from above. */
+  readonly angle: number;
+  readonly size: number;
+  readonly color: string;
+}
+/**
+ * For a host that lays the board flat as the floor of a 3D room: the board's
+ * scenes, to draw them itself at any part and detail; what is under a board
+ * point, to send presses there; and footprints of the things standing on the
+ * floor, drawn on the board in 2D, which the host moves when a footprint is
+ * dragged.
+ */
+const floorHost = window as unknown as {
+  canvasIrFloor?: {
+    scene(): Scene;
+    cards(): Scene;
+    images(src: string): CanvasImageSource | undefined;
+    lod(): boolean;
+    view(): Matrix2D;
+    bounds(): { x: number; y: number; width: number; height: number } | null;
+    background(): string;
+    hits(point: Point): boolean;
+    footprints(things: readonly FloorThing[] | null): void;
+    onFootprint: ((id: string, phase: "start" | "move" | "end", point: Point) => void) | null;
+  };
+};
+const footprints = new Set<string>();
+floorHost.canvasIrFloor = {
+  scene: () => scene,
+  cards: () => cards.scene,
+  images: (src) => images.get(src),
+  lod: () => settings.lod,
+  view: () => view,
+  bounds: () => boardBox(),
+  background: () => getComputedStyle(stage).backgroundColor || getComputedStyle(document.body).backgroundColor,
+  hits: (point) => scene.hitTest(point).length > 0 || cards.scene.hitTest(point).length > 0,
+  footprints: (things) => {
+    if (!components) return;
+    const keep = new Set((things ?? []).map((t) => `floor/${t.id}`));
+    for (const id of footprints) {
+      if (keep.has(id)) continue;
+      components.unmount(id);
+      footprints.delete(id);
+    }
+    for (const t of things ?? []) {
+      const id = `floor/${t.id}`;
+      if (!footprints.has(id)) {
+        footprints.add(id);
+        const send = (phase: "start" | "move" | "end") => (e: RouterEvent): void => {
+          e.stopPropagation();
+          floorHost.canvasIrFloor?.onFootprint?.(t.id, phase, e.point);
+        };
+        components.mount({
+          id,
+          state: {},
+          cursor: "grab",
+          meta: { role: "img", label: `the ${t.kind} ${t.id}, seen from above` },
+          draw: (c, _s, ui) => {
+            const r = t.size / 2;
+            c.shadowColor = "rgba(15, 23, 42, 0.25)";
+            c.shadowBlur = r * 0.35;
+            c.shadowOffsetY = r * 0.12;
+            c.fillStyle = t.color;
+            c.beginPath();
+            if (t.kind === "ball") c.arc(0, 0, r, 0, Math.PI * 2);
+            else c.roundRect(-r, -r, t.size, t.size, r * 0.12);
+            c.fill();
+            c.shadowColor = "transparent";
+            c.lineWidth = r * (ui.hovered ? 0.16 : 0.1);
+            c.strokeStyle = "rgba(255, 255, 255, 0.85)";
+            c.stroke();
+            c.fillStyle = "#ffffff";
+            c.font = `700 ${Math.round(r * 0.8)}px system-ui, sans-serif`;
+            c.textAlign = "center";
+            c.textBaseline = "middle";
+            c.fillText(t.id.replace(/\D+/g, ""), 0, r * 0.04);
+          },
+          on: { down: (e) => e.stopPropagation(), dragstart: send("start"), drag: send("move"), dragend: send("end") },
+        });
+      }
+      const cos = Math.cos(t.angle);
+      const sin = Math.sin(t.angle);
+      scene.setTransform(id, { a: cos, b: sin, c: -sin, d: cos, e: t.x, f: t.y });
+    }
+    render();
+  },
+  onFootprint: null,
+};
+
 const draw = (): void => {
   // What the map records now is drawn in this frame, not the next.
   worldMap?.flush();
@@ -881,8 +977,8 @@ const vectorizeSelection = (): void => {
   render();
 };
 
-/** The view that shows the cards and the drawing on the board, at most at full size. */
-const home = (): Matrix2D => {
+/** What the cards and the drawing on the board cover, in board units. */
+const boardBox = (): { x: number; y: number; width: number; height: number } | null => {
   let box = cards.bounds();
   for (const op of scene.document.ops) {
     const b = scene.bounds(op.id);
@@ -894,6 +990,12 @@ const home = (): Matrix2D => {
     const y = Math.min(box.y, b.y);
     box = { x, y, width: Math.max(box.x + box.width, b.x + b.width) - x, height: Math.max(box.y + box.height, b.y + b.height) - y };
   }
+  return box;
+};
+
+/** The view that shows the cards and the drawing on the board, at most at full size. */
+const home = (): Matrix2D => {
+  const box = boardBox();
   if (!box) return IDENTITY;
   const { width, height } = stage.getBoundingClientRect();
   const k = Math.min(1, (width - 48) / box.width, (height - 48) / box.height);
@@ -1188,9 +1290,9 @@ chrome = new Chrome(cards, {
   ],
   onTool: (name) => useTool(name),
   actions: [
-    { text: "Play Pelican Ride", look: "accent", onClick: () => location.assign("./game.html") },
-    { text: "Drawings in 3D", onClick: () => location.assign("./space.html") },
-    { text: "Physics in Babylon", onClick: () => location.assign("./babylon.html") },
+    { text: "Play Pelican Ride", look: "accent", onClick: () => (window.top ?? window).location.assign("./game.html") },
+    { text: "Drawings in 3D", onClick: () => (window.top ?? window).location.assign("./space.html") },
+    { text: "The board in 3D", onClick: () => (window.top ?? window).location.assign("./babylon.html") },
     { text: "Vectorize image", onClick: vectorizeSelection, title: "select an image, such as the orange sticker, first" },
     { text: "Export SVG", onClick: exportSvg },
     { text: "Export JSON", onClick: () => download("board.json", "application/json", serializeDocument(scene.document)) },
