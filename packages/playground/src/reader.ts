@@ -11,6 +11,7 @@
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Scene, VirtualGroup } from "canvas-ir";
 import { type Block, type Direction, type Inline, type TextLayout, type TextPosition, canvasMeasurer, layoutText, positionAtPoint, selectionRects } from "@canvas-ir/text";
 import { fit, textSink } from "./ui/kit";
+import { TITLE_LEFT, closeBox, drawClose } from "./ui/window";
 
 const TITLE = 46;
 const STATUS = 28;
@@ -844,9 +845,10 @@ export class Reader {
 
   private frameSpec(): ComponentSpec<FrameState> {
     const H = TITLE + this.body + STATUS;
-    // The close button, when there is one, then the font sizes and the search field, from the right.
-    const right = this.w - 14 - (this.spec.onClose ? 34 + 8 : 0);
-    const close = { x: this.w - 14 - 34, y: 10, width: 34, height: 26 };
+    // The close button, when there is one, at the left of the title; the font sizes and the search field from the right.
+    const right = this.w - 14;
+    const close = closeBox(TITLE);
+    const left = this.spec.onClose ? TITLE_LEFT : 14;
     const searchWidth = Math.min(240, this.w / 3);
     const field = { x: right - 2 * 34 - 8 - searchWidth, y: 10, width: searchWidth, height: 26 };
     const smaller = { x: right - 2 * 34 - 4, y: 10, width: 34, height: 26 };
@@ -882,29 +884,14 @@ export class Reader {
         c.textBaseline = "middle";
         c.font = `600 15px ${FONT}`;
         c.fillStyle = "#0f172a";
-        const room = field.x - 14 - 14;
+        const room = field.x - 14 - left;
         const title = fit(c, this.title, room);
-        c.fillText(title, 14, TITLE / 2);
-        const after = 14 + c.measureText(title).width + 8;
+        c.fillText(title, left, TITLE / 2);
+        const after = left + c.measureText(title).width + 8;
         c.font = `12px ${FONT}`;
         c.fillStyle = "#64748b";
-        if (room - (after - 14) > 40) c.fillText(fit(c, this.subtitle, room - (after - 14)), after, TITLE / 2 + 1);
-        if (this.spec.onClose) {
-          c.beginPath();
-          c.roundRect(close.x, close.y, close.width, close.height, 6);
-          c.fillStyle = "#f1f5f9";
-          c.fill();
-          c.strokeStyle = "#475569";
-          c.lineWidth = 1.5;
-          c.beginPath();
-          const cx = close.x + close.width / 2;
-          const cy = close.y + close.height / 2;
-          c.moveTo(cx - 5, cy - 5);
-          c.lineTo(cx + 5, cy + 5);
-          c.moveTo(cx + 5, cy - 5);
-          c.lineTo(cx - 5, cy + 5);
-          c.stroke();
-        }
+        if (room - (after - left) > 40) c.fillText(fit(c, this.subtitle, room - (after - left)), after, TITLE / 2 + 1);
+        if (this.spec.onClose) drawClose(c, close);
         // The search field.
         c.beginPath();
         c.roundRect(field.x + 0.5, field.y + 0.5, field.width - 1, field.height - 1, 6);

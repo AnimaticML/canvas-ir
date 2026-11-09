@@ -6,6 +6,7 @@
 // hover. The wheel over the chart zooms its time axis and a drag pans it;
 // zooming the board changes the detail too.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type Rect, type Scene, VirtualGroup } from "canvas-ir";
+import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
 import { WheelGesture } from "./wheel";
 
 export const POINTS_ID = "ten-million";
@@ -101,6 +102,8 @@ interface FrameState {
 }
 
 export interface PointsHost {
+  /** Called once the window was closed. */
+  readonly closed?: () => void;
   readonly components: () => Components;
   /** The board's zoom: screen pixels per world unit. */
   readonly zoom: () => number;
@@ -153,6 +156,16 @@ export class TenMillionPoints {
 
   get alive(): boolean {
     return this.scene.getGroup(POINTS_ID) !== undefined;
+  }
+
+  /** Takes the window off the board. */
+  close(): void {
+    for (const off of this.unlisten) off();
+    this.unlisten = [];
+    this.host.components().unmount(`${POINTS_ID}:frame`);
+    if (this.alive) this.scene.remove(POINTS_ID);
+    this.host.render();
+    this.host.closed?.();
   }
 
   get bounds(): { x: number; y: number; width: number; height: number } {
@@ -363,7 +376,8 @@ export class TenMillionPoints {
         c.textBaseline = "middle";
         c.font = `600 15px ${FONT}`;
         c.fillStyle = "#0f172a";
-        c.fillText("Ten million points: a year of readings", 14, TITLE / 2);
+        c.fillText("Ten million points: a year of readings", TITLE_LEFT, TITLE / 2);
+        drawClose(c, closeBox(TITLE), false);
         c.font = `12px ${FONT}`;
         c.fillStyle = "#64748b";
         c.textAlign = "right";
@@ -375,6 +389,15 @@ export class TenMillionPoints {
           c.fillText(`${v}°`, LEFT - 8, y);
         }
         c.textAlign = "left";
+      },
+      on: {
+        click: (e) => {
+          if (inBox({ x: e.point.x - this.x, y: e.point.y - this.y }, closeBox(TITLE))) {
+            e.stopPropagation();
+            this.close();
+            return;
+          }
+        },
       },
     };
   }

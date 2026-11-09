@@ -1,9 +1,10 @@
-// The playground's features as icons scattered over the board: each is a tile
-// with a small drawing of what it adds, and pressing it adds that next to it.
+// The playground's demos as icons scattered over the board, as on a desktop:
+// each is a tile with a small drawing of its demo, and pressing it opens the
+// demo's window next to it, or closes it when it's open.
 // They are components on the cards' layer, so they zoom with the board but
 // are never part of the drawing.
 import type { ComponentSpec, RecordingContext } from "canvas-ir";
-import { FONT, type Palette, wrap } from "./kit";
+import { FONT, type Palette } from "./kit";
 
 /** A tile's side in world units; what it adds goes this far right of its left edge, and a gap more. */
 export const ICON = 150;
@@ -44,8 +45,8 @@ export interface Feature {
   readonly y: number;
   /** A slight turn, in degrees, so the tiles look scattered rather than laid out. */
   readonly tilt: number;
-  /** A line or two under the name saying what it shows. */
-  readonly about?: string;
+  /** Whether its window is open now; an icon without one is an action, such as picking a file. */
+  readonly open?: () => boolean;
   readonly onClick: () => void;
 }
 
@@ -89,7 +90,7 @@ export const featureIcon = (f: Feature, colors: () => Palette): ComponentSpec<nu
     id: `feature-${f.id}`,
     state: null,
     transform: { a: c0, b: s0, c: -s0, d: c0, e: cx - c0 * cx + s0 * cy, f: cy - s0 * cx - c0 * cy },
-    meta: { role: "button", label: `Add ${f.name}` },
+    meta: { role: "button", label: f.open ? `Open or close ${f.name}` : f.name },
     cursor: "pointer",
     draw: (c, _, ui) => {
       const k = colors();
@@ -118,10 +119,12 @@ export const featureIcon = (f: Feature, colors: () => Palette): ComponentSpec<nu
       c.fillStyle = INK;
       // The board stays light in dark mode, so the label keeps dark ink.
       c.fillText(f.name, ICON / 2, ICON + 12);
-      if (f.about) {
-        c.font = `16px ${FONT}`;
-        c.fillStyle = "#475569";
-        wrap(c, f.about, ICON + 70).forEach((line, i) => c.fillText(line, ICON / 2, ICON + 44 + i * 21));
+      // An open window shows as a dot under its icon's name, as a dock does.
+      if (f.open?.()) {
+        c.beginPath();
+        c.arc(ICON / 2, ICON + 52, 5, 0, Math.PI * 2);
+        c.fillStyle = k.accent;
+        c.fill();
       }
       c.textAlign = "start";
     },

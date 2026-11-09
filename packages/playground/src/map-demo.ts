@@ -10,6 +10,7 @@
 // time, and pins them; a click on a pin reads its article in a panel over
 // the map's right side, whose links open more articles and fly to them.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
+import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
 import worldUrl from "./map/world.bin" with { type: "file" };
 import { fit } from "./ui/kit";
 import { WheelGesture } from "./wheel";
@@ -148,6 +149,8 @@ interface FrameState {
 }
 
 export interface MapHost {
+  /** Called once the window was closed. */
+  readonly closed?: () => void;
   readonly components: () => Components;
   /** The board's zoom: screen pixels per world unit. */
   readonly zoom: () => number;
@@ -258,6 +261,19 @@ export class WorldMap {
 
   get alive(): boolean {
     return this.scene.getGroup(MAP_ID) !== undefined;
+  }
+
+  /** Takes the window off the board. */
+  close(): void {
+    for (const off of this.unlisten) off();
+    this.unlisten = [];
+    this.land();
+    this.panel?.close();
+    this.panel = null;
+    this.host.components().unmount(`${MAP_ID}:frame`);
+    if (this.alive) this.scene.remove(MAP_ID);
+    this.host.render();
+    this.host.closed?.();
   }
 
   get bounds(): { x: number; y: number; width: number; height: number } {
@@ -1103,8 +1119,9 @@ export class WorldMap {
         c.font = `600 15px ${FONT}`;
         c.fillStyle = "#0f172a";
         const title = "A world map, made with Natural Earth and Wikipedia";
-        c.fillText(title, 14, TITLE / 2);
-        const room = button.x - 14 - (14 + c.measureText(title).width + 24);
+        c.fillText(title, TITLE_LEFT, TITLE / 2);
+        drawClose(c, closeBox(TITLE), false);
+        const room = button.x - 14 - (TITLE_LEFT + c.measureText(title).width + 24);
         c.font = `12px ${FONT}`;
         c.fillStyle = "#64748b";
         c.textAlign = "right";
@@ -1120,6 +1137,11 @@ export class WorldMap {
       },
       on: {
         click: (e) => {
+          if (inBox({ x: e.point.x - this.x, y: e.point.y - this.y }, closeBox(TITLE))) {
+            e.stopPropagation();
+            this.close();
+            return;
+          }
           const px = e.point.x - this.x;
           const py = e.point.y - this.y;
           if (px < button.x || px > button.x + button.width || py < button.y || py > button.y + button.height) return;

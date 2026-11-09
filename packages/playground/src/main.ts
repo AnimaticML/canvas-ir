@@ -45,7 +45,7 @@ import { BOOK_AT, BOOK_ID, warAndPeace } from "./book-demo";
 import { DECLARATION_AT, DECLARATION_ID, declaration } from "./declaration-demo";
 import { Reader } from "./reader";
 import { type ToolName, Tools } from "./tools";
-import { type ControlHooks, type LiveSpec, type Sample, initialSamples, samples } from "./samples";
+import { type ControlHooks, type LiveSpec, type Sample, samples } from "./samples";
 import { Chrome, type Settings } from "./ui/chrome";
 import { type Feature, ICON_REACH, featureIcon } from "./ui/features";
 import { CardLayer } from "./ui/cards";
@@ -845,7 +845,7 @@ const copies = new Map<string, number>();
  * recorder, then the sample is drawn after it. Added from an icon, it is
  * moved to the right of `near`, as a drag would move it.
  */
-const add = async (sample: Sample, near?: { x: number; y: number }): Promise<void> => {
+const add = async (sample: Sample, near?: { x: number; y: number }): Promise<string[]> => {
   const recorder = new RecordingContext(recorderOptions);
   const before = scene.document.ops;
   replayDocument(recorder, scene.document, { images: (src) => images.get(src) });
@@ -886,6 +886,7 @@ const add = async (sample: Sample, near?: { x: number; y: number }): Promise<voi
   for (const spec of drawn?.components ?? []) components!.mount(spec);
   log(`added ${sample.name}; the board has ${scene.document.ops.length} ops`);
   const added = scene.document.ops.slice(before.length).map((op) => op.id);
+  const outer = [...new Set(added.map((op) => scene.groupChain(op).at(-1) ?? op))];
   let box = boxOf(added);
   if (near && box) {
     const n = copies.get(sample.name) ?? 0;
@@ -893,7 +894,7 @@ const add = async (sample: Sample, near?: { x: number; y: number }): Promise<voi
     const dx = near.x + ICON_REACH + n * 36 - box.x;
     const dy = near.y + n * 36 - box.y;
     // Each new outermost group moves as one, with what is laid out against it.
-    for (const id of new Set(added.map((op) => scene.groupChain(op).at(-1) ?? op))) {
+    for (const id of outer) {
       components!.move(id, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
       followMove(id, dx, dy);
     }
@@ -901,6 +902,7 @@ const add = async (sample: Sample, near?: { x: number; y: number }): Promise<voi
   }
   render();
   if (box && !initial) reveal(box);
+  return outer;
 };
 
 /** The world box around some ops. */
@@ -1203,25 +1205,25 @@ stage.addEventListener("drop", (e) => {
 
 // A million rows: a table whose body records only the rows that show.
 const tableDemo = (): void => {
-  if (!table?.alive) table = new MillionRows(scene, router, { components: () => components!, render: () => render(), log });
+  if (!table?.alive) table = new MillionRows(scene, router, { components: () => components!, render: () => render(), log, closed: refreshIcons });
   reveal(table.bounds);
 };
 
 // Ten million points: a chart whose plot draws a bar per pixel, a line or dots, by how many readings share a pixel.
 const pointsDemo = (): void => {
-  if (!points?.alive) points = new TenMillionPoints(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log });
+  if (!points?.alive) points = new TenMillionPoints(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, closed: refreshIcons });
   reveal(points.bounds);
 };
 
 // Stars and planets: a galaxy made region by region as you look, from the whole of it down to a planet's face.
 const galaxyDemo = (): void => {
-  if (!galaxy?.alive) galaxy = new StarsAndPlanets(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, recorder: { ...recorderOptions, captureSource: false } });
+  if (!galaxy?.alive) galaxy = new StarsAndPlanets(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, closed: refreshIcons, recorder: { ...recorderOptions, captureSource: false } });
   reveal(galaxy.bounds);
 };
 
 // A world map of real data, from Natural Earth: tiles at four levels of detail, read as they come into view, and Wikipedia's articles about the places in view.
 const mapDemo = (): void => {
-  if (!worldMap?.alive) worldMap = new WorldMap(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, recorder: { ...recorderOptions, captureSource: false }, reader: readerHost });
+  if (!worldMap?.alive) worldMap = new WorldMap(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, closed: refreshIcons, recorder: { ...recorderOptions, captureSource: false }, reader: readerHost });
   reveal(worldMap.bounds);
 };
 
@@ -1238,48 +1240,111 @@ const readerHost = () => ({
   recorder: { ...recorderOptions, captureSource: false },
 });
 const bookDemo = (): void => {
-  if (!book?.alive) book = new Reader(scene, router, readerHost(), warAndPeace);
+  if (!book?.alive) book = new Reader(scene, router, readerHost(), { ...warAndPeace, onClose: () => closeReader(book) });
   reveal(book.bounds);
 };
 const declarationDemo = (): void => {
-  if (!rights?.alive) rights = new Reader(scene, router, readerHost(), declaration);
+  if (!rights?.alive) rights = new Reader(scene, router, readerHost(), { ...declaration, onClose: () => closeReader(rights) });
   reveal(rights.bounds);
 };
 
-// Every feature is an icon somewhere on the board; what it adds goes to its right.
+const closeReader = (reader: Reader | null): void => {
+  reader?.close();
+  refreshIcons();
+};
+
+// Closing a demo takes its window, and whatever runs it, off the board.
+const closePelican = (): void => {
+  stopRiding();
+  components!.unmount("pelican-ride");
+  if (scene.getGroup(PELICAN_ID)) scene.remove(PELICAN_ID);
+};
+const closePhysics = (): void => {
+  components!.unmount("physics-drop");
+  if (scene.getGroup(PHYSICS_ID)) scene.remove(PHYSICS_ID);
+  sandbox = null;
+};
+const closeGraph = (): void => {
+  graph?.stop();
+  graph = null;
+  components!.unmount("graph-shake");
+  if (scene.getGroup(GRAPH_ID)) scene.remove(GRAPH_ID);
+};
+const closeMorph = (): void => {
+  for (const spec of morphControls(morphTo, (id) => components?.get(id))) components!.unmount(spec.id);
+  if (scene.getGroup(MORPH_ID)) scene.remove(MORPH_ID);
+};
+/** The ten thousand shapes' outermost ops and groups, while they're on the board. */
+let field: string[] = [];
+const fieldOpen = (): boolean => field.some((id) => scene.get(id) !== undefined || scene.getGroup(id) !== undefined);
+
+// Every demo is an icon on the board, as on a desktop: pressing it opens the demo's window to its right, and pressing it again closes it.
 const DEMO = (at: { x: number; y: number }) => ({ x: at.x - ICON_REACH, y: at.y });
-const sampleNamed = (name: string): Sample => samples.find((sample) => sample.name === name)!;
+const toggle = (open: () => boolean, show: () => void, hide: () => void) => ({
+  open,
+  onClick: () => {
+    if (open()) {
+      hide();
+      log("closed it");
+    } else show();
+    refreshIcons();
+    render();
+  },
+});
 const features: Feature[] = [
-  { id: "pelican", name: "Pelican", glyph: "pelican", ...DEMO(PELICAN_AT), tilt: -6, about: "Eight drawn poses per pedal turn, morphed into every frame between.", onClick: pelicanDemo },
-  { id: "physics", name: "Physics", glyph: "physics", ...DEMO(PHYSICS_AT), tilt: 5, about: "Crates, balls and stars drawn as canvas code and thrown by a physics engine.", onClick: physicsDemo },
-  { id: "graph", name: "Graph", glyph: "graph", ...DEMO(GRAPH_AT), tilt: -4, about: "A force-directed graph: each node is a group moved by a live transform.", onClick: graphDemo },
-  { id: "morph", name: "Morph", glyph: "morph", ...DEMO(MORPH_AT), tilt: 7, about: "Day and night drawn separately; parts pair up by name and morph.", onClick: morphDemo },
-  { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, about: "A painting split into numbered regions to fill in, color by color.", onClick: () => showPaint(paintingSource()) },
-  { id: "table", name: "A million rows", glyph: "table", ...DEMO(TABLE_AT), tilt: -3, about: "A million rows: only the rows in view are ever recorded.", onClick: tableDemo },
-  { id: "points", name: "Ten million points", glyph: "points", ...DEMO(POINTS_AT), tilt: 5, about: "A year of readings every 3 seconds, drawn at the detail a pixel needs.", onClick: pointsDemo },
-  { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...DEMO(GALAXY_AT), tilt: -4, about: "Billions of stars, made region by region as you zoom down to a planet.", onClick: galaxyDemo },
-  { id: "map", name: "World map", glyph: "map", ...DEMO(MAP_AT), tilt: 3, about: "Countries, rivers and roads, with Wikipedia's articles about the places in view.", onClick: mapDemo },
-  { id: "book", name: "War and Peace", glyph: "book", ...DEMO(BOOK_AT), tilt: -5, about: "All of War and Peace to read, search, select and copy.", onClick: bookDemo },
-  { id: "declaration", name: "Human rights in 529 languages", glyph: "languages", ...DEMO(DECLARATION_AT), tilt: 4, about: "The same reader over 41 scripts, right to left included.", onClick: declarationDemo },
-  { id: "picture", name: "Paint my image…", glyph: "picture", x: PAINT_AT.x - ICON_REACH, y: PAINT_AT.y + 300, tilt: 4, about: "Your own photo, turned into regions to paint.", onClick: () => pictureInput.click() },
-  ...(
-    [
-      ["Badge", "badge", -650, -720, 6, "An SVG file drawn through canvg into the same ops as everything else."],
-      ["Chart", "chart", 0, -780, -7, "An SVG chart: its bars are shapes you can select and drag."],
-      ["Star", "star", 800, -700, 9, "An SVG star. Press its icon again for another copy."],
-      ["Text block", "text", 1300, -760, -3, "Rich text laid out by CanvasIR, with links that light up on hover."],
-      ["Text around shapes", "wrap", 2050, -720, 5, "Drag the shape or the sticker and every line is laid out again."],
-      ["Text in a circle", "circle", 2800, -760, -6, "Text that fills a circle instead of a box."],
-      ["Canvas shapes", "shapes", 2650, 40, 4, "Plain canvas calls: gradients, dashes and curves, recorded as ops."],
-      ["Controls", "controls", 1700, 560, -8, "A knob, a slider and a button built as components. They change the wrapped text."],
-      ["Chart.js chart", "chartjs", 2650, 620, 6, "Chart.js drawing into the recorder as if it were a canvas."],
-      ["D3 chart", "d3", 2300, 1080, -5, "D3's shape generators with the recorder as their context."],
-      ["HTML and 3D", "embed", 1000, 1900, 3, "A form and a WebGL cube showing through holes in the drawing."],
-      ["10,000 shapes", "many", 2000, 1850, -4, "Ten thousand objects, to see what a frame redraws."],
-    ] as const
-  ).map(([name, glyph, x, y, tilt, about]): Feature => ({ id: glyph, name, glyph, x, y, tilt, about, onClick: () => void add(sampleNamed(name), { x, y }) })),
+  { id: "pelican", name: "Pelican", glyph: "pelican", ...DEMO(PELICAN_AT), tilt: -6, ...toggle(() => scene.getGroup(PELICAN_ID) !== undefined, pelicanDemo, closePelican) },
+  { id: "physics", name: "Physics", glyph: "physics", ...DEMO(PHYSICS_AT), tilt: 5, ...toggle(() => scene.getGroup(PHYSICS_ID) !== undefined, physicsDemo, closePhysics) },
+  { id: "graph", name: "Graph", glyph: "graph", ...DEMO(GRAPH_AT), tilt: -4, ...toggle(() => scene.getGroup(GRAPH_ID) !== undefined, graphDemo, closeGraph) },
+  { id: "morph", name: "Morph", glyph: "morph", ...DEMO(MORPH_AT), tilt: 7, ...toggle(() => scene.getGroup(MORPH_ID) !== undefined, morphDemo, closeMorph) },
+  { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, ...toggle(() => components?.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), () => components!.unmount(PAINT_ID)) },
+  { id: "table", name: "A million rows", glyph: "table", ...DEMO(TABLE_AT), tilt: -3, ...toggle(() => table?.alive === true, tableDemo, () => table?.close()) },
+  { id: "points", name: "Ten million points", glyph: "points", ...DEMO(POINTS_AT), tilt: 5, ...toggle(() => points?.alive === true, pointsDemo, () => points?.close()) },
+  { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...DEMO(GALAXY_AT), tilt: -4, ...toggle(() => galaxy?.alive === true, galaxyDemo, () => galaxy?.close()) },
+  { id: "map", name: "World map", glyph: "map", ...DEMO(MAP_AT), tilt: 3, ...toggle(() => worldMap?.alive === true, mapDemo, () => worldMap?.close()) },
+  { id: "book", name: "War and Peace", glyph: "book", ...DEMO(BOOK_AT), tilt: -5, ...toggle(() => book?.alive === true, bookDemo, () => book?.close()) },
+  { id: "declaration", name: "Human rights in 529 languages", glyph: "languages", ...DEMO(DECLARATION_AT), tilt: 4, ...toggle(() => rights?.alive === true, declarationDemo, () => rights?.close()) },
+  { id: "picture", name: "Paint my image…", glyph: "picture", x: PAINT_AT.x - ICON_REACH, y: PAINT_AT.y + 240, tilt: 4, onClick: () => pictureInput.click() },
+  {
+    id: "many",
+    name: "10,000 shapes",
+    glyph: "many",
+    x: 2000,
+    y: 1850,
+    tilt: -4,
+    ...toggle(
+      fieldOpen,
+      () => void add(sampleNamed("10,000 shapes"), { x: 2000, y: 1850 }).then((ids) => {
+        field = ids;
+        refreshIcons();
+      }),
+      () => {
+        for (const id of field) if (scene.get(id) !== undefined || scene.getGroup(id) !== undefined) scene.remove(id);
+        field = [];
+      },
+    ),
+  },
 ];
 for (const f of features) cards.components.mount(featureIcon(f, () => cards.colors));
+/** Draws the icons again, so each shows whether its window is open. */
+function refreshIcons(): void {
+  for (const f of features) cards.components.get(`feature-${f.id}`)?.redraw();
+}
+
+// Drawings, text and graphics need no icon: they are on the board from the start and explain themselves.
+const sampleNamed = (name: string): Sample => samples.find((sample) => sample.name === name)!;
+const CONTENT: readonly (readonly [string, number, number])[] = [
+  ["Badge", -650, -720],
+  ["Chart", 0, -780],
+  ["Star", 800, -700],
+  ["Text block", 1300, -760],
+  ["Text around shapes", 2050, -720],
+  ["Text in a circle", 2800, -760],
+  ["Canvas shapes", 2650, 40],
+  ["Controls", 1700, 560],
+  ["Chart.js chart", 2650, 620],
+  ["D3 chart", 2300, 1080],
+  ["HTML and 3D", 1000, 1900],
+];
 
 // The controls: the playground and inspector cards.
 chrome = new Chrome(cards, {
@@ -1313,10 +1378,6 @@ chrome.setText("log", logLines.join("\n"));
 chrome.setText("a11y", a11yText);
 showSelection();
 
-// The basic showcases are on the board from the start, each beside its icon, which says what it shows.
-for (const sample of initialSamples) {
-  const f = features.find((f) => f.name === sample.name);
-  await add(sample, f && { x: f.x, y: f.y });
-}
+for (const [name, x, y] of CONTENT) await add(sampleNamed(name), { x, y });
 initial = false;
 setView(home());

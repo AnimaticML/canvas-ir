@@ -4,6 +4,7 @@
 // made from its row number, and sorting keeps an order of row numbers. Cells
 // are selected as a spreadsheet's are, and copied as tab-separated text.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RouterEvent, type Scene, VirtualGroup } from "canvas-ir";
+import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
 
 export const TABLE_ID = "million-rows";
 export const TABLE_AT = { x: 1200, y: 2500 };
@@ -115,6 +116,8 @@ interface FrameState {
 }
 
 export interface TableHost {
+  /** Called once the window was closed. */
+  readonly closed?: () => void;
   readonly components: () => Components;
   readonly render: () => void;
   readonly log: (line: string) => void;
@@ -162,6 +165,16 @@ export class MillionRows {
   }
 
   /** The table's box on the board. */
+  /** Takes the window off the board. */
+  close(): void {
+    for (const off of this.unlisten) off();
+    this.unlisten = [];
+    this.host.components().unmount(`${TABLE_ID}:frame`);
+    if (this.alive) this.scene.remove(TABLE_ID);
+    this.host.render();
+    this.host.closed?.();
+  }
+
   get bounds(): { x: number; y: number; width: number; height: number } {
     return { x: this.x, y: this.y, width: WIDTH + 14, height: TITLE + HEADER + BODY };
   }
@@ -389,7 +402,8 @@ export class MillionRows {
         c.font = "600 15px system-ui, sans-serif";
         c.fillStyle = "#0f172a";
         c.textBaseline = "middle";
-        c.fillText("A million rows", 14, TITLE / 2);
+        c.fillText("A million rows", TITLE_LEFT, TITLE / 2);
+        drawClose(c, closeBox(TITLE), false);
         c.font = "12px system-ui, sans-serif";
         c.fillStyle = "#64748b";
         c.textAlign = "right";
@@ -422,6 +436,11 @@ export class MillionRows {
       },
       on: {
         click: (e) => {
+          if (inBox({ x: e.point.x - this.x, y: e.point.y - this.y }, closeBox(TITLE))) {
+            e.stopPropagation();
+            this.close();
+            return;
+          }
           const column = e.path.map((id) => this.scene.getGroup(id)?.meta?.["column"]).find((k) => k !== undefined);
           if (typeof column !== "string") return;
           e.stopPropagation();

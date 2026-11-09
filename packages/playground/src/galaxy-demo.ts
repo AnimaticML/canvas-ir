@@ -10,6 +10,7 @@
 // position as a whole light year plus a fraction and everything is drawn
 // relative to it: the board's own float coordinates would run out long before.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
+import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
 import { WheelGesture } from "./wheel";
 
 export const GALAXY_ID = "galaxy";
@@ -203,6 +204,8 @@ interface FrameState {
 }
 
 export interface GalaxyHost {
+  /** Called once the window was closed. */
+  readonly closed?: () => void;
   readonly components: () => Components;
   /** The board's zoom: screen pixels per world unit. */
   readonly zoom: () => number;
@@ -260,6 +263,17 @@ export class StarsAndPlanets {
 
   get alive(): boolean {
     return this.scene.getGroup(GALAXY_ID) !== undefined;
+  }
+
+  /** Takes the window off the board. */
+  close(): void {
+    for (const off of this.unlisten) off();
+    this.unlisten = [];
+    this.land();
+    this.host.components().unmount(`${GALAXY_ID}:frame`);
+    if (this.alive) this.scene.remove(GALAXY_ID);
+    this.host.render();
+    this.host.closed?.();
   }
 
   get bounds(): { x: number; y: number; width: number; height: number } {
@@ -744,7 +758,8 @@ export class StarsAndPlanets {
         c.textBaseline = "middle";
         c.font = `600 15px ${FONT}`;
         c.fillStyle = "#f1f5f9";
-        c.fillText(`Stars and planets: a galaxy of ${(this.total / 1e9).toFixed(1)} billion stars`, 14, TITLE / 2);
+        c.fillText(`Stars and planets: a galaxy of ${(this.total / 1e9).toFixed(1)} billion stars`, TITLE_LEFT, TITLE / 2);
+        drawClose(c, closeBox(TITLE), true);
         c.font = `12px ${FONT}`;
         c.fillStyle = "#94a3b8";
         c.textAlign = "right";
@@ -760,6 +775,11 @@ export class StarsAndPlanets {
       },
       on: {
         click: (e) => {
+          if (inBox({ x: e.point.x - this.x, y: e.point.y - this.y }, closeBox(TITLE))) {
+            e.stopPropagation();
+            this.close();
+            return;
+          }
           const px = e.point.x - this.x;
           const py = e.point.y - this.y;
           if (px < button.x || px > button.x + button.width || py < button.y || py > button.y + button.height) return;
