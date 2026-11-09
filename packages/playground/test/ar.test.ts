@@ -175,3 +175,21 @@ describe("tracking with imperfect real marker maps",()=>{
     expect(joint.inliers).toBe(8);
   });
 });
+
+test("hand reprojection acceptance is invariant to camera image rotation",()=>{
+  const source=realHand as import("@mediapipe/tasks-vision").HandLandmarkerResult;
+  const rotated={landmarks:source.landmarks.map(ps=>ps.map(p=>({...p,x:1-p.y,y:p.x}))),worldLandmarks:source.worldLandmarks.map(ps=>ps.map(p=>({...p,x:-p.y,y:p.x}))),handedness:source.handedness};
+  const p:Pose={r:[0,0,-1,1,0,0,0,-1,0],t:[0,0,.6]};
+  const portrait={...k,width:k.height,height:k.width,cx:k.height-k.cy,cy:k.cx};
+  const normal=new HandTracking().update(source,overhead,k,vision,0),turned=new HandTracking().update(rotated,p,portrait,vision,0);
+  expect(normal.points).not.toBeNull();expect(turned.points).not.toBeNull();expect(turned.error!).toBeCloseTo(normal.error!,4);
+});
+
+test("a late third marker can join without changing existing map coordinates",()=>{
+  const map=new MarkerMap(.03),a=markerCorners(.03),b=markerCorners(.03,[.12,0,0]),c=markerCorners(.03,[0,0,-.15]);
+  for(let i=0;i<12;i++)map.update([observed(0,a),observed(1,b)],vision,k);
+  expect(map.markers.size).toBe(2);const before=JSON.stringify([...map.markers]);
+  for(let i=0;i<12;i++)map.update([observed(1,b),observed(2,c)],vision,k);
+  expect(map.markers.size).toBe(3);expect(JSON.stringify([...map.markers].slice(0,2))).toBe(before);
+  const restored=map.update([observed(2,c)],vision,k)!;expect(restored.markerIds).toEqual([2]);expect(restored.error).toBeLessThan(.01);
+});

@@ -12,7 +12,7 @@ import type { MarkerMap } from "../src/ar/vision";
 declare global { interface Window { canvasIrAR: { scene: ARScene; map: MarkerMap; hand: import("../src/ar/hand").HandTracking; trace: unknown[];
   replayHand: (result: import("@mediapipe/tasks-vision").HandLandmarkerResult,now:number)=>void;
   analyzeHand: (source:HTMLCanvasElement)=>Promise<import("@mediapipe/tasks-vision").HandLandmarkerResult>;
-  snapshot: () => { running:boolean; pose:Pose; intrinsics:ReturnType<typeof intrinsics>; tableReady:boolean; usedIds:number[]; hand:import("../src/ar/hand").HandEstimate|null; interaction:import("../src/ar/scene").InteractionResult|null }
+  snapshot: () => { running:boolean; pose:Pose; intrinsics:ReturnType<typeof intrinsics>; tableReady:boolean; usedIds:number[]; hand:import("../src/ar/hand").HandEstimate|null; interaction:import("../src/ar/scene").InteractionResult|null;handRuntime:{active:"GPU"|"CPU"|null;requested:string;fallbackReason:string|null} }
 } } }
 const assert = (condition: unknown, message: string): void => { if (!condition) throw new Error(message); console.log("✓", message); };
 const temporary = await mkdtemp(join(tmpdir(), "canvas-ir-ar-"));
@@ -55,7 +55,7 @@ const server = Bun.serve({hostname:"127.0.0.1",port:0,async fetch(request){
   const file=Bun.file(path);return await file.exists()?new Response(file):new Response("Not found",{status:404});
 }});
 const browser = await chromium.launch({ ...(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH}:{}), headless:true,
-  args:["--no-sandbox","--use-fake-ui-for-media-stream","--use-fake-device-for-media-stream",`--use-file-for-fake-video-capture=${videoPath}`] });
+  args:["--no-sandbox","--enable-unsafe-swiftshader","--use-fake-ui-for-media-stream","--use-fake-device-for-media-stream",`--use-file-for-fake-video-capture=${videoPath}`] });
 const errors: string[] = [];
 const page = await browser.newPage({viewport:{width:1360,height:1000},permissions:["camera"]});
 page.on("pageerror", e=>errors.push(e.message));
@@ -65,6 +65,9 @@ const waitReady = async (page: Page): Promise<void> => {
 try {
   await page.goto(`http://127.0.0.1:${server.port}/ar.html`); await waitReady(page);
   await page.locator("#markers").click(); assert(await page.locator("#marker-sheet canvas").count()===3,"three printable codes");await page.locator("#close-markers").click();
+  assert(await page.locator("#size").inputValue()==="3","notebook 6×6 cells defaults to a 3 cm outer marker side");
+  // This video fixture uses 6 cm printed markers; use their actual physical size.
+  await page.locator("#menu").click();await page.locator("#size").fill("6");await page.locator("#close-settings").click();
   await page.locator("#start").click();
   await page.waitForFunction(()=>window.canvasIrAR.snapshot().tableReady&&window.canvasIrAR.snapshot().usedIds.length===3,null,{timeout:15000});
   const identity=await page.evaluate(()=>{const ar=window.canvasIrAR,old=(window as unknown as {canvasIrBabylon:{scene:unknown;things:unknown}}).canvasIrBabylon;return{sameScene:old.scene===ar.scene.scene,sameThings:old.things===ar.scene.original.things,ids:[...ar.scene.original.things.keys()],center:ar.scene.layout.center,used:ar.snapshot().usedIds};});
@@ -84,9 +87,13 @@ try {
     });
   });
   assert(projection.every(v=>v<.1),`original LH scene projects into RH table correctly: ${projection}`);
-  await page.screenshot({path:join(temporary,"tracked.png")});
   // Reproduce "one visible marker works, three visible markers blank out":
   // corrupt only the learned map, while the real camera still sees all three.
+  // GPU shader warm-up can outlast the first fixture phase on a software
+  // WebGL runner. Start the fault injection on a fresh all-markers phase.
+  await page.waitForFunction(()=>window.canvasIrAR.trace.some((e:any)=>e.kind==="frame"&&e.data.timing?.handModelMs>0),null,{timeout:60000});
+  await page.waitForFunction(()=>window.canvasIrAR.snapshot().usedIds.length===3&&(document.querySelector<HTMLVideoElement>("#video")!.currentTime%14)<3.5,null,{timeout:30000});
+  await page.screenshot({path:join(temporary,"tracked.png")});
   const savedMap=await page.evaluate(()=>[...window.canvasIrAR.map.markers]);
   await page.evaluate(()=>{
     const map=window.canvasIrAR.map.markers;
@@ -111,6 +118,8 @@ try {
     const result=await window.canvasIrAR.analyzeHand(canvas);(window as unknown as {arActualHand:typeof result}).arActualHand=result;
     return {count:result.landmarks.length,estimate:window.canvasIrAR.snapshot().hand};
   });
+  const backend=await page.evaluate(()=>window.canvasIrAR.snapshot().handRuntime);
+  assert(backend.active==="GPU"||backend.active==="CPU"&&backend.fallbackReason!==null,`GPU attempted; actual hand backend: ${JSON.stringify(backend)}`);
   assert(detected.count===1,`real MediaPipe detects the official photo fixture (${detected.count} hand)`);
   const actualRaw=await page.evaluate(()=>(window as unknown as {arActualHand:unknown}).arActualHand);await Bun.write(join(temporary,"actual-landmarks.json"),JSON.stringify(actualRaw));
   assert(detected.estimate?.points,`real MediaPipe geometry accepted: ${JSON.stringify({reason:detected.estimate?.reason,error:detected.estimate?.error,method:detected.estimate?.method})}`);

@@ -1,7 +1,9 @@
-import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from "@mediapipe/tasks-vision";
+import { type HandLandmarkerResult } from "@mediapipe/tasks-vision";
 import { intrinsics, type Intrinsics, type Pixel, type Pose, type V3 } from "./ar/geometry";
 import { MarkerMap, Vision, loadCV, type Fit, type Marker } from "./ar/vision";
 import { ARScene, smoothPose, type InteractionResult } from "./ar/scene";
+import { TraceBuffer } from "./ar/trace";
+import { HandRuntime } from "./ar/hand-runtime";
 import { HandTracking, type HandEstimate } from "./ar/hand";
 
 const el=<T extends HTMLElement=HTMLElement>(id:string):T=>document.getElementById(id) as T;
@@ -10,17 +12,21 @@ const input=(id:string):HTMLInputElement=>el<HTMLInputElement>(id);
 const anchor=():string=>el<HTMLSelectElement>("anchor").value;
 const notice=(message:string):void=>{el("notice").textContent=message;};
 const video=el<HTMLVideoElement>("video"),overlay=el<HTMLCanvasElement>("overlay"),ctx=overlay.getContext("2d")!;
+// Keep the model snapshot off the CPU-readback canvas. Both detectors still
+// consume exactly the same camera snapshot, not two independently advancing frames.
+const modelFrame=document.createElement("canvas"),modelPixels=modelFrame.getContext("2d")!;
 const processing=document.createElement("canvas"),pixels=processing.getContext("2d",{willReadFrequently:true})!;
-const map=new MarkerMap(.06),hand=new HandTracking();
-let vision:Vision|null=null,scene:ARScene|null=null,hands:HandLandmarker|null=null,handLoading:Promise<void>|null=null;
+const map=new MarkerMap(.03),hand=new HandTracking();
+let vision:Vision|null=null,scene:ARScene|null=null;
 let stream:MediaStream|null=null,running=false,starting=false,generation=0,frame=0,handEnabled=true;
-let k:Intrinsics|null=null,pose:Pose|null=null,lastFrame=0,lastVideo=-1,lastPose=0;
+let k:Intrinsics|null=null,pose:Pose|null=null,lastFrame=0,lastVideo=-1,lastPose=0,lastHandInference=0;
 let manual:Pixel[]=[],manualFit:Fit|null=null,tableReady=false,mapChanged=0,mapSize=0;
 let wasTracking=false;
 let lastHand:HandEstimate|null=null,lastAction:InteractionResult|null=null,lastStatus="",lastOutcome="";
 let found:Marker[]=[],usedIds:number[]=[],trackingError:number|null=null;
-const trace:{time:number;kind:string;data:unknown}[]=[];
-const record=(kind:string,data:unknown):void=>{trace.push({time:performance.now(),kind,data});if(trace.length>400)trace.shift();};
+const journal=new TraceBuffer(),trace=journal.recent;
+const record=(kind:string,data:unknown):void=>journal.append(kind,data);
+const hands=new HandRuntime((kind,data)=>{record(kind,data);const state=hands.snapshot();el("hand-backend").textContent=kind==="hands-gpu-fallback"?"GPU недоступен — включаю CPU…":kind==="hands-load-error"?"Руки недоступны":state.active?`Руки: ${state.active}${state.fallbackReason?" · GPU недоступен":""}`:"Загрузка рук…";});
 const skeleton=[[0,1,2,3,4],[0,5,6,7,8],[5,9,10,11,12],[9,13,14,15,16],[13,17,18,19,20],[0,17]];
 const outcome=(message:string):void=>{if(message===lastOutcome)return;lastOutcome=message;el("outcome").textContent=message;el("outcome").hidden=!message;};
 const reset=():void=>{
@@ -40,17 +46,7 @@ const stop=():void=>{
   ctx.clearRect(0,0,overlay.width,overlay.height);el("welcome").hidden=false;button("touch").hidden=true;
   button("start").disabled=!scene||!vision;outcome("");record("camera-stop",{});
 };
-const loadHands=():Promise<void>=>{
-  if(hands)return Promise.resolve();if(handLoading)return handLoading;
-  handLoading=(async()=>{
-    try {
-      const files=await FilesetResolver.forVisionTasks("./ar-vendor/mediapipe");
-      hands=await HandLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:"./ar-vendor/hand_landmarker.task",delegate:"CPU"},runningMode:"VIDEO",numHands:1,minHandDetectionConfidence:.55,minHandPresenceConfidence:.55,minTrackingConfidence:.55});
-      record("hands-ready",{});
-    } catch(error){record("hands-load-error",String(error));notice("Не удалось загрузить руки. Повторите включение в настройках.");}
-    finally{handLoading=null;}
-  })();return handLoading;
-};
+const loadHands=():Promise<void>=>hands.load().catch(()=>{notice("Не удалось загрузить руки. Повторите включение в настройках.");});
 button("start").onclick=async()=>{
   if(running||starting)return;
   if(!navigator.mediaDevices?.getUserMedia){notice("Для камеры откройте страницу через HTTPS.");return;}
@@ -59,26 +55,26 @@ button("start").onclick=async()=>{
     const incoming=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1280},height:{ideal:720}},audio:false});
     if(token!==generation){incoming.getTracks().forEach(t=>t.stop());return;}
     stream=incoming;video.srcObject=incoming;await video.play();if(token!==generation)return;
-    dimensions();running=true;starting=false;lastFrame=0;lastVideo=-1;reset();layout();el("welcome").hidden=true;
+    dimensions();running=true;starting=false;lastFrame=0;lastVideo=-1;lastHandInference=0;reset();layout();el("welcome").hidden=true;
     frame=requestAnimationFrame(tick);if(handEnabled)void loadHands();
     incoming.getVideoTracks()[0]!.addEventListener("ended",()=>{if(stream===incoming){stop();notice("Камера отключена. Откройте её снова.");}});
     record("camera-start",{width:video.videoWidth,height:video.videoHeight});
   }catch(error){if(token===generation){stop();notice(`Камера не открылась: ${String(error)}`);record("camera-error",String(error));}}
 };
-const dimensions=():void=>{const factor=Math.min(1,800/video.videoWidth),width=Math.round(video.videoWidth*factor),height=Math.round(video.videoHeight*factor);if(!width||!height)throw Error("Нет кадра камеры");overlay.width=processing.width=width;overlay.height=processing.height=height;k=intrinsics(width,height,Number(input("fov").value));};
+const dimensions=():void=>{const factor=Math.min(1,800/video.videoWidth),width=Math.round(video.videoWidth*factor),height=Math.round(video.videoHeight*factor);if(!width||!height)throw Error("Нет кадра камеры");overlay.width=processing.width=modelFrame.width=width;overlay.height=processing.height=modelFrame.height=height;k=intrinsics(width,height,Number(input("fov").value));};
 video.addEventListener("resize",()=>{if(!running)return;const ratio=video.videoWidth/video.videoHeight;if(k&&Math.abs(k.width/k.height-ratio)<.005)return;dimensions();reset();layout();});
 document.addEventListener("visibilitychange",()=>{if(document.hidden&&(running||starting)){stop();notice("Камера остановлена. Откройте её снова.");}});
-window.addEventListener("pagehide",()=>{stop();hands?.close();vision?.dispose();scene?.dispose();});
+window.addEventListener("pagehide",()=>{stop();hands.close();vision?.dispose();scene?.dispose();});
 button("stop").onclick=()=>{stop();el<HTMLDialogElement>("settings").close();notice("");};
 button("menu").onclick=()=>el<HTMLDialogElement>("settings").showModal();
 button("close-settings").onclick=()=>el<HTMLDialogElement>("settings").close();
 button("recalibrate").onclick=()=>{reset();el<HTMLDialogElement>("settings").close();};
 button("reset-objects").onclick=()=>{scene?.resetObjects();el<HTMLDialogElement>("settings").close();};
 button("hands").onclick=async()=>{handEnabled=!handEnabled;button("hands").textContent=handEnabled?"Выключить руки":"Включить руки";if(handEnabled)await loadHands();else{scene?.loseHand(true);lastHand=null;}button("touch").hidden=!handEnabled||!running||!tableReady;};
-input("size").onchange=()=>{if(!input("size").checkValidity())input("size").value="6";reset();};
+input("size").onchange=()=>{if(!input("size").checkValidity())input("size").value="3";reset();};
 input("fov").onchange=()=>{if(!input("fov").checkValidity())input("fov").value="60";if(k)k=intrinsics(k.width,k.height,Number(input("fov").value));reset();};
 el<HTMLSelectElement>("anchor").onchange=reset;
-const calibrate=():void=>{hand.calibrate(performance.now());lastStatus="";button("touch").hidden=false;notice("Держите указательный палец на столе около секунды.");record("calibration-start",{});};
+const calibrate=():void=>{journal.pinFor(6500);hand.calibrate(performance.now());lastStatus="";button("touch").hidden=false;notice("Держите указательный палец на столе около секунды.");record("calibration-start",{});};
 button("touch").onclick=calibrate;
 button("recalibrate-hand").onclick=()=>{el<HTMLDialogElement>("settings").close();if(running&&tableReady)calibrate();};
 overlay.addEventListener("pointerdown",event=>{
@@ -123,30 +119,58 @@ const drawHand=(points:Pixel[]):void=>{
   for(const chain of skeleton){ctx.beginPath();chain.forEach((id,i)=>{const p=points[id]!;if(i)ctx.lineTo(p.x,p.y);else ctx.moveTo(p.x,p.y);});ctx.stroke();}
   ctx.fillStyle="#ebfff7";for(const p of points){ctx.beginPath();ctx.arc(p.x,p.y,2,0,Math.PI*2);ctx.fill();}
 };
+const drawMarkerStates=():void=>{
+  ctx.font="15px system-ui";ctx.lineWidth=2;
+  const origin=map.markers.keys().next().value;
+  for(const marker of found){
+    const used=usedIds.includes(marker.id),known=map.markers.has(marker.id);
+    const decision=map.decisions.get(marker.id) as {reason?:string;samples?:number}|undefined;
+    const rejected=decision?.reason==="inconsistent-marker-size"||known&&!used;
+    const status=used?"в работе":known?"не использован":decision?.reason==="inconsistent-marker-size"?"геометрия не подходит":`добавляю ${Math.min(8,decision?.samples??0)}/8`;
+    const label=`ID ${marker.id}${marker.id===origin?" · начало":""} · ${status}`;
+    ctx.strokeStyle=used?"#72f2b5":rejected?"#ffae9c":"#ffe298";
+    ctx.beginPath();marker.pixels.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();
+    const x=Math.max(3,Math.min(overlay.width-ctx.measureText(label).width-9,marker.pixels[0]!.x));
+    const y=Math.max(22,marker.pixels[0]!.y-8);
+    ctx.fillStyle="#102029e8";ctx.fillRect(x-3,y-18,ctx.measureText(label).width+8,24);
+    ctx.fillStyle=ctx.strokeStyle;ctx.fillText(label,x,y);
+  }
+};
 const tick=(now:number):void=>{
   if(!running)return;frame=requestAnimationFrame(tick);
-  if(!k||!vision||!scene||video.readyState<2||video.currentTime===lastVideo||now-lastFrame<66)return;
+  if(!k||!vision||!scene||video.readyState<2||video.currentTime===lastVideo||now-lastFrame<33)return;
   const started=performance.now(),dt=lastFrame?(started-lastFrame)/1000:1/15;lastFrame=started;lastVideo=video.currentTime;
-  pixels.drawImage(video,0,0,k.width,k.height);ctx.clearRect(0,0,k.width,k.height);
+  const timing={snapshotMs:0,arucoMs:0,poseMs:0,handModelMs:0,handGeometryMs:0};
+  const gpuInput=hands.active==="GPU"&&handEnabled;
+  if(gpuInput){modelPixels.drawImage(video,0,0,k.width,k.height);pixels.drawImage(modelFrame,0,0,k.width,k.height);}
+  else pixels.drawImage(video,0,0,k.width,k.height);
+  ctx.clearRect(0,0,k.width,k.height);
+  timing.snapshotMs=performance.now()-started;
   try{
     let fit:Fit|null;
     if(anchor()==="aruco"){
-      found=vision.detect(pixels.getImageData(0,0,k.width,k.height));fit=map.update(found,vision,k);
+      const detectionStart=performance.now();found=vision.detect(pixels.getImageData(0,0,k.width,k.height));timing.arucoMs=performance.now()-detectionStart;
+      const poseStart=performance.now();fit=map.update(found,vision,k);timing.poseMs=performance.now()-poseStart;
       usedIds=fit?.markerIds??[];
       if(map.markers.size!==mapSize){mapSize=map.markers.size;mapChanged=started;record("map-marker-added",{ids:[...map.markers.keys()]});}
       if(!tableReady && mapSize>=2){
         scene.configure(map.markers);
-        if(mapSize>=3||started-mapChanged>1800){tableReady=true;map.learning=false;record("table-ready",{map:[...map.markers],layout:scene.layout});notice("Стол привязан. Покажите кисть над столом.");}
+        if(mapSize>=3||started-mapChanged>1800){tableReady=true;record("table-ready",{map:[...map.markers],layout:scene.layout});notice("Стол привязан. Покажите кисть над столом.");}
       }
-      // Before confirmation these outlines communicate only placement, not diagnostics.
-      if(!tableReady)for(const m of found){ctx.strokeStyle=map.markers.has(m.id)?"#a4f0d7":"#ffdb9b";ctx.lineWidth=2;ctx.beginPath();m.pixels.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();}
+      drawMarkerStates();
     }else{found=[];usedIds=[];fit=manualFit;manual.forEach(p=>{ctx.fillStyle="#a4f0d7";ctx.beginPath();ctx.arc(p.x,p.y,5,0,Math.PI*2);ctx.fill();});}
     trackingError=fit?.error??null;
     if(fit && tableReady){
       if(!wasTracking)notice(hand.metricScale===null?"Стол привязан. Покажите кисть над столом.":"");
       wasTracking=true;
       pose=smoothPose(started-lastPose>300?null:pose,fit.pose,dt,.045);scene.pose(pose,k);
-      if(hands&&handEnabled)applyHand(hands.detectForVideo(processing,started),started);
+      if(hands.active&&handEnabled){
+        const interval=hands.active==="GPU"?50:83;
+        if(started-lastHandInference>=interval){
+          lastHandInference=started;const modelStart=performance.now();const result=hands.detect(gpuInput?modelFrame:processing,started);timing.handModelMs=performance.now()-modelStart;
+          const geometryStart=performance.now();if(result)applyHand(result,started);else scene.loseHand();timing.handGeometryMs=performance.now()-geometryStart;
+        }else if(lastHand)drawHand(lastHand.pixels);
+      }
       else{scene.loseHand();button("touch").hidden=true;}
       lastPose=performance.now();
     }else if(tableReady && pose && started-lastPose<Math.max(400,Math.min(1000,dt*2200))){
@@ -157,11 +181,11 @@ const tick=(now:number):void=>{
       if(tableReady){notice(found.some(m=>map.markers.has(m.id))?"Маркеры видны. Уточняю привязку стола…":"Верните хотя бы один из привязанных маркеров в кадр.");outcome("");}
       else if(anchor()==="aruco")notice(mapSize<2?"Покажите вместе 2–3 разных маркера.":"Подержите телефон спокойно — привязываем стол.");
     }
-    record("frame",{observations:found,visibleIds:found.map(m=>m.id),mappedIds:[...map.markers.keys()],mapDecisions:[...map.decisions],usedIds,inliers:fit?.inliers??0,poseMode:fit?.mode??null,poseAgeMs:performance.now()-lastPose,poseError:trackingError,tableReady,trackingState:scene.enabled?(fit?"tracked":"coasting"):tableReady?"lost":"calibrating",processingMs:performance.now()-started,action:lastAction});
+    record("frame",{observations:found,visibleIds:found.map(m=>m.id),mappedIds:[...map.markers.keys()],mapDecisions:[...map.decisions],usedIds,inliers:fit?.inliers??0,poseMode:fit?.mode??null,poseAgeMs:performance.now()-lastPose,poseError:trackingError,tableReady,trackingState:scene.enabled?(fit?"tracked":"coasting"):tableReady?"lost":"calibrating",processingMs:performance.now()-started,timing,trackingIntervalMs:dt*1000,handRuntime:hands.snapshot(),render:{fps:scene.engine.getFps(),width:scene.engine.getRenderWidth(),height:scene.engine.getRenderHeight()},action:lastAction});
   }catch(error){record("processing-error",String(error));stop();notice("Обработка остановилась. Откройте камеру снова; запись проверки сохранена в настройках.");}
 };
 button("export").onclick=()=>{
-  const data={version:3,date:new Date().toISOString(),originalDemo:"startBabylon",intrinsics:k,map:[...map.markers],layout:scene?.layout,calibration:hand.snapshot(),events:trace};
+  const data={version:4,date:new Date().toISOString(),originalDemo:"startBabylon",visionRuntime:{backend:"WASM/CPU",gpu:false},markerSideCm:map.size*100,handRuntime:hands.snapshot(),intrinsics:k,map:[...map.markers],layout:scene?.layout,calibration:hand.snapshot(),events:journal.export()};
   const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="ar-interaction-trace.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
 const markerDialog=el<HTMLDialogElement>("marker-dialog");
@@ -174,7 +198,7 @@ void(async()=>{
   try{
     const [cv,s]=await Promise.all([loadCV(),ARScene.create(el<HTMLCanvasElement>("scene"))]);vision=new Vision(cv);scene=s;layout();
     // Read-only snapshots plus a replay entry point for recorded landmark frames.
-    (window as unknown as {canvasIrAR:unknown}).canvasIrAR={scene:s,map,hand,trace,snapshot:()=>({running,pose,intrinsics:k,tableReady,visibleIds:found.map(m=>m.id),usedIds,hand:lastHand,interaction:lastAction,layout:s.layout}),replayHand:(result:HandLandmarkerResult,time:number)=>{ctx.clearRect(0,0,overlay.width,overlay.height);applyHand(result,time);},analyzeHand:async(source:HTMLCanvasElement)=>{await loadHands();if(!hands)throw Error("Hand model unavailable");const now=performance.now(),result=hands.detectForVideo(source,now);ctx.clearRect(0,0,overlay.width,overlay.height);applyHand(result,now);return result;}};
+    (window as unknown as {canvasIrAR:unknown}).canvasIrAR={scene:s,map,hand,trace,snapshot:()=>({running,pose,intrinsics:k,tableReady,visibleIds:found.map(m=>m.id),usedIds,hand:lastHand,interaction:lastAction,layout:s.layout,handRuntime:hands.snapshot()}),replayHand:(result:HandLandmarkerResult,time:number)=>{ctx.clearRect(0,0,overlay.width,overlay.height);applyHand(result,time);},analyzeHand:async(source:HTMLCanvasElement)=>{await loadHands();if(!hands.active)throw Error("Hand model unavailable");const now=performance.now(),result=hands.detect(source,now);if(!result)throw Error("Hand backend is switching to CPU");ctx.clearRect(0,0,overlay.width,overlay.height);applyHand(result,now);return result;}};
     button("start").disabled=button("markers").disabled=false;notice("");
   }catch(error){record("initialization-error",String(error));notice(`Демо не загрузилось: ${String(error)}`);}
 })();

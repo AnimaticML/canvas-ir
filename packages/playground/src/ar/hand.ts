@@ -2,9 +2,11 @@ import type { HandLandmarkerResult } from "@mediapipe/tasks-vision";
 import { median, onTable, project, scale, toCamera, toTable, type Intrinsics, type Pixel, type Pose, type V3 } from "./geometry";
 import type { Vision } from "./vision";
 
+export const handReprojectionLimit=(k:Intrinsics):number=>Math.max(14,Math.max(k.width,k.height)*.03);
+
 export interface HandEstimate {
   points: V3[] | null; pixels: Pixel[]; pinch: number; calibrated: boolean;
-  reason: string; error: number|null; method: string; rawHeightM?: number; scale?: number;
+  reason: string; error: number|null; errorLimit?: number; method: string; rawHeightM?: number; scale?: number;
 }
 // worldLandmarks are already camera-oriented. Estimate translation while keeping
 // that orientation; free PnP can flip/rotate a nearly planar palm to fit model noise.
@@ -40,7 +42,7 @@ export class HandTracking {
   get collecting():boolean{return this.calibration!==null;}
   update(result:HandLandmarkerResult,table:Pose,k:Intrinsics,vision:Vision,now:number):HandEstimate {
     const landmarks=result.landmarks[0],world=result.worldLandmarks[0];
-    const empty=(reason:string,pixels:Pixel[]=[],error:number|null=null,method="none"):HandEstimate=>{if(this.calibration)this.calibrationReason=reason;return {points:null,pixels,pinch:1,calibrated:this.metricScale!==null,reason,error,method};};
+    const empty=(reason:string,pixels:Pixel[]=[],error:number|null=null,method="none"):HandEstimate=>{if(this.calibration)this.calibrationReason=reason;return {points:null,pixels,pinch:1,calibrated:this.metricScale!==null,reason,error,errorLimit:handReprojectionLimit(k),method};};
     if(this.calibration && now-this.calibration.start>5000){this.calibration=null;this.status="insufficient-stable-samples";}
     if(!landmarks||!world)return empty("no-hand");
     // Handedness can flicker; it is not a tracking ID and does not reset calibration.
@@ -51,7 +53,7 @@ export class HandTracking {
     // Prefer the camera-oriented model when both fits have similar residuals.
     const fit=translated && translated.error<(pnp?.error??Infinity)*1.05?translated:pnp;
     const method=fit===translated?"translation":"pnp";
-    if(!fit||fit.error>Math.max(14,k.width*.03))return empty("hand-pose-rejected",pixels,fit?.error??null,method);
+    if(!fit||fit.error>handReprojectionLimit(k))return empty("hand-pose-rejected",pixels,fit?.error??null,method);
     // Preserve the actual measured image position of every joint. The learned
     // metric shape supplies depth, not an alternative screen-space fingertip.
     const cameraPoints=shape.map((p,i)=>{const z=toCamera(fit.pose,p)[2],pixel=pixels[i]!;return [(pixel.x-k.cx)*z/k.fx,(pixel.y-k.cy)*z/k.fy,z] as V3;});
@@ -74,6 +76,6 @@ export class HandTracking {
     if(height<-.3||height>1)return empty("height-outside-workspace",pixels,fit.error,method);
     const dist=(a:Pixel,b:Pixel):number=>Math.hypot(a.x-b.x,a.y-b.y);
     const pinch=dist(pixels[4]!,pixels[8]!)/Math.max(5,dist(pixels[5]!,pixels[17]!));
-    return {points,pixels,pinch,calibrated:this.metricScale!==null,reason:this.metricScale===null?"needs-touch-calibration":"tracked",error:fit.error,method,rawHeightM:rawHeight,scale:metricScale};
+    return {points,pixels,pinch,calibrated:this.metricScale!==null,reason:this.metricScale===null?"needs-touch-calibration":"tracked",error:fit.error,errorLimit:handReprojectionLimit(k),method,rawHeightM:rawHeight,scale:metricScale};
   }
 }
