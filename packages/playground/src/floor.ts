@@ -36,6 +36,22 @@ export interface FloorPage {
   hits(point: Point): boolean;
   footprints(things: readonly FloorThing[] | null): void;
   onFootprint: ((id: string, phase: "start" | "move" | "end", point: Point) => void) | null;
+  /** The demo windows open on the board. */
+  windows(): FloorWindow[];
+  /** Moves a window, with all it holds, across the board. */
+  moveWindow(id: string, dx: number, dy: number): void;
+}
+
+/** An open demo window on the board: its group, its title and its box in board units, title bar included. */
+export interface FloorWindow {
+  readonly id: string;
+  readonly title: string;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  /** How tall its title bar is. */
+  readonly bar: number;
 }
 
 export interface FloorThing {
@@ -125,6 +141,11 @@ class Layer {
     this.setVisible(false);
   }
 
+  /** Draws every tile again at the next draw, as when the holes in the floor changed. */
+  invalidate(): void {
+    this.stale = true;
+  }
+
   /** Draws what changed on the board since the last time, if the layer is showing. Returns whether it did. */
   draw(): boolean {
     if (!this.region || !this.visible) return false;
@@ -142,6 +163,26 @@ class Layer {
       ctx.fillRect(0, 0, t.width, t.height);
       ctx.drawImage(this.board, t.x, t.y, t.width, t.height, 0, 0, t.width, t.height);
       ctx.drawImage(this.cards, t.x, t.y, t.width, t.height, 0, 0, t.width, t.height);
+      // Where a window was lifted off as a tablet, the table shows the empty place it left.
+      const r = this.region;
+      for (const hole of this.floor.holes) {
+        const x = (hole.x - r.x) * r.scale - t.x;
+        const y = (hole.y - r.y) * r.scale - t.y;
+        const w = hole.width * r.scale;
+        const h = hole.height * r.scale;
+        if (x > t.width || y > t.height || x + w < 0 || y + h < 0) continue;
+        ctx.fillStyle = this.floor.background;
+        ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = "rgba(15, 23, 42, 0.06)";
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, 10 * r.scale);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(15, 23, 42, 0.18)";
+        ctx.lineWidth = Math.max(1, 2 * r.scale);
+        ctx.setLineDash([8 * r.scale, 6 * r.scale]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       t.texture.update();
     }
     return true;
@@ -217,6 +258,8 @@ class Layer {
 export class Floor {
   /** The board point at the room's origin. */
   readonly origin: Point;
+  /** Boxes on the board the floor leaves empty: the places of windows lifted off as tablets. */
+  private _holes: readonly Box[] = [];
   background = "#f8fafc";
   private readonly base: Layer;
   private readonly detail: Layer;
@@ -305,6 +348,17 @@ export class Floor {
   /** The board point under a point in the room. */
   toBoard(v: Vector3): Point {
     return { x: this.origin.x + v.x * UNITS, y: this.origin.y - v.z * UNITS };
+  }
+
+  get holes(): readonly Box[] {
+    return this._holes;
+  }
+
+  set holes(holes: readonly Box[]) {
+    this._holes = holes;
+    this.base.invalidate();
+    this.detail.invalidate();
+    this.lastBase = 0;
   }
 
   /** Whether a mesh is part of the floor. */

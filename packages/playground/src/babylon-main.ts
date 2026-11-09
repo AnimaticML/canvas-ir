@@ -3,7 +3,7 @@ import { startBabylon } from "./babylon";
 
 const event = document.getElementById("event")!;
 if (matchMedia("(pointer: coarse)").matches) {
-  document.getElementById("hint")!.textContent = "Tap what is drawn on the table to use it · drag to orbit the pin · two fingers slide, pinch and turn · tap the table to move the pin, double-tap to look down";
+  document.getElementById("hint")!.textContent = "Tap what is drawn on the table to use it · drag to orbit the pin · two fingers slide, pinch and turn · tap the table to move the pin, double-tap to look down · double-tap a window's title bar to lift it as a tablet";
 }
 const hud = document.querySelector(".hud") as HTMLElement;
 const fly = document.getElementById("fly") as HTMLButtonElement;

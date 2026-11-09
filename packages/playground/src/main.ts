@@ -284,8 +284,21 @@ const floorHost = window as unknown as {
     hits(point: Point): boolean;
     footprints(things: readonly FloorThing[] | null): void;
     onFootprint: ((id: string, phase: "start" | "move" | "end", point: Point) => void) | null;
+    windows(): FloorWindow[];
+    moveWindow(id: string, dx: number, dy: number): void;
   };
 };
+/** An open demo window on the board: its group, its title and its box, title bar included. */
+interface FloorWindow {
+  readonly id: string;
+  readonly title: string;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  /** How tall its title bar is. */
+  readonly bar: number;
+}
 const footprints = new Set<string>();
 floorHost.canvasIrFloor = {
   scene: () => scene,
@@ -297,6 +310,15 @@ floorHost.canvasIrFloor = {
   bounds: () => boardBox(),
   background: () => getComputedStyle(stage).backgroundColor || getComputedStyle(document.body).backgroundColor,
   hits: (point) => scene.hitTest(point).length > 0 || cards.scene.hitTest(point).length > 0,
+  windows: () => openWindows(),
+  moveWindow: (id, dx, dy) => {
+    for (const x of withWindows([id])) {
+      components!.move(x, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
+      followMove(x, dx, dy);
+    }
+    showSelection();
+    render();
+  },
   footprints: (things) => {
     if (!components) return;
     const keep = new Set((things ?? []).map((t) => `floor/${t.id}`));
@@ -1263,6 +1285,29 @@ function withWindows(ids: readonly string[]): string[] {
   const out = new Set(ids);
   for (const [frame, held] of frames) if (ids.includes(frame) || held.some((h) => ids.includes(h))) for (const x of [frame, ...held]) out.add(x);
   return [...out].filter((x) => scene.getGroup(x) !== undefined || scene.get(x) !== undefined);
+}
+/** The demos' windows open now: each one's group (a frame for a drawn demo), title and box. */
+function openWindows(): FloorWindow[] {
+  const groups: readonly (readonly [string, string, number])[] = [
+    [`${PELICAN_ID}:window`, "Pelican", 40],
+    [`${PHYSICS_ID}:window`, "Physics", 40],
+    [`${GRAPH_ID}:window`, "Graph", 40],
+    [`${MORPH_ID}:window`, "Morph", 40],
+    [`${PAINT_ID}:window`, "Paint by numbers", 40],
+    [TABLE_ID, "A million rows", 44],
+    [POINTS_ID, "Ten million points", 46],
+    [GALAXY_ID, "Stars and planets", 46],
+    [MAP_ID, "World map", 46],
+    [BOOK_ID, "War and Peace", 46],
+    [DECLARATION_ID, "Human rights in 529 languages", 46],
+  ];
+  const out: FloorWindow[] = [];
+  for (const [id, title, bar] of groups) {
+    if (!scene.getGroup(id)) continue;
+    const b = scene.bounds(id, "geometry");
+    if (b) out.push({ id, title, bar, x: b.x, y: b.y, width: b.width, height: b.height });
+  }
+  return out;
 }
 /** Puts a frame with a title bar and a close button around a demo and its controls, as they are now. */
 const frameAround = (id: string, title: string, held: readonly string[], close: () => void): void => {

@@ -30,7 +30,8 @@ import HavokPhysics from "@babylonjs/havok";
 import havokWasm from "@babylonjs/havok/lib/esm/HavokPhysics.wasm" with { type: "file" };
 import { type ObjectHandle, Objects, Surface, World } from "@canvas-ir/babylon";
 import { type ComponentHandle, Components, EventRouter, type Point, type RouterEvent } from "canvas-ir";
-import { Floor, type FloorPage, type FloorThing, TABLE, UNITS } from "./floor";
+import { Floor, type FloorPage, type FloorThing, type FloorWindow, TABLE, UNITS } from "./floor";
+import { Tablet } from "./tablet";
 import { thumbsticks } from "./thumbsticks";
 
 const FONT = "system-ui, -apple-system, Segoe UI, sans-serif";
@@ -468,7 +469,60 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     );
   };
   let forwarding: number | null = null;
+  /** The tablet a forwarded press is on, if it is on one rather than the table. */
+  let forwardingTablet: Tablet | null = null;
   let overPage = false;
+
+  // Tablets: a double press on a window's title bar lifts the window off the table as a tablet that stands facing you.
+  // Dragging its title bar carries it over the table, with Shift or the right button turns it, and a double press on
+  // its title bar lays it down again, where the window then is on the board. The rest of its face works as the board does.
+  const tablets = new Map<string, Tablet>();
+  const tabletOf = (mesh: unknown): Tablet | null => [...tablets.values()].find((t) => t.holds(mesh)) ?? null;
+  const holes = (): void => {
+    floor.holes = [...tablets.values()].map((t) => ({ x: t.rect.x, y: t.rect.y, width: t.rect.width, height: t.rect.height }));
+  };
+  const facing = (at: Vector3): number => {
+    const d = camera.globalPosition.subtract(at);
+    return Math.atan2(-d.x, -d.z);
+  };
+  const liftWindow = (w: FloorWindow): void => {
+    if (tablets.has(w.id)) return;
+    const at = floor.toRoom({ x: w.x + w.width / 2, y: w.y + w.height / 2 });
+    const tablet = new Tablet(scene, page, w, at, floor.background);
+    tablets.set(w.id, tablet);
+    shadows.addShadowCaster(tablet.slab);
+    tablet.draw();
+    holes();
+    log(`${w.title} lifted off the table`);
+    void tablet.glide({ up: 1, yaw: facing(at) }, 700).then(() => tablet.solid(true));
+  };
+  const layDown = async (tablet: Tablet, ms = 600): Promise<void> => {
+    tablet.solid(false);
+    await tablet.glide({ up: 0, yaw: 0 }, ms);
+    // Where it lies now is where the window goes on the board.
+    const to = floor.toBoard(tablet.pose.at);
+    const r = tablet.rect;
+    page.moveWindow(r.id, to.x - (r.x + r.width / 2), to.y - (r.y + r.height / 2));
+    tablets.delete(r.id);
+    shadows.removeShadowCaster(tablet.slab);
+    tablet.dispose();
+    holes();
+    log(`${r.title} laid down on the table`);
+  };
+  /** A tablet held by its title bar: carried over the table, or turned. */
+  let carrying: { tablet: Tablet; pointer: number; turn: boolean; last: Point; offset: Vector3 } | null = null;
+  let lastBar = { id: "", at: 0 };
+  const doubleOnBar = (id: string, now: number): boolean => {
+    const double = lastBar.id === id && now - lastBar.at < 450;
+    lastBar = double ? { id: "", at: 0 } : { id, at: now };
+    return double;
+  };
+  /** The board point under a host pixel on a tablet's face, following a press past its edge in its plane. */
+  const onTablet = (tablet: Tablet, p: Point): Point | null => {
+    const { point, normal } = tablet.plane();
+    const at = world.onPlane(p, point, normal);
+    return at ? tablet.toBoard(at) : null;
+  };
 
   // Pointer input: one pointer goes to the router, or to the page for what is drawn on the table; two fingers move the camera.
   const pointer = (e: PointerEvent | WheelEvent) => {
@@ -502,8 +556,33 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       canvas.setPointerCapture(e.pointerId);
     } catch {}
     const hit = world.hit(p);
+    const tablet = hit ? tabletOf(hit.mesh) : null;
+    if (hit && tablet) {
+      const at = tablet.toBoard(hit.point);
+      if (at && tablet.onBar(at)) {
+        if (e.button === 0 && doubleOnBar(tablet.id, e.timeStamp)) {
+          void layDown(tablet);
+          return;
+        }
+        const ground = onTable(p);
+        carrying = { tablet, pointer: e.pointerId, turn: e.button !== 0 || e.shiftKey, last: p, offset: ground ? tablet.pose.at.subtract(ground) : Vector3.Zero() };
+        return;
+      }
+      if (at && e.button === 0) {
+        forwarding = e.pointerId;
+        forwardingTablet = tablet;
+        sendToPage(e, "pointerdown", at);
+        return;
+      }
+    }
     if (hit && floor.holds(hit.mesh) && e.button === 0) {
       const at = floor.toBoard(hit.point);
+      // A double press on a window's title bar lifts it off as a tablet.
+      const bar = page.windows().find((w) => at.x >= w.x + 46 && at.x <= w.x + w.width && at.y >= w.y && at.y <= w.y + w.bar);
+      if (bar && !tablets.has(bar.id) && doubleOnBar(bar.id, e.timeStamp)) {
+        liftWindow(bar);
+        return;
+      }
       if (page.hits(at)) {
         forwarding = e.pointerId;
         sendToPage(e, "pointerdown", at);
@@ -527,8 +606,24 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       return;
     }
     const p = pointer(e);
+    if (carrying) {
+      if (e.pointerId !== carrying.pointer) return;
+      const t = carrying.tablet;
+      if (carrying.turn) t.set({ yaw: t.pose.yaw + (p.x - carrying.last.x) * 0.01 });
+      else {
+        const ground = onTable(p);
+        if (ground) t.set({ at: ground.add(carrying.offset) });
+      }
+      carrying = { ...carrying, last: p };
+      return;
+    }
     if (forwarding !== null) {
       if (e.pointerId !== forwarding) return;
+      if (forwardingTablet) {
+        const at = onTablet(forwardingTablet, p);
+        if (at) sendToPage(e, "pointermove", at);
+        return;
+      }
       const at = onTable(p);
       if (at) sendToPage(e, "pointermove", floor.toBoard(at));
       return;
@@ -538,7 +633,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     // Hovering what is drawn on the table lights it up as on the page.
     if (pointerId === null) {
       const hit = world.hit(p);
-      const at = hit && floor.holds(hit.mesh) ? floor.toBoard(hit.point) : null;
+      const over = hit ? tabletOf(hit.mesh) : null;
+      const at = hit && over ? over.toBoard(hit.point) : hit && floor.holds(hit.mesh) ? floor.toBoard(hit.point) : null;
       if (at) sendToPage(e, "pointermove", at);
       else if (overPage) pageCanvas()?.dispatchEvent(new pageWindow.PointerEvent("pointerleave", { pointerId: e.pointerId, pointerType: e.pointerType }));
       overPage = at !== null;
@@ -550,10 +646,19 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       if (fingers.size === 0) pinch = null;
       return;
     }
+    if (carrying && e.pointerId === carrying.pointer) {
+      carrying = null;
+      return;
+    }
     if (e.pointerId === forwarding) {
       forwarding = null;
-      const at = onTable(pointer(e));
-      if (at) sendToPage(e, cancel ? "pointercancel" : "pointerup", floor.toBoard(at));
+      const on = forwardingTablet;
+      forwardingTablet = null;
+      const at = on ? onTablet(on, pointer(e)) : (() => {
+        const t = onTable(pointer(e));
+        return t ? floor.toBoard(t) : null;
+      })();
+      if (at) sendToPage(e, cancel ? "pointercancel" : "pointerup", at);
       return;
     }
     if (e.pointerId !== pointerId) return;
@@ -734,6 +839,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   const focusTable = async (at: Vector3): Promise<void> => {
     if (moving || mode !== "3d") return;
     moving = true;
+    // Tablets lie back down where they stand, so the page shows their windows there.
+    await Promise.all([...tablets.values()].map((t) => layDown(t, 400)));
     flight = null;
     at.y = 0;
     const radius = Math.max(2, Math.min(40, camera.radius));
@@ -814,6 +921,25 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   scene.onBeforeRenderObservable.add(() => {
     if (pointerId === null && forwarding === null) router.refreshHover();
     world.draw();
+    if (tablets.size > 0) {
+      const open = page.windows();
+      let moved = false;
+      for (const t of [...tablets.values()]) {
+        const w = open.find((x) => x.id === t.id);
+        if (!w) {
+          // Closed on the page: the tablet goes with it.
+          tablets.delete(t.id);
+          shadows.removeShadowCaster(t.slab);
+          t.dispose();
+          moved = true;
+          continue;
+        }
+        if (w.x !== t.rect.x || w.y !== t.rect.y || w.width !== t.rect.width || w.height !== t.rect.height) moved = true;
+        t.follow(w);
+        t.draw();
+      }
+      if (moved) holes();
+    }
     floor.draw();
     const pageCursor = overPage || forwarding !== null ? pageCanvas()?.style.cursor || null : null;
     canvas.style.cursor = pageCursor ?? panelUi.cursor ?? objects.cursor ?? "";
@@ -845,6 +971,15 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     onBoard: (x: number, y: number) => onHost(floor.toRoom({ x, y })),
     floor,
     page,
+    tablets,
+    layDown: (id: string) => {
+      const t = tablets.get(id);
+      return t ? layDown(t) : Promise.resolve();
+    },
+    lift: (id: string) => {
+      const w = page.windows().find((x) => x.id === id);
+      if (w) liftWindow(w);
+    },
     onPanel: (x: number, y: number) => onHost(Vector3.TransformCoordinates(new Vector3((x / W - 0.5) * 2.88, (0.5 - y / H) * 1.8, 0), panel.computeWorldMatrix(true))),
   };
 };
