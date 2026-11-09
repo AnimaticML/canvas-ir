@@ -4,7 +4,7 @@ CanvasIR is a stand-in for `CanvasRenderingContext2D` that records drawing inste
 
 Design: [docs/design.md](docs/design.md). What comes next: [docs/roadmap.md](docs/roadmap.md).
 
-Experimental **[AR Table Lab](docs/ar-table.md)** adds a browser camera page (`ar.html`) on the existing Babylon.js / Havok / CanvasIR stack: multi-marker ArUco anchoring, manual calibration, MediaPipe hand depth experiments, and physical touch/pinch interactions. See the guide for setup, smartphone validation, and monocular accuracy limits.
+Experimental **[AR mode of the original Babylon demo](docs/ar-table.md)** (`ar.html`) runs the same `startBabylon` scene, board, controls, crates, balls, and Havok bodies over a full-screen camera. ArUco places it relative to a group of markers; MediaPipe touch calibration and pinch gestures drive the original components and physics. Interaction traces capture concrete success/failure reasons without a diagnostic dashboard.
 
 ## Status
 

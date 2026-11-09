@@ -1,26 +1,16 @@
-// The same Babylon / Havok / CanvasIR Surface stack as the existing 3D playground.
-import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
+// AR is an adapter around startBabylon, not a second sandbox. All board content,
+// crates, balls, labels, control components and Havok bodies belong to babylon.ts.
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
-import { Engine } from "@babylonjs/core/Engines/engine";
-import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Matrix, Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
-import { CreateGround } from "@babylonjs/core/Meshes/Builders/groundBuilder";
 import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
-import "@babylonjs/core/Physics/joinedPhysicsEngineComponent";
-import { PhysicsMotionType, PhysicsShapeType } from "@babylonjs/core/Physics/v2/IPhysicsEnginePlugin";
-import { PhysicsAggregate } from "@babylonjs/core/Physics/v2/physicsAggregate";
-import { HavokPlugin } from "@babylonjs/core/Physics/v2/Plugins/havokPlugin";
-import { Scene } from "@babylonjs/core/scene";
-import HavokPhysics from "@babylonjs/havok";
-import havokWasm from "@babylonjs/havok/lib/esm/HavokPhysics.wasm" with { type: "file" };
-import { Surface, World } from "@canvas-ir/babylon";
-import { Components, EventRouter } from "canvas-ir";
+import { PhysicsMotionType } from "@babylonjs/core/Physics/v2/IPhysicsEnginePlugin";
+import { startBabylon, type BabylonRuntime, type BabylonThing } from "../babylon";
 import { cross, length, sub, unit, type Intrinsics, type Pose, type V3 } from "./geometry";
 
 const vector = (p: V3): Vector3 => new Vector3(...p);
+export interface InteractionResult { action: string; reason: string; target: string | null; distanceM?: number; pinch?: number }
 export const rotationMatrix = (r: number[]): Matrix => Matrix.FromValues(r[0]!, r[3]!, r[6]!, 0, r[1]!, r[4]!, r[7]!, 0, r[2]!, r[5]!, r[8]!, 0, 0, 0, 0, 1);
 export const smoothPose = (previous: Pose | null, next: Pose, dt: number, smoothing: number): Pose => {
   if (!previous || smoothing === 0) return next;
@@ -34,171 +24,172 @@ export const smoothPose = (previous: Pose | null, next: Pose, dt: number, smooth
 };
 
 export class ARScene {
-  readonly engine: Engine;
-  readonly scene: Scene;
   readonly camera: FreeCamera;
-  private world: World;
-  private button;
-  private buttonMat: StandardMaterial;
+  readonly engine;
+  readonly scene;
+  readonly original: BabylonRuntime;
+  private scale = 0.025;
+  private center: V3 = [0,0,0];
+  private roomCenter: Vector3;
   private fingertip;
-  private shadow;
-  private objects: { mesh: ReturnType<typeof CreateBox>; physics: PhysicsAggregate; initial: V3 }[] = [];
-  private held: { item: ARScene["objects"][number]; offset: Vector3; relative: Quaternion; target: Vector3; rotation: Quaternion } | null = null;
+  private cursorMaterial: StandardMaterial;
+  private held: { thing: BabylonThing; offset: Vector3; relative: Quaternion; target: Vector3; rotation: Quaternion } | null = null;
   private pinched = false;
-  private pressed = false;
-  private touchFrames = 0;
+  private contact: { kind: "board" | "panel"; point: Vector3; frames: number; down: boolean; clickOnly?: boolean } | null = null;
   private lastHand = 0;
   presses = 0;
   grabs = 0;
   releases = 0;
-  rotations = 0;
-  enabled = false;
-  constructor(canvas: HTMLCanvasElement, plugin: HavokPlugin) {
-    this.engine = new Engine(canvas, true, { alpha: true, preserveDrawingBuffer: true }, true);
-    this.engine.setHardwareScalingLevel(1 / Math.min(devicePixelRatio, 2));
-    this.scene = new Scene(this.engine);
-    this.scene.useRightHandedSystem = true;
-    this.scene.clearColor = new Color4(0, 0, 0, 0);
-    this.scene.enablePhysics(new Vector3(0, -9.81, 0), plugin);
-    this.camera = new FreeCamera("ar-camera", new Vector3(0, 0.65, -0.5), this.scene);
-    this.camera.minZ = 0.01; this.camera.maxZ = 10;
-    this.camera.setTarget(Vector3.Zero());
-    new HemisphericLight("sky", new Vector3(0, 1, 0), this.scene);
-    this.world = new World({ scene: this.scene, size: () => ({ width: canvas.clientWidth, height: canvas.clientHeight }) });
-    const table = CreateGround("tabletop", { width: 0.6, height: 0.4 }, this.scene);
-    const material = new StandardMaterial("tabletop", this.scene);
-    material.diffuseColor = Color3.FromHexString("#163c42"); material.alpha = 0.48;
-    table.material = material;
-    // The physical slab's upper face is exactly Y=0.
-    const slab = CreateBox("table-collider", { width: 0.6, height: 0.02, depth: 0.4 }, this.scene);
-    slab.position.y = -0.01; slab.isVisible = false;
-    new PhysicsAggregate(slab, PhysicsShapeType.BOX, { mass: 0, friction: 0.8 }, this.scene);
-    const label = CreateGround("canvas-ir-board", { width: 0.58, height: 0.38 }, this.scene);
-    label.position.y = 0.0005;
-    // Ground UVs put the drawing's top at +Z; our table's far edge is -Z.
-    const uvs = label.getVerticesData(VertexBuffer.UVKind)!;
-    label.setVerticesData(VertexBuffer.UVKind, uvs.map((v, i) => i % 2 ? 1 - v : v));
-    label.material = new StandardMaterial("board-ink", this.scene);
-    const surface = this.world.add(new Surface({ version: 1, ops: [] }, { mesh: label, width: 600, height: 400, background: null, sharp: false }));
-    // StandardMaterial derives transparency from diffuse/opacity textures,
-    // whereas Surface's unlit ink is attached as emissiveTexture.
-    const ink = label.material as StandardMaterial;
-    ink.diffuseTexture = surface.texture; ink.useAlphaFromDiffuseTexture = true;
-    const ui = new Components(surface.scene, new EventRouter(this.world), { onChange: () => surface.invalidate() });
-    ui.mount({ id: "ar-board", state: {}, draw: ctx => {
-      ctx.strokeStyle = "rgba(112,233,218,0.45)"; ctx.lineWidth = 1;
-      for (let x = 0; x <= 600; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 400); ctx.stroke(); }
-      for (let y = 0; y <= 400; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(600, y); ctx.stroke(); }
-      ctx.strokeStyle = "#7aeee0"; ctx.lineWidth = 4; ctx.strokeRect(3, 3, 594, 394);
-      ctx.fillStyle = "#b6fff4"; ctx.font = "600 18px system-ui"; ctx.fillText("CANVAS IR / AR LAB", 20, 34);
-      ctx.font = "14px system-ui"; ctx.fillText("60 × 40 cm  ·  5 cm grid", 20, 375);
-    } });
-    this.button = CreateBox("touch-button", { width: 0.085, height: 0.008, depth: 0.085 }, this.scene);
-    this.button.position.set(-0.13, 0.004, 0.06);
-    this.buttonMat = new StandardMaterial("button-mat", this.scene); this.button.material = this.buttonMat;
-    this.buttonMat.diffuseColor = Color3.FromHexString("#19d3b0");
-    for (const [i, p] of ([[0.06, 0.03, 0.06], [0.16, 0.012, -0.07]] as V3[]).entries()) {
-      const mesh = CreateBox(i === 0 ? "cube" : "card", i === 0 ? { size: 0.05 } : { width: 0.08, height: 0.008, depth: 0.055 }, this.scene);
-      mesh.position.copyFrom(vector(p)); mesh.rotationQuaternion = Quaternion.Identity();
-      const mat = new StandardMaterial(`object-${i}`, this.scene); mat.diffuseColor = Color3.FromHexString(i === 0 ? "#ffb36b" : "#a59bff"); mesh.material = mat;
-      const physics = new PhysicsAggregate(mesh, PhysicsShapeType.BOX, { mass: 0.06, friction: 0.65, restitution: 0.12 }, this.scene);
-      this.objects.push({ mesh, physics, initial: p });
-    }
-    this.fingertip = CreateSphere("index-tip", { diameter: 0.012 }, this.scene);
-    const tipMat = new StandardMaterial("tip", this.scene); tipMat.emissiveColor = Color3.FromHexString("#ff7594"); this.fingertip.material = tipMat;
-    this.shadow = CreateSphere("tip-on-table", { diameter: 0.016 }, this.scene); this.shadow.scaling.y = 0.08; this.shadow.material = this.buttonMat;
-    this.fingertip.isVisible = this.shadow.isVisible = false;
+  result: InteractionResult = { action: "idle", reason: "no-hand", target: null };
+  constructor(original: BabylonRuntime) {
+    this.original = original; this.engine = original.engine; this.scene = original.scene;
+    this.roomCenter = original.floor.table.center.clone();
+    this.camera = new FreeCamera("ar-camera", Vector3.Zero(), this.scene);
+    this.scene.activeCamera = this.camera;
+    this.fingertip = CreateSphere("ar-finger-cursor", { diameter: 0.22 }, this.scene);
+    this.fingertip.isPickable = false; this.fingertip.isVisible = false;
+    this.cursorMaterial = new StandardMaterial("ar-finger", this.scene);
+    this.cursorMaterial.emissiveColor = Color3.FromHexString("#91ffe0"); this.fingertip.material = this.cursorMaterial;
     this.scene.onBeforePhysicsObservable.add(() => {
-      // Havok derives velocity from a target transform. Refresh it on every
-      // physics step, including between the lower-frequency camera samples.
-      if (this.held) this.held.item.physics.body.setTargetTransform(this.held.target, this.held.rotation);
+      if (this.held) this.held.thing.body.body.setTargetTransform(this.held.target, this.held.rotation);
     });
-    this.engine.runRenderLoop(() => {
-      if (performance.now() - this.lastHand > 250) this.loseHand();
-      for (const item of this.objects) if (item !== this.held?.item && item.mesh.position.y < -0.4) this.restore(item);
-      if (this.enabled) { this.world.draw(); this.scene.render(); }
-    });
+    this.scene.onBeforeRenderObservable.add(() => { if (performance.now() - this.lastHand > 250) this.loseHand(); });
   }
   static async create(canvas: HTMLCanvasElement): Promise<ARScene> {
-    const hk = await HavokPhysics({ locateFile: () => havokWasm });
-    return new ARScene(canvas, new HavokPlugin(true, hk));
+    const original = await startBabylon({ canvas, frame: document.getElementById("original-board") as HTMLIFrameElement,
+      toggle: document.createElement("button"), fly: document.createElement("button"), start: "3d", ar: true });
+    return new ARScene(original);
   }
-  resize(): void { this.engine.resize(); }
+  get enabled(): boolean { return this.original.visible; }
+  get holding(): string { return this.held?.thing.mesh.name ?? "—"; }
+  get layout(): { center: V3; scale: number; width: number; depth: number } {
+    const t = this.original.floor.table; return { center: [...this.center], scale: this.scale, width: t.width * this.scale, depth: t.depth * this.scale };
+  }
+  configure(markers: Map<number,V3[]>): void {
+    const points = [...markers.values()].flat(); if (!points.length) return;
+    const xs = points.map(p=>p[0]), zs = points.map(p=>p[2]);
+    const x0=Math.min(...xs),x1=Math.max(...xs),z0=Math.min(...zs),z1=Math.max(...zs);
+    this.center = [(x0+x1)/2,0,(z0+z1)/2];
+    const width = Math.max(.32,x1-x0+.04), depth = Math.max(.3,z1-z0+.04), room=this.original.floor.table;
+    this.scale = Math.min(width/room.width,depth/room.depth);
+    this.roomCenter.copyFrom(room.center);
+    // Reuse the original components at a finger-sized physical scale.
+    this.original.panel.scaling.setAll(.14/(2.88*this.scale));
+  }
+  room(p: V3): Vector3 { return new Vector3((p[0]-this.center[0])/this.scale+this.roomCenter.x, p[1]/this.scale, -(p[2]-this.center[2])/this.scale+this.roomCenter.z); }
+  table(p: Vector3): V3 { return [(p.x-this.roomCenter.x)*this.scale+this.center[0],p.y*this.scale,-(p.z-this.roomCenter.z)*this.scale+this.center[2]]; }
+  resize(): void { this.original.resize(); }
   pose(p: Pose, k: Intrinsics): void {
-    const r = p.r, t = p.t;
-    // OpenCV → a right-handed Babylon camera: flip camera Y and Z, never the table.
-    const view = Matrix.FromValues(r[0]!, -r[3]!, -r[6]!, 0, r[1]!, -r[4]!, -r[7]!, 0, r[2]!, -r[5]!, -r[8]!, 0, t[0], -t[1], -t[2], 1);
-    const cameraWorld = view.clone().invert();
-    this.camera.position.copyFrom(cameraWorld.getTranslation());
-    this.camera.rotationQuaternion = Quaternion.FromRotationMatrix(cameraWorld);
-    const near = 0.01, far = 10;
-    this.camera.freezeProjectionMatrix(Matrix.FromValues(2 * k.fx / k.width, 0, 0, 0, 0, 2 * k.fy / k.height, 0, 0,
-      1 - 2 * k.cx / k.width, 2 * k.cy / k.height - 1, -(far + near) / (far - near), -1, 0, 0, -2 * far * near / (far - near), 0));
-    this.enabled = true;
+    const r=p.r, c=this.center, s=this.scale, o=this.roomCenter;
+    // Original Babylon scene is left-handed. Reflect room Z into the RH table,
+    // and flip OpenCV camera Y. Keep original geometry/physics in original units.
+    const offset: V3 = [c[0]-s*o.x,0,c[2]+s*o.z];
+    const t: V3 = p.t.map((v,i)=>(v+r[i*3]!*offset[0]+r[i*3+2]!*offset[2])/s) as V3;
+    const view=Matrix.FromValues(r[0]!,-r[3]!,r[6]!,0,r[1]!,-r[4]!,r[7]!,0,-r[2]!,r[5]!,-r[8]!,0,t[0],-t[1],t[2],1);
+    const world=view.clone().invert();
+    this.camera.position.copyFrom(world.getTranslation()); this.camera.rotationQuaternion=Quaternion.FromRotationMatrix(world);
+    const near=.005/s,far=20/s;
+    this.camera.minZ=near; this.camera.maxZ=far;
+    this.camera.freezeProjectionMatrix(Matrix.FromValues(2*k.fx/k.width,0,0,0,0,2*k.fy/k.height,0,0,
+      2*k.cx/k.width-1,1-2*k.cy/k.height,(far+near)/(far-near),1,0,0,-2*far*near/(far-near),0));
+    this.original.visible=true;
   }
-  hide(): void {
-    this.enabled = false; this.loseHand(true);
-    // Clear stale objects when the camera or all markers disappear.
-    this.engine.clear(new Color4(0, 0, 0, 0), true, true, true);
-  }
-  hand(points: V3[], allow3D: boolean, now: number): void {
-    this.lastHand = now;
-    const tip = points[8]!, thumb = points[4]!;
-    this.fingertip.position.copyFrom(vector(tip)); this.fingertip.isVisible = true;
-    this.shadow.position.set(tip[0], 0.001, tip[2]); this.shadow.isVisible = true;
-    const atButton = Math.abs(tip[0] + 0.13) < 0.046 && Math.abs(tip[2] - 0.06) < 0.046;
-    const contact = allow3D && atButton && tip[1] > -0.018 && tip[1] < (this.pressed ? 0.025 : 0.014);
-    this.touchFrames = contact ? this.touchFrames + 1 : 0;
-    if (!this.pressed && this.touchFrames >= 2) { this.pressed = true; this.presses++; }
-    if (!contact) this.pressed = false;
-    this.button.scaling.y = this.pressed ? 0.35 : 1;
-    this.buttonMat.emissiveColor = this.pressed ? new Color3(0.2, 0.7, 0.4) : Color3.Black();
-    if (!allow3D) { this.release(); this.pinched = false; return; }
-    const gap = length(sub(tip, thumb));
-    const pinching = gap < (this.pinched ? 0.040 : 0.025);
-    const midpoint = vector([(tip[0] + thumb[0]) / 2, (tip[1] + thumb[1]) / 2, (tip[2] + thumb[2]) / 2]);
-    const x = unit(sub(points[5]!, points[17]!)), forward = unit(sub(points[9]!, points[0]!));
-    const z = unit(cross(x, forward)), y = unit(cross(z, x));
-    if (length(cross(x, forward)) < 0.2) return;
-    const orientation = Quaternion.RotationQuaternionFromAxis(vector(x), vector(y), vector(z));
-    if (pinching && !this.pinched && !this.held) {
-      const item = this.objects.filter(o => Vector3.Distance(midpoint, o.mesh.position) < (o.mesh.name === "card" ? 0.065 : 0.055))
-        .sort((a, b) => Vector3.DistanceSquared(midpoint, a.mesh.position) - Vector3.DistanceSquared(midpoint, b.mesh.position))[0];
-      if (item) {
-        item.physics.body.setMotionType(PhysicsMotionType.ANIMATED);
-        this.held = { item, offset: item.mesh.position.subtract(midpoint).applyRotationQuaternion(orientation.conjugate()), relative: orientation.conjugate().multiply(item.mesh.rotationQuaternion!), target: item.mesh.position.clone(), rotation: item.mesh.rotationQuaternion!.clone() };
+  hide(): void { this.original.visible=false; this.loseHand(true); this.engine.clear(new Color4(0,0,0,0),true,true,true); }
+  hand(points: V3[], allow3D: boolean, now: number, pinchRatio?: number): InteractionResult {
+    this.lastHand=now;
+    const tip=points[8]!,thumb=points[4]!, at=this.room(tip);
+    this.fingertip.position.copyFrom(at); this.fingertip.isVisible=true;
+    if (!allow3D) { this.endContact(true); this.release(); return this.result={action:"idle",reason:"calibrate-touch",target:null}; }
+    const gap=length(sub(tip,thumb)), palm=Math.max(.035,length(sub(points[5]!,points[17]!)));
+    const ratio=pinchRatio ?? gap/palm;
+    const pinching=ratio<(this.pinched ? .48 : .30);
+    const midpoint=this.room([(tip[0]+thumb[0])/2,(tip[1]+thumb[1])/2,(tip[2]+thumb[2])/2]);
+    const x=unit(sub(points[5]!,points[17]!)),forward=unit(sub(points[9]!,points[0]!));
+    const z=unit(cross(x,forward)),y=unit(cross(z,x));
+    // Reflect both palm coordinates and one basis axis to preserve a proper rotation.
+    const reflect=(p:V3):Vector3=>new Vector3(p[0],p[1],-p[2]);
+    const orientation=Quaternion.RotationQuaternionFromAxis(reflect(x),reflect(y),reflect(z).negate());
+    if (pinching && !this.held) {
+      this.endContact(true);
+      const candidates=[...this.original.things.values()].map(thing=>{
+        thing.mesh.computeWorldMatrix(true);
+        const box=thing.mesh.getBoundingInfo().boundingBox,min=box.minimumWorld,max=box.maximumWorld;
+        const nearest=Vector3.Clamp(midpoint,min,max);
+        return {thing,distance:Vector3.Distance(nearest,midpoint)*this.scale};
+      }).sort((a,b)=>a.distance-b.distance);
+      const best=candidates[0];
+      // Search while pinch is held, so a pinch that starts just outside the zone can enter it.
+      if(best && best.distance<.035) {
+        const thing=best.thing; thing.body.body.setMotionType(PhysicsMotionType.ANIMATED);
+        const rotation=thing.mesh.rotationQuaternion ?? Quaternion.FromEulerVector(thing.mesh.rotation);
+        this.held={thing,offset:thing.mesh.position.subtract(midpoint).applyRotationQuaternion(orientation.conjugate()),relative:orientation.conjugate().multiply(rotation),target:thing.mesh.position.clone(),rotation:rotation.clone()};
         this.grabs++;
+      } else this.result={action:"pinch",reason:"outside-grab-zone",target:best?.thing.mesh.name??null,distanceM:best?.distance??1,pinch:ratio};
+    }
+    if(this.held && pinching) {
+      this.held.target=midpoint.add(this.held.offset.applyRotationQuaternion(orientation));
+      this.held.target.y=Math.max(.35,this.held.target.y);
+      this.held.rotation=orientation.multiply(this.held.relative);
+      this.result={action:"grab",reason:"holding",target:this.held.thing.mesh.name,pinch:ratio};
+      this.cursorMaterial.emissiveColor=Color3.FromHexString("#ffc676");
+    } else if(!pinching) {
+      const released=this.release(); this.cursorMaterial.emissiveColor=Color3.FromHexString("#91ffe0");
+      if(released) this.result={action:"release",reason:"pinch-opened",target:released};
+      else this.touch(at,tip[1]);
+    }
+    this.pinched=pinching; return this.result;
+  }
+  private touch(at: Vector3, height: number): void {
+    const panel=this.original.panel;
+    const local=Vector3.TransformCoordinates(at,panel.computeWorldMatrix(true).clone().invert());
+    const inPanel=Math.abs(local.x)<1.44 && Math.abs(local.y)<.9;
+    const onPanel=inPanel && Math.abs(local.z)*this.original.panel.scaling.z*this.scale<.015;
+    const board=this.original.floor.table;
+    const onBoard=height>-.018 && height<(this.contact?.down ? .025 : .014) && Math.abs(at.x-board.center.x)<board.width/2 && Math.abs(at.z-board.center.z)<board.depth/2;
+    const actor=[...this.original.things.values()].find(thing=>{
+      thing.mesh.computeWorldMatrix(true);const box=thing.mesh.getBoundingInfo().boundingBox;
+      return Vector3.Distance(at,Vector3.Clamp(at,box.minimumWorld,box.maximumWorld))*this.scale<.009;
+    });
+    if(actor){this.endContact(true);this.result={action:"hover",reason:"over-object",target:actor.mesh.name};return;}
+    const kind=onPanel?"panel":onBoard?"board":null;
+    if(!kind) { this.endContact(false); this.result={action:"hover",reason:"above-surface",target:null,distanceM:height}; return; }
+    const point=kind==="panel"?Vector3.TransformCoordinates(new Vector3(local.x,local.y,0),panel.getWorldMatrix()):new Vector3(at.x,0,at.z);
+    if(this.contact && this.contact.kind!==kind) this.endContact(true);
+    if(!this.contact) this.contact={kind,point,frames:0,down:false};
+    this.contact.point=point; this.contact.frames++;
+    if(!this.contact.down && this.contact.frames>=2) {
+      const control=kind==="panel"?this.original.controlAt(point):null;
+      this.original.pointer("down",point,kind); this.contact.down=true; this.presses++;
+      if(control && ["crate","ball","gravity","clear"].includes(control)) {
+        this.original.pointer("up",point,kind); this.contact.clickOnly=true;
       }
+    } else if(this.contact.down && !this.contact.clickOnly) this.original.pointer("move",point,kind);
+    this.result={action:"touch",reason:this.contact.down?"pointer-down":"debounce",target:kind};
+  }
+  private endContact(cancel: boolean): void {
+    if(this.contact?.down && !this.contact.clickOnly) this.original.pointer(cancel?"cancel":"up",this.contact.point,this.contact.kind);
+    this.contact=null;
+  }
+  loseHand(immediate=false): void {
+    this.fingertip.isVisible=false; this.endContact(true);
+    if(immediate||performance.now()-this.lastHand>650) { this.release(); this.pinched=false; }
+    this.result={action:"idle",reason:"hand-lost",target:null};
+  }
+  private release(): string|null {
+    if(!this.held)return null;
+    const id=this.held.thing.mesh.name,body=this.held.thing.body.body;
+    body.setMotionType(PhysicsMotionType.DYNAMIC);body.setLinearVelocity(Vector3.Zero());body.setAngularVelocity(Vector3.Zero());
+    this.held=null;this.releases++;return id;
+  }
+  resetObjects(): void {
+    this.release(); let n=0;
+    for(const thing of this.original.things.values()) {
+      const area=this.original.floor.table,i=n++;
+      thing.body.body.disablePreStep=false;
+      thing.mesh.position.set(area.center.x+(i%3-1)*area.width*.22,1.5,area.center.z+(i<3?-.08:.12)*area.depth);
+      thing.body.body.setLinearVelocity(Vector3.Zero());thing.body.body.setAngularVelocity(Vector3.Zero());
+      this.scene.onAfterPhysicsObservable.addOnce(()=>{thing.body.body.disablePreStep=true;});
     }
-    if (pinching && this.held) {
-      const { item, offset, relative } = this.held;
-      const rotation = orientation.multiply(relative);
-      const target = midpoint.add(offset.applyRotationQuaternion(orientation));
-      target.y = Math.max(0.015, target.y);
-      this.held.target = target; this.held.rotation = rotation;
-      if (Math.abs(Quaternion.Dot(item.mesh.rotationQuaternion!, rotation)) < 0.997) this.rotations++;
-    }
-    if (!pinching) this.release();
-    this.pinched = pinching;
   }
-  loseHand(immediate = false): void {
-    this.fingertip.isVisible = this.shadow.isVisible = false;
-    this.pressed = false; this.touchFrames = 0; this.button.scaling.y = 1; this.buttonMat.emissiveColor = Color3.Black();
-    if (immediate || performance.now() - this.lastHand > 600) { this.release(); this.pinched = false; }
-  }
-  private release(): void {
-    if (!this.held) return;
-    const body = this.held.item.physics.body;
-    body.setMotionType(PhysicsMotionType.DYNAMIC); body.setLinearVelocity(Vector3.Zero()); body.setAngularVelocity(Vector3.Zero());
-    this.held = null; this.releases++;
-  }
-  private restore(item: ARScene["objects"][number]): void {
-    item.physics.body.disablePreStep = false;
-    item.mesh.position.copyFrom(vector(item.initial)); item.mesh.rotationQuaternion = Quaternion.Identity();
-    item.physics.body.setLinearVelocity(Vector3.Zero()); item.physics.body.setAngularVelocity(Vector3.Zero());
-    this.scene.onAfterPhysicsObservable.addOnce(() => { item.physics.body.disablePreStep = true; });
-  }
-  resetObjects(): void { this.release(); for (const item of this.objects) this.restore(item); }
-  get holding(): string { return this.held?.item.mesh.name ?? "—"; }
   dispose(): void { this.scene.dispose(); this.engine.dispose(); }
 }

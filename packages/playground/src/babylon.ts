@@ -39,7 +39,7 @@ const PALETTE = ["#f97316", "#0ea5e9", "#8b5cf6", "#10b981", "#ef4444", "#eab308
 const W = 480;
 const H = 300;
 
-interface Thing {
+export interface BabylonThing {
   readonly mesh: Mesh;
   readonly body: PhysicsAggregate;
   readonly handle: ObjectHandle<{ bumps: number }>;
@@ -57,12 +57,21 @@ const loadPage = (frame: HTMLIFrameElement): Promise<FloorPage> =>
     wait();
   });
 
-export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; fly: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d"; tilt?: boolean }): Promise<void> => {
+export interface BabylonRuntime {
+  engine: Engine; scene: BabylonScene; world: World; floor: Floor; panel: Mesh;
+  things: Map<string, BabylonThing>; drop: (kind: "crate" | "ball") => void;
+  resize: () => void; visible: boolean;
+  controlAt: (point: Vector3) => string | null;
+  events: {phase:string;surface:string;path:string[];before:number;after:number}[];
+  pointer: (phase: "down" | "move" | "up" | "cancel", point: Vector3, target: "panel" | "board") => void;
+}
+
+export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; fly: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d"; tilt?: boolean; ar?: boolean }): Promise<BabylonRuntime> => {
   const { canvas, frame, toggle } = options;
-  const engine = new Engine(canvas, true, { stencil: true, preserveDrawingBuffer: false }, true);
+  const engine = new Engine(canvas, true, { alpha: !!options.ar, stencil: true, preserveDrawingBuffer: false }, true);
   engine.setHardwareScalingLevel(1 / Math.min(2, window.devicePixelRatio || 1));
   const scene = new BabylonScene(engine);
-  scene.clearColor = new Color4(0.86, 0.89, 0.93, 1);
+  scene.clearColor = options.ar ? new Color4(0, 0, 0, 0) : new Color4(0.86, 0.89, 0.93, 1);
   const hk = await HavokPhysics({ locateFile: () => havokWasm });
   const gravity = new Vector3(0, -9.81, 0);
   scene.enablePhysics(gravity, new HavokPlugin(true, hk));
@@ -134,15 +143,18 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   };
 
   // The crates and balls.
-  const things = new Map<string, Thing>();
+  const things = new Map<string, BabylonThing>();
   let count = 0;
-  let held: { thing: Thing; normal: Vector3; offset: Vector3; target: Vector3 } | null = null;
+  let held: { thing: BabylonThing; normal: Vector3; offset: Vector3; target: Vector3 } | null = null;
   const drop = (kind: "crate" | "ball"): void => {
     const n = ++count;
     const id = `${kind}-${n}`;
     const color = PALETTE[n % PALETTE.length]!;
-    const mesh = kind === "crate" ? CreateBox(id, { size: 0.7, wrap: true }, scene) : CreateSphere(id, { diameter: 0.6, segments: 24 }, scene);
-    mesh.position.set((Math.random() - 0.5) * 3, 4 + Math.random() * 2, (Math.random() - 0.5) * 2 - 0.5);
+    const mesh = kind === "crate" ? CreateBox(id, { size: options.ar ? 1.75 : 0.7, wrap: true }, scene) : CreateSphere(id, { diameter: options.ar ? 1.5 : 0.6, segments: 24 }, scene);
+    if (options.ar) {
+      const area = floor.table;
+      mesh.position.set(area.center.x + ((n - 1) % 3 - 1) * area.width * 0.22, 2 + n * 0.2, area.center.z + (n <= 3 ? -0.08 : 0.12) * area.depth);
+    } else mesh.position.set((Math.random() - 0.5) * 3, 4 + Math.random() * 2, (Math.random() - 0.5) * 2 - 0.5);
     mesh.rotation.set(Math.random() * 3, Math.random() * 3, 0);
     const material = new StandardMaterial(id, scene);
     material.diffuseColor = Color3.FromHexString(color);
@@ -152,7 +164,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     const body = new PhysicsAggregate(mesh, kind === "crate" ? PhysicsShapeType.BOX : PhysicsShapeType.SPHERE, { mass: kind === "crate" ? 1 : 0.6, restitution: state.bounce, friction: 0.6 }, scene);
     body.body.setAngularDamping(0.3);
     // A crate wears a drawing on each face: its number and how many times it was knocked hard, redrawn when that changes.
-    let label: Thing["label"];
+    let label: BabylonThing["label"];
     if (kind === "crate") {
       const surface = world.add(new Surface({ version: 1, ops: [] }, { mesh, width: 128, height: 128, background: color, unlit: false }));
       const ui = new Components(surface.scene, router, { onChange: () => surface.invalidate() });
@@ -207,7 +219,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
         },
       },
     });
-    const thing: Thing = { mesh, body, handle, label };
+    const thing: BabylonThing = { mesh, body, handle, label };
     things.set(id, thing);
     body.body.setCollisionCallbackEnabled(true);
     body.body.getCollisionObservable().add((c) => {
@@ -391,6 +403,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
 
   let lastClick = { at: 0, target: "", x: 0, y: 0 };
   router.on("*", "click", (e) => {
+    if (options.ar) return;
     const target = e.path.find((id) => things.has(id) || id === "stand" || id.startsWith("pin-")) ?? "";
     const { x, y } = e.input as Point;
     const now = performance.now();
@@ -881,8 +894,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     const now = performance.now();
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    steer(dt);
-    sticks.apply(dt);
+    if (!options.ar) { steer(dt); sticks.apply(dt); }
     if (flight) {
       const t = Math.min(1, (performance.now() - flight.t0) / 700);
       aim(Vector3.Lerp(flight.from, flight.to, ease(t)));
@@ -954,7 +966,34 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   }
   // Opened from the page's own View in 3D: the page shows where it was, then tilts down into the room.
   if (options.tilt && mode === "2d") setTimeout(() => void to3d(), 600);
+  const runtime: BabylonRuntime = {
+    engine, scene, world, floor, panel, things, drop, resize, visible: !options.ar, events: [],
+    controlAt: point => router.pick(onHost(point)).path.find(id=>handles.has(id))??null,
+    pointer: (phase, point, target) => {
+      const before=things.size,path=target==="panel"?router.pick(onHost(point)).path:[];
+      if (target === "board") {
+        sendToPage(new PointerEvent(`pointer${phase}`, { pointerId: 91, pointerType: "touch", button: 0, buttons: phase === "up" || phase === "cancel" ? 0 : 1 }), `pointer${phase}`, floor.toBoard(point));
+      } else {
+        const p = onHost(point);
+        options.onEvent?.(`hand:${phase}:${router.pick(p).path.join(">")}`);
+        if (phase === "down") router.pointerDown(p);
+        else if (phase === "move") router.pointerMove(p);
+        else if (phase === "up") router.pointerUp(p);
+        else router.pointerCancel();
+      }
+      runtime.events.push({phase,surface:target,path,before,after:things.size});if(runtime.events.length>80)runtime.events.shift();
+    },
+  };
+  if (options.ar) {
+    floor.ground.isVisible = false;
+    for (const mesh of scene.meshes) if (mesh.name.startsWith("table/leg")) mesh.isVisible = false;
+    // The original control panel remains fully interactive, laid on the tabletop.
+    panel.parent = null; panel.position.set(floor.table.center.x, 0.035, floor.table.center.z - floor.table.depth * 0.25);
+    panel.rotation.x = Math.PI / 2;
+    stand.setEnabled(false); back.physicsBody?.dispose(); pole.physicsBody?.dispose();
+  }
   engine.runRenderLoop(() => {
+    if (options.ar && !runtime.visible) return;
     tick();
     // In 2D nothing in the room is seen: it only steps its physics.
     if (mode === "3d" || moving) scene.render();
@@ -962,7 +1001,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   });
   // For tests: where a mesh, or a point of the panel's drawing, is on the host.
   const onHost = (p: Vector3): { x: number; y: number } => {
-    const q = Vector3.Project(p, Matrix.Identity(), camera.getViewMatrix().multiply(camera.getProjectionMatrix()), camera.viewport.toGlobal(size.width, size.height));
+    const q = Vector3.Project(p, Matrix.Identity(), scene.activeCamera!.getViewMatrix().multiply(scene.activeCamera!.getProjectionMatrix()), scene.activeCamera!.viewport.toGlobal(size.width, size.height));
     return { x: Math.round(q.x), y: Math.round(q.y) };
   };
   (window as unknown as { canvasIrBabylon?: unknown }).canvasIrBabylon = {
@@ -982,4 +1021,5 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     },
     onPanel: (x: number, y: number) => onHost(Vector3.TransformCoordinates(new Vector3((x / W - 0.5) * 2.88, (0.5 - y / H) * 1.8, 0), panel.computeWorldMatrix(true))),
   };
+  return runtime;
 };

@@ -9,14 +9,18 @@ import { intrinsics, markerCorners, project, type Pose, type V3 } from "../src/a
 import type { ARScene } from "../src/ar/scene";
 import type { MarkerMap } from "../src/ar/vision";
 
-declare global { interface Window { canvasIrAR: { scene: ARScene; map: MarkerMap; snapshot: () => { running: boolean; pose: Pose; intrinsics: ReturnType<typeof intrinsics>; handEnabled: boolean } } } }
+declare global { interface Window { canvasIrAR: { scene: ARScene; map: MarkerMap; hand: import("../src/ar/hand").HandTracking; trace: unknown[];
+  replayHand: (result: import("@mediapipe/tasks-vision").HandLandmarkerResult,now:number)=>void;
+  analyzeHand: (source:HTMLCanvasElement)=>Promise<import("@mediapipe/tasks-vision").HandLandmarkerResult>;
+  snapshot: () => { running:boolean; pose:Pose; intrinsics:ReturnType<typeof intrinsics>; tableReady:boolean; usedIds:number[]; hand:import("../src/ar/hand").HandEstimate|null; interaction:import("../src/ar/scene").InteractionResult|null }
+} } }
 const assert = (condition: unknown, message: string): void => { if (!condition) throw new Error(message); console.log("✓", message); };
 const temporary = await mkdtemp(join(tmpdir(), "canvas-ir-ar-"));
 const cv = await (cvModule as unknown as Promise<any>);
 const width = 800, height = 600, fps = 10;
 const k = intrinsics(width,height,60);
 const dictionary = cv.getPredefinedDictionary(cv.DICT_4X4_50);
-const centers: V3[] = [[0,0,0], [.16,0,-.1], [-.16,0,.1]];
+const centers: V3[] = [[0,0,0], [.18,0,-.1], [-.08,0,.12]];
 const theta = 0.35;
 const pose: Pose = { r: [1,0,0, 0,-Math.sin(theta),Math.cos(theta), 0,-Math.cos(theta),-Math.sin(theta)], t:[0,0,.6] };
 const cameraFrame = (ids: number[], camera = pose): Uint8Array => {
@@ -45,6 +49,7 @@ for(const [seconds,frame] of [[5,all],[1.5,blank],[4,one],[1.5,blank]] as const)
 await file.end();
 const dist = resolve(import.meta.dir,"../dist");
 const server = Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){
+  if(new URL(request.url).pathname==="/test-hand.jpg")return new Response(Bun.file(process.env.AR_HAND_IMAGE||join(temporary,"hand.jpg")));
   const path = resolve(dist,"." + decodeURIComponent(new URL(request.url).pathname));
   if(!path.startsWith(dist+sep))return new Response("Not found",{status:404});
   return new Response(Bun.file(path));
@@ -59,98 +64,92 @@ const waitReady = async (page: Page): Promise<void> => {
 };
 try {
   await page.goto(`http://127.0.0.1:${server.port}/ar.html`); await waitReady(page);
-  await page.locator("#markers").click(); assert(await page.locator("#marker-sheet canvas").count()===3,"three printable codes");
-  await page.locator("#close-markers").click();
+  await page.locator("#markers").click(); assert(await page.locator("#marker-sheet canvas").count()===3,"three printable codes");await page.locator("#close-markers").click();
   await page.locator("#start").click();
-  await page.waitForFunction(()=>window.canvasIrAR.map.markers.size===3,null,{timeout:15000});
-  assert(await page.locator("#state").getAttribute("data-state")==="tracked","real camera detection and table pose");
-  const projection = await page.evaluate(()=>{
-    const {scene,snapshot}=window.canvasIrAR, {pose:p,intrinsics:k}=snapshot();
-    const points: V3[]=[[-.2,0,-.1],[.2,0,.1],[.06,.05,.06]];
-    scene.camera.getViewMatrix(true); const view=scene.camera.getViewMatrix(), projection=scene.camera.getProjectionMatrix();
-    // Matrix projection without importing application classes into the test page.
-    const m=view.multiply(projection).m;
-    return points.map(([x,y,z])=>{
-      const r=p.r,t=p.t, a=r[0]!*x+r[1]!*y+r[2]!*z+t[0],b=r[3]!*x+r[4]!*y+r[5]!*z+t[1],c=r[6]!*x+r[7]!*y+r[8]!*z+t[2];
-      const w=x*m[3]!+y*m[7]!+z*m[11]!+m[15]!;
-      const px=((x*m[0]!+y*m[4]!+z*m[8]!+m[12]!)/w+1)*k.width/2;
-      const py=(1-(x*m[1]!+y*m[5]!+z*m[9]!+m[13]!)/w)*k.height/2;
+  await page.waitForFunction(()=>window.canvasIrAR.snapshot().tableReady&&window.canvasIrAR.snapshot().usedIds.length===3,null,{timeout:15000});
+  const identity=await page.evaluate(()=>{const ar=window.canvasIrAR,old=(window as unknown as {canvasIrBabylon:{scene:unknown;things:unknown}}).canvasIrBabylon;return{sameScene:old.scene===ar.scene.scene,sameThings:old.things===ar.scene.original.things,ids:[...ar.scene.original.things.keys()],center:ar.scene.layout.center,used:ar.snapshot().usedIds};});
+  assert(identity.sameScene&&identity.sameThings,"AR uses the original Babylon scene and the same physical objects");
+  assert(identity.ids.some(id=>id.startsWith("ball"))&&identity.ids.some(id=>id.startsWith("crate")),"original balls, crates and their CanvasIR labels exist");
+  assert(identity.used.length===3,`all three markers contribute: ${identity.used}`);
+  assert(Math.abs(identity.center[0]-.05)<.005&&Math.abs(identity.center[2]-.01)<.005,`table centered on marker group, not root: ${identity.center}`);
+  const projection=await page.evaluate(()=>{
+    const {scene,snapshot}=window.canvasIrAR,{pose:p,intrinsics:k}=snapshot();scene.camera.getViewMatrix(true);
+    const m=scene.camera.getViewMatrix().multiply(scene.camera.getProjectionMatrix()).m;
+    return ([[-.1,0,-.1],[.2,0,.1],[.06,.05,.06]] as V3[]).map(point=>{
+      const [x,y,z]=point,r=p.r,t=p.t, a=r[0]!*x+r[1]!*y+r[2]!*z+t[0],b=r[3]!*x+r[4]!*y+r[5]!*z+t[1],c=r[6]!*x+r[7]!*y+r[8]!*z+t[2];
+      const q=scene.room(point),w=q.x*m[3]!+q.y*m[7]!+q.z*m[11]!+m[15]!;
+      const px=((q.x*m[0]!+q.y*m[4]!+q.z*m[8]!+m[12]!)/w+1)*k.width/2;
+      const py=(1-(q.x*m[1]!+q.y*m[5]!+q.z*m[9]!+m[13]!)/w)*k.height/2;
       return Math.hypot(px-(k.fx*a/c+k.cx),py-(k.fy*b/c+k.cy));
     });
   });
-  assert(projection.every(error=>error<.1),`Babylon projection agrees with OpenCV: ${projection}`);
+  assert(projection.every(v=>v<.1),`original LH scene projects into RH table correctly: ${projection}`);
   await page.screenshot({path:join(temporary,"tracked.png")});
-  await page.locator("#freeze").click();
-  await page.waitForFunction(()=>document.querySelector("#state")!.getAttribute("data-state")==="lost",null,{timeout:10000});
-  await page.waitForFunction(()=>document.querySelector("#state")!.getAttribute("data-state")==="tracked",null,{timeout:10000});
-  assert(await page.evaluate(()=>window.canvasIrAR.map.markers.size)===3,"map survives total loss and relocalizes with ID 2 alone");
-  await page.locator("#stop").click();
-  const stopped = await page.evaluate(()=>!window.canvasIrAR.snapshot().running && document.querySelector<HTMLVideoElement>("#video")!.srcObject===null);
-  assert(stopped,"stop releases the camera");
-  // Exercise manual calibration against the same scene, then physical button/grab/release behavior.
-  await page.locator("#anchor").selectOption("manual"); await page.locator("#start").click();
-  await page.waitForFunction(()=>window.canvasIrAR.snapshot().running);
-  const rect=await page.locator("#overlay").boundingBox(); assert(rect,"camera image bounds");
-  const manual = await page.evaluate(()=>{
-    const k=window.canvasIrAR.snapshot().intrinsics;
-    return [[-.3,-.2],[.3,-.2],[.3,.2],[-.3,.2]].map(([x,z])=>[(k.fx*x!/.9+k.cx)/k.width,(k.fy*z!/.9+k.cy)/k.height]);
+  const layoutBefore=await page.evaluate(()=>window.canvasIrAR.scene.layout);
+  await page.waitForFunction(()=>!window.canvasIrAR.scene.enabled,null,{timeout:10000});
+  await page.waitForFunction(()=>window.canvasIrAR.scene.enabled&&window.canvasIrAR.snapshot().usedIds.length===1,null,{timeout:10000});
+  const layoutAfter=await page.evaluate(()=>window.canvasIrAR.scene.layout);
+  assert(JSON.stringify(layoutBefore)===JSON.stringify(layoutAfter),"occlusion does not recenter or rescale the original table");
+  // Pause inference only, retaining the current camera/table pose. Replays below
+  // go through the production HandTracking pipeline, not just scene.hand().
+  await page.evaluate(()=>{document.querySelector<HTMLVideoElement>("#video")!.pause();});
+  if(!process.env.AR_HAND_IMAGE){const response=await fetch("https://storage.googleapis.com/mediapipe-assets/right_hands.jpg");if(!response.ok)throw Error("Official MediaPipe hand fixture unavailable");await Bun.write(join(temporary,"hand.jpg"),await response.arrayBuffer());}
+  const detected=await page.evaluate(async()=>{
+    const image=new Image();image.src="/test-hand.jpg";await image.decode();const k=window.canvasIrAR.snapshot().intrinsics;
+    const canvas=document.createElement("canvas");canvas.width=k.width;canvas.height=k.height;const ctx=canvas.getContext("2d")!;ctx.fillStyle="white";ctx.fillRect(0,0,canvas.width,canvas.height);
+    const factor=Math.min(canvas.width/image.width,canvas.height/image.height)*.5;ctx.drawImage(image,(canvas.width-image.width*factor)/2,(canvas.height-image.height*factor)/2,image.width*factor,image.height*factor);
+    const result=await window.canvasIrAR.analyzeHand(canvas);(window as unknown as {arActualHand:typeof result}).arActualHand=result;
+    return {count:result.landmarks.length,estimate:window.canvasIrAR.snapshot().hand};
   });
-  for(const [x,y] of manual)await page.mouse.click(rect!.x+rect!.width*x!,rect!.y+rect!.height*y!);
-  await page.waitForFunction(()=>window.canvasIrAR.scene.enabled);
-  await page.evaluate(()=>{
-    const {scene}=window.canvasIrAR;
-    const points: V3[]=Array.from({length:21},()=>[0,.1,0]);
-    points[0]=[0,.1,.12];points[9]=[0,.1,.04];points[5]=[.03,.1,.07];points[17]=[-.03,.1,.07];
-    points[8]=[-.13,.008,.06];points[4]=[-.19,.008,.06];
-    scene.hand(points,true,performance.now());scene.hand(points,true,performance.now());
-  });
-  assert(await page.evaluate(()=>window.canvasIrAR.scene.presses)===1,"index finger triggers the button");
-  await page.evaluate(()=>{
-    const {scene}=window.canvasIrAR; scene.resetObjects();
-    const points: V3[]=Array.from({length:21},()=>[0,.1,0]);
-    points[0]=[0,.1,.12];points[9]=[0,.1,.04];points[5]=[.03,.1,.07];points[17]=[-.03,.1,.07];
-    points[8]=[.055,.03,.06];points[4]=[.115,.03,.06]; scene.hand(points,true,performance.now());
-    points[4]=[.07,.03,.06];scene.hand(points,true,performance.now());
-    (window as unknown as {arTestPoints:V3[]}).arTestPoints=points;
-  });
-  assert(await page.evaluate(()=>window.canvasIrAR.scene.holding)==="cube","pinch captures a nearby cube");
-  for(let i=0;i<5;i++) {
-    await page.evaluate(()=>{
-      const p=(window as unknown as {arTestPoints:V3[]}).arTestPoints;
-      p[8]=[.13,.14,.06];p[4]=[.145,.14,.06];
-      // Turn the palm while moving it.
-      p[5]=[.02,.12,.07];p[17]=[-.02,.08,.07];
-      window.canvasIrAR.scene.hand(p,true,performance.now());
-    });
-    await page.waitForTimeout(80);
+  assert(detected.count===1,`real MediaPipe detects the official photo fixture (${detected.count} hand)`);
+  const actualRaw=await page.evaluate(()=>(window as unknown as {arActualHand:unknown}).arActualHand);await Bun.write(join(temporary,"actual-landmarks.json"),JSON.stringify(actualRaw));
+  assert(detected.estimate?.points,`real MediaPipe geometry accepted: ${JSON.stringify({reason:detected.estimate?.reason,error:detected.estimate?.error,method:detected.estimate?.method})}`);
+  await page.locator("#touch").click();
+  for(let i=0;i<14;i++){
+    await page.evaluate(()=>window.canvasIrAR.replayHand((window as unknown as {arActualHand:import("@mediapipe/tasks-vision").HandLandmarkerResult}).arActualHand,performance.now()));
+    await page.waitForTimeout(75);
   }
-  const heldPosition=await page.evaluate(()=>{
-    const cube=window.canvasIrAR.scene.scene.getMeshByName("cube")!;
-    return {x:cube.position.x,y:cube.position.y,rotation:cube.rotationQuaternion!.asArray()};
+  const calibration=await page.evaluate(()=>({scale:window.canvasIrAR.hand.metricScale,estimate:window.canvasIrAR.snapshot().hand}));
+  assert(calibration.scale!==null,`touch calibration completes on real MediaPipe output: scale ${calibration.scale}`);
+  assert(Math.abs(calibration.estimate!.points![8]![1])<.003,"calibrated fingertip lies on the real table plane");
+  // Reproject the measured metric hand at a real original crate, preserving its
+  // anatomy and camera transform. Changes to thumb position generate an actual pinch.
+  await page.evaluate(()=>{window.canvasIrAR.scene.resetObjects();});await page.waitForTimeout(500);
+  const gesture=async(pinched:boolean,lift:number,turn=0):Promise<void>=>{
+    await page.evaluate(({pinched,lift,turn})=>{
+      const ar=window.canvasIrAR,{pose:p,intrinsics:k}=ar.snapshot(),thing=[...ar.scene.original.things.values()].find(t=>t.mesh.name.startsWith("crate"))!;
+      const target=ar.scene.table(thing.mesh.position);target[1]+=lift;
+      const toCam=(v:V3):V3=>[p.r[0]!*v[0]+p.r[1]!*v[1]+p.r[2]!*v[2]+p.t[0],p.r[3]!*v[0]+p.r[4]!*v[1]+p.r[5]!*v[2]+p.t[1],p.r[6]!*v[0]+p.r[7]!*v[1]+p.r[8]!*v[2]+p.t[2]];
+      const cam=toCam(target),metric=ar.hand.metricScale!;
+      const shape:V3[]=Array.from({length:21},(_,i)=>[(i%5-2)*.012,(Math.floor(i/5)-2)*.018,(i%3)*.004]);
+      shape[8]=[-.003,0,0];shape[4]=[pinched?.004:.055,0,0];shape[5]=[.035,-.025,0];shape[17]=[-.035,-.025,0];shape[0]=[0,.045,.004];shape[9]=[0,-.035,.004];
+      const rot=shape.map(([x,y,z])=>[Math.cos(turn)*x-Math.sin(turn)*y,Math.sin(turn)*x+Math.cos(turn)*y,z] as V3);
+      const camera=rot.map(v=>[v[0]/metric+cam[0]/metric,v[1]/metric+cam[1]/metric,v[2]/metric+cam[2]/metric] as V3);
+      const result={landmarks:[camera.map(v=>({x:(k.fx*v[0]/v[2]+k.cx)/k.width,y:(k.fy*v[1]/v[2]+k.cy)/k.height,z:0}))],worldLandmarks:[rot.map(v=>({x:v[0]/metric,y:v[1]/metric,z:v[2]/metric}))],handedness:[[{categoryName:"Right",displayName:"Right",score:1,index:0}]]};
+      ar.replayHand(result,performance.now());
+    },{pinched,lift,turn});
+  };
+  await gesture(false,0);await gesture(true,0);
+  assert((await page.evaluate(()=>window.canvasIrAR.snapshot().interaction))?.action==="grab","production landmark pipeline grabs an original crate");
+  const before=await page.evaluate(()=>{const t=[...window.canvasIrAR.scene.original.things.values()].find(t=>t.mesh.name.startsWith("crate"))!;return window.canvasIrAR.scene.table(t.mesh.position)[1];});
+  for(let i=0;i<5;i++){await gesture(true,.015,.4);await page.waitForTimeout(75);}
+  const after=await page.evaluate(()=>{const t=[...window.canvasIrAR.scene.original.things.values()].find(t=>t.mesh.name.startsWith("crate"))!;return window.canvasIrAR.scene.table(t.mesh.position)[1];});
+  assert(after>before+.02,`original Havok crate lifts with the landmark pipeline: ${before} → ${after}`);
+  await gesture(false,0);assert(await page.evaluate(()=>window.canvasIrAR.scene.holding)==="—","opening the pinch returns the original body to Havok dynamics");
+  // Real CanvasIR panel component: two contact frames must execute Drop crate.
+  const panelCounts=await page.evaluate(()=>{
+    const ar=window.canvasIrAR,s=ar.scene,panel=s.original.panel;
+    const m=panel.computeWorldMatrix(true).m,local=[(76/480-.5)*2.88,(.5-111/300)*1.8,0];
+    const point=s.table(new (s.camera.position.constructor as new(x:number,y:number,z:number)=>typeof s.camera.position)(local[0]!*m[0]!+local[1]!*m[4]!+m[12]!,local[0]!*m[1]!+local[1]!*m[5]!+m[13]!,local[0]!*m[2]!+local[1]!*m[6]!+m[14]!));
+    const points:V3[]=Array.from({length:21},()=>[...point]);points[8]=point;points[4]=[point[0]+.06,point[1],point[2]];points[5]=[point[0]+.03,point[1],point[2]];points[17]=[point[0]-.03,point[1],point[2]];points[0]=[point[0],point[1],point[2]+.04];points[9]=[point[0],point[1],point[2]-.04];
+    const before=s.original.things.size;s.hand(points,true,performance.now(),1);s.hand(points,true,performance.now(),1);return{before,after:s.original.things.size,action:s.result,events:s.original.events,control:s.original.controlAt(s.room(point))};
   });
-  assert(heldPosition.y>.09 && heldPosition.y<.25 && heldPosition.x>.09 && heldPosition.x<.25,`animated Havok body follows 3D hand: ${JSON.stringify(heldPosition)}`);
-  assert(heldPosition.rotation.slice(0,3).some(v=>Math.abs(v)>.1),"wrist rotates the held cube");
-  await page.evaluate(()=>{
-    const p=(window as unknown as {arTestPoints:V3[]}).arTestPoints;p[4]=[.21,.14,.06];window.canvasIrAR.scene.hand(p,true,performance.now());
-  });
-  assert(await page.evaluate(()=>window.canvasIrAR.scene.holding)==="—","opening pinch releases the cube");
-  await page.waitForTimeout(400);
-  const landed=await page.evaluate(()=>window.canvasIrAR.scene.scene.getMeshByName("cube")!.position.y);
-  assert(landed<.06 && landed>0,`released cube falls onto physical table: ${landed}`);
-  await page.locator("#stop").click();
-  // Real MediaPipe WASM/model initialization and inference on the synthetic empty scene.
-  await page.locator("#hands").click();
-  await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>("#hands")!.disabled,null,{timeout:90000});
-  assert(await page.evaluate(()=>window.canvasIrAR.snapshot().handEnabled),`MediaPipe loads: ${await page.locator("#notice").innerText()}`);
-  await page.locator("#start").click(); await page.waitForFunction(()=>document.querySelector("#hand-state")!.textContent==="не видна");
-  await page.locator("#stop").click();
-  await page.setViewportSize({width:390,height:844});
-  await page.screenshot({path:join(temporary,"mobile.png"),fullPage:true});
-  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),"mobile layout has no horizontal overflow");
+  assert(panelCounts.after===panelCounts.before+1,`touch executes original Drop crate component: ${JSON.stringify(panelCounts)}`);
+  assert(await page.evaluate(()=>window.canvasIrAR.trace.some((e:any)=>e.kind==="hand"&&e.data.interaction?.action==="grab")),"trace records successful interaction and pose/rejection inputs");
+  await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(temporary,"mobile.png")});
+  assert(await page.evaluate(()=>document.documentElement.scrollHeight===innerHeight&&document.documentElement.scrollWidth===innerWidth),"camera fills the viewport with no diagnostic panels or scrolling");
+  await page.locator("#menu").click();await page.locator("#stop").click();assert(await page.evaluate(()=>document.querySelector<HTMLVideoElement>("#video")!.srcObject===null),"stop releases camera tracks");
   assert(errors.length===0,`browser errors: ${errors.join("; ")}`);
-  console.log("PASS: ArUco camera pipeline, arbitrary map, total loss/relocalization, OpenCV/Babylon projection, manual mode, Havok touch/grab/rotation/release, MediaPipe initialization/inference, mobile layout, camera cleanup.");
-  console.log(`Screenshots: ${temporary}`);
-} catch (error) {
-  console.error("Browser state:", await page.locator("#notice").innerText(), await page.locator("#state").innerText(), errors);
-  await page.screenshot({path:join(temporary,"failure.png"),fullPage:true}); console.error("Failure screenshot:",join(temporary,"failure.png")); throw error;
-} finally { await browser.close(); server.stop(); await rm(videoPath,{force:true}); }
+  console.log("PASS: original Babylon reuse, three-marker placement/occlusion, real MediaPipe geometry and touch calibration, landmark-to-Havok grab/lift/release, original control click, fullscreen UI and trace.");console.log(`Screenshots: ${temporary}`);
+} catch(error){console.error("Snapshot:",await page.evaluate(()=>window.canvasIrAR?.snapshot()));await page.screenshot({path:join(temporary,"failure.png")});console.error("Failure screenshot:",join(temporary,"failure.png"));throw error;}
+finally{await browser.close();server.stop();await rm(videoPath,{force:true});}

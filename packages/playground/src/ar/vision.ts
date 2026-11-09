@@ -5,7 +5,7 @@ import { markerCorners, onTable, project, sub, length, median, toTable, type Int
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type CV = any;
 export interface Marker { id: number; pixels: Pixel[] }
-export interface Fit { pose: Pose; error: number; inliers: number }
+export interface Fit { pose: Pose; error: number; inliers: number; usedPoints?: number[]; markerIds?: number[] }
 export const loadCV = async (): Promise<CV> => {
   const w = window as unknown as { cv: CV };
   if (!w.cv) await new Promise<void>((resolve, reject) => {
@@ -75,7 +75,7 @@ export class Vision {
       }
       if (best.length < Math.max(4, points.length * 0.6)) return null;
       const refined = this.fit(best.map(i => points[i]!), best.map(i => pixels[i]!), k);
-      return refined ? { ...refined, inliers: best.length } : null;
+      return refined ? { ...refined, inliers: best.length, usedPoints: best } : null;
     }
     const cv = this.cv;
     const objects = cv.matFromArray(points.length, 1, cv.CV_64FC3, points.flat());
@@ -92,9 +92,21 @@ export class Vision {
       const errors = selected.map(i => { const q = project(pose, k, points[i]!); return Math.hypot(q.x - pixels[i]!.x, q.y - pixels[i]!.y); });
       const error = Math.sqrt(errors.reduce((s, e) => s + e * e, 0) / errors.length);
       if (pose.t[2] <= 0) return null;
-      return { pose, error, inliers: selected.length };
+      return { pose, error, inliers: selected.length, usedPoints: selected };
     } catch { return null; }
     finally { for (const m of [objects, images, camera, distortion, rv, tv, rotation]) m.delete(); }
+  }
+  plane(points: V3[], pixels: Pixel[], queries: Pixel[]): V3[] | null {
+    const cv=this.cv;
+    const src=cv.matFromArray(pixels.length,1,cv.CV_32FC2,pixels.flatMap(p=>[p.x,p.y]));
+    const dst=cv.matFromArray(points.length,1,cv.CV_32FC2,points.flatMap(p=>[p[0],p[2]]));
+    let h: CV;
+    try {
+      h=cv.findHomography(src,dst,0);
+      if(h.empty())return null;
+      const m=Array.from(h.data64F) as number[];
+      return queries.map(p=>{const d=m[6]!*p.x+m[7]!*p.y+m[8]!;return [(m[0]!*p.x+m[1]!*p.y+m[2]!)/d,0,(m[3]!*p.x+m[4]!*p.y+m[5]!)/d];});
+    } finally {src.delete();dst.delete();h?.delete();}
   }
   dispose(): void { for (const m of [this.detector, this.dictionary, this.parameters, this.refine]) m.delete(); }
 }
@@ -104,37 +116,47 @@ interface Candidate { centers: V3[]; angles: number[] }
 export class MarkerMap {
   readonly markers = new Map<number, V3[]>();
   private candidates = new Map<number, Candidate>();
+  readonly decisions=new Map<number,unknown>();
   learning = true;
   constructor(public size: number) {}
-  reset(size = this.size): void { this.size = size; this.markers.clear(); this.candidates.clear(); this.learning = true; }
+  reset(size = this.size): void { this.size = size; this.markers.clear(); this.candidates.clear(); this.decisions.clear(); this.learning = true; }
   update(found: Marker[], vision: Vision, k: Intrinsics): Fit | null {
     if (!this.markers.size && found.length && this.learning) this.markers.set([...found].sort((a, b) => a.id - b.id)[0]!.id, markerCorners(this.size));
     const known = found.filter(m => this.markers.has(m.id));
-    if (!known.length) { this.candidates.clear(); return null; }
+    if (!known.length) {for(const m of found)this.decisions.set(m.id,{reason:"no-known-marker-overlap"});return null; }
     const fit = vision.fit(known.flatMap(m => this.markers.get(m.id)!), known.flatMap(m => m.pixels), k, true);
-    if (!fit || fit.error > 3 || toTable(fit.pose, [0, 0, 0])[1] < 0.03) return null;
+    if (!fit || fit.error > 3 || toTable(fit.pose, [0, 0, 0])[1] < 0.03) {
+      for(const m of known)this.decisions.set(m.id,{reason:"pose-rejected",error:fit?.error??null});return null;
+    }
+    const agreement=known.filter((_,i)=>[0,1,2,3].every(j=>fit.usedPoints?.includes(i*4+j)));
+    fit.markerIds=agreement.map(m=>m.id);
+    for(const m of known)this.decisions.set(m.id,{reason:fit.markerIds.includes(m.id)?"used-in-pose":"pose-outlier"});
     if (this.learning) for (const marker of found) {
       if (this.markers.has(marker.id)) continue;
-      const corners = marker.pixels.map(p => onTable(fit.pose, k, p));
-      if (corners.some(p => !p)) continue;
-      const p = corners as V3[];
-      if (p.some((v, i) => Math.abs(length(sub(v, p[(i + 1) % 4]!)) - this.size) > this.size * 0.12)) continue;
+      // Relative layout is a planar homography problem: unlike ray/PnP it does
+      // not depend on an approximate smartphone focal length.
+      const p = vision.plane(agreement.flatMap(m=>this.markers.get(m.id)!),agreement.flatMap(m=>m.pixels),marker.pixels);
+      if (!p || p.some(v=>!v.every(Number.isFinite))) continue;
+      const sides=p.map((v,i)=>length(sub(v,p[(i+1)%4]!)));
+      if(sides.some(side=>Math.abs(side-this.size)>this.size*.25)){this.decisions.set(marker.id,{reason:"inconsistent-marker-size",expectedM:this.size,sidesM:sides});continue;}
       const center: V3 = [p.reduce((s, v) => s + v[0], 0) / 4, 0, p.reduce((s, v) => s + v[2], 0) / 4];
       const edge = sub(p[1]!, p[0]!);
       const angle = Math.atan2(edge[2], edge[0]);
       let c = this.candidates.get(marker.id);
-      if (!c || length(sub(c.centers[0]!, center)) > 0.008 || Math.abs(Math.sin(angle - c.angles[0]!)) > 0.08) {
-        c = { centers: [], angles: [] }; this.candidates.set(marker.id, c);
-      }
-      c.centers.push(center); c.angles.push(angle);
-      if (c.centers.length >= 12) {
+      if (!c) {c={centers:[],angles:[]};this.candidates.set(marker.id,c);}
+      c.centers.push(center); c.angles.push(angle);this.decisions.set(marker.id,{reason:"collecting-layout",samples:c.centers.length});
+      if(c.centers.length>20){c.centers.shift();c.angles.shift();}
+      if (c.centers.length >= 8) {
+        const mx=median(c.centers.map(v=>v[0])),mz=median(c.centers.map(v=>v[2]));
+        const spread=median(c.centers.map(v=>Math.hypot(v[0]-mx,v[2]-mz)));
+        if(spread>this.size*.15){this.decisions.set(marker.id,{reason:"layout-unstable",spreadM:spread,samples:c.centers.length});continue;}
         const stable: V3 = [median(c.centers.map(v => v[0])), 0, median(c.centers.map(v => v[2]))];
         const a = Math.atan2(c.angles.reduce((s, v) => s + Math.sin(v), 0), c.angles.reduce((s, v) => s + Math.cos(v), 0));
         this.markers.set(marker.id, markerCorners(this.size, stable, a));
-        this.candidates.delete(marker.id);
+        this.candidates.delete(marker.id);this.decisions.set(marker.id,{reason:"mapped",center:stable});
       }
     }
-    for (const id of this.candidates.keys()) if (!found.some(m => m.id === id)) this.candidates.delete(id);
+    // Keep partial calibration through brief hand occlusion / dropped detections.
     return fit;
   }
 }

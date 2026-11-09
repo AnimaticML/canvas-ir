@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import cvModule from "@techstark/opencv-js";
 import { intrinsics, markerCorners, onTable, project, toTable, toCamera, type Pose, type V3 } from "../src/ar/geometry";
 import { MarkerMap, Vision, type Marker } from "../src/ar/vision";
+import { HandTracking } from "../src/ar/hand";
+import realHand from "./fixtures/mediapipe-hand.json";
 import { smoothPose } from "../src/ar/scene";
 
 let vision: Vision;
@@ -105,5 +107,49 @@ describe("arbitrary coplanar marker map", () => {
     const found = vision.detect({data,width,height,colorSpace:"srgb"} as ImageData);
     expect(found.map(m=>m.id).sort()).toEqual([0,1,2]);
     found.forEach(m=>expect(m.pixels.length).toBe(4));
+  });
+});
+
+describe("production hand-to-table pipeline",()=>{
+  const synthetic=(camera:Pose,height:number,metricScale=1.5):import("@mediapipe/tasks-vision").HandLandmarkerResult=>{
+    const shape:V3[]=Array.from({length:21},(_,i)=>[(i%5-2)*.009,(i%3)*.003,Math.floor(i/5)*.014]);
+    shape[8]=[0,0,0];shape[4]=[.012,0,.002];
+    const positions=shape.map(p=>[p[0],p[1]+height,p[2]] as V3);
+    const cameraPoints=positions.map(p=>toCamera(camera,p));
+    const origin=toCamera(camera,[0,height,0]);
+    const world=cameraPoints.map(p=>({x:(p[0]-origin[0])/metricScale,y:(p[1]-origin[1])/metricScale,z:(p[2]-origin[2])/metricScale}));
+    return {landmarks:[positions.map(p=>{const v=project(camera,k,p);return{x:v.x/k.width,y:v.y/k.height,z:0};})],worldLandmarks:[world],handedness:[[{categoryName:"Right",displayName:"Right",index:0,score:.9}]]};
+  };
+  test("touch calibrates scale, survives missed frames/handedness flicker and camera movement",()=>{
+    const tracking=new HandTracking();tracking.calibrate(0);
+    for(let i=0;i<14;i++){
+      const result=i===4?{landmarks:[],worldLandmarks:[],handedness:[]}:synthetic(overhead,0);
+      if(i===8&&result.handedness[0])result.handedness[0][0]!.categoryName="Left";
+      tracking.update(result,overhead,k,vision,i*90);
+    }
+    expect(tracking.status).toBe("calibrated");expect(tracking.metricScale!).toBeCloseTo(1.5,4);
+    for(const camera of [overhead,tilted])for(const height of [0,.02,.05,.1]){
+      const estimate=tracking.update(synthetic(camera,height),camera,k,vision,1500+height*1000);
+      expect(estimate.points).not.toBeNull();expect(estimate.points![8]![1]).toBeCloseTo(height,4);
+    }
+  });
+  test("a real MediaPipe frame keeps measured fingertip pixels despite model residuals",()=>{
+    const tracking=new HandTracking();
+    const raw=realHand as import("@mediapipe/tasks-vision").HandLandmarkerResult;
+    const estimate=tracking.update(raw,overhead,k,vision,0);
+    expect(estimate.points).not.toBeNull();expect(estimate.error!).toBeGreaterThan(8);
+    for(let i=0;i<21;i++){
+      const pixel=project(overhead,k,estimate.points![i]!);
+      expect(pixel.x).toBeCloseTo(raw.landmarks[0]![i]!.x*k.width,4);
+      expect(pixel.y).toBeCloseTo(raw.landmarks[0]![i]!.y*k.height,4);
+    }
+  });
+  test("failed calibration reports a concrete reason and can be retried",()=>{
+    const tracking=new HandTracking();tracking.calibrate(0);
+    tracking.update({landmarks:[],worldLandmarks:[],handedness:[]},overhead,k,vision,100);
+    expect(tracking.collecting).toBe(true);
+    tracking.update({landmarks:[],worldLandmarks:[],handedness:[]},overhead,k,vision,6000);
+    expect(tracking.status).toBe("insufficient-stable-samples");
+    tracking.calibrate(7000);expect(tracking.collecting).toBe(true);
   });
 });
