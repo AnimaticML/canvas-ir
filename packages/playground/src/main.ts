@@ -1346,6 +1346,21 @@ const CONTENT: readonly (readonly [string, number, number])[] = [
   ["HTML and 3D", 1000, 1900],
 ];
 
+/** Opens the board in 3D, starting above what this view shows. */
+function viewIn3d(): void {
+  try {
+    sessionStorage.setItem("canvasIrView", JSON.stringify(view));
+  } catch {
+    // Without storage the 3D page starts from the whole board.
+  }
+  (window.top ?? window).location.assign("./babylon.html#tilt");
+}
+const to3dButton = document.getElementById("to3d") as HTMLButtonElement | null;
+if (to3dButton && window === window.top) {
+  to3dButton.hidden = false;
+  to3dButton.addEventListener("click", viewIn3d);
+}
+
 // The controls: the playground and inspector cards.
 chrome = new Chrome(cards, {
   tools: [
@@ -1359,7 +1374,7 @@ chrome = new Chrome(cards, {
   actions: [
     { text: "Play Pelican Ride", look: "accent", onClick: () => (window.top ?? window).location.assign("./game.html") },
     { text: "Drawings in 3D", onClick: () => (window.top ?? window).location.assign("./space.html") },
-    { text: "The board in 3D", onClick: () => (window.top ?? window).location.assign("./babylon.html") },
+    { text: "The board in 3D", onClick: () => viewIn3d() },
     { text: "Vectorize image", onClick: vectorizeSelection, title: "select an image, such as the orange sticker, first" },
     { text: "Export SVG", onClick: exportSvg },
     { text: "Export JSON", onClick: () => download("board.json", "application/json", serializeDocument(scene.document)) },
@@ -1380,4 +1395,17 @@ showSelection();
 
 for (const [name, x, y] of CONTENT) await add(sampleNamed(name), { x, y });
 initial = false;
-setView(home());
+// The board in 3D shows this page in a frame: opened from here, it starts where this view is and tilts down into the room.
+const KEPT = "canvasIrView";
+const kept = ((): Matrix2D | null => {
+  if (window === window.top) return null;
+  try {
+    const text = sessionStorage.getItem(KEPT);
+    sessionStorage.removeItem(KEPT);
+    return text ? (JSON.parse(text) as Matrix2D) : null;
+  } catch {
+    return null;
+  }
+})();
+setView(kept ?? home());
+

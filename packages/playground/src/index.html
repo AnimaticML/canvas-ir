@@ -74,10 +74,13 @@
         outline-offset: 3px;
         border-radius: 4px;
       }
+      #to3d { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 5; border: 0; border-radius: 999px; padding: 12px 20px; background: #0f172a; color: #fff; font: 600 15px/1 system-ui, sans-serif; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.25); cursor: pointer; white-space: nowrap; }
+      #to3d:hover { background: #1e293b; }
     </style>
   </head>
   <body>
     <div id="stage"><canvas id="board"></canvas><canvas id="cards"></canvas><canvas id="overlay"></canvas></div>
+    <button id="to3d" type="button" hidden>View in 3D</button>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

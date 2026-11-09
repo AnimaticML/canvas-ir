@@ -56,7 +56,7 @@ const loadPage = (frame: HTMLIFrameElement): Promise<FloorPage> =>
     wait();
   });
 
-export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; fly: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d" }): Promise<void> => {
+export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; fly: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d"; tilt?: boolean }): Promise<void> => {
   const { canvas, frame, toggle } = options;
   const engine = new Engine(canvas, true, { stencil: true, preserveDrawingBuffer: false }, true);
   engine.setHardwareScalingLevel(1 / Math.min(2, window.devicePixelRatio || 1));
@@ -826,6 +826,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     floor.drawNow();
     frame.style.opacity = "0";
   }
+  // Opened from the page's own View in 3D: the page shows where it was, then tilts down into the room.
+  if (options.tilt && mode === "2d") setTimeout(() => void to3d(), 600);
   engine.runRenderLoop(() => {
     tick();
     // In 2D nothing in the room is seen: it only steps its physics.

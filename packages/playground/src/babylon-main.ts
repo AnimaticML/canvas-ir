@@ -13,6 +13,7 @@ void startBabylon({
   toggle: document.getElementById("toggle") as HTMLButtonElement,
   fly: fly,
   start: location.hash === "#3d" ? "3d" : "2d",
+  tilt: location.hash === "#tilt",
   onEvent: (text) => (event.textContent = text),
   onMode: (mode) => {
     hud.style.display = mode === "3d" ? "" : "none";
