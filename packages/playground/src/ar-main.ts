@@ -16,6 +16,7 @@ let vision:Vision|null=null,scene:ARScene|null=null,hands:HandLandmarker|null=nu
 let stream:MediaStream|null=null,running=false,starting=false,generation=0,frame=0,handEnabled=true;
 let k:Intrinsics|null=null,pose:Pose|null=null,lastFrame=0,lastVideo=-1,lastPose=0;
 let manual:Pixel[]=[],manualFit:Fit|null=null,tableReady=false,mapChanged=0,mapSize=0;
+let wasTracking=false;
 let lastHand:HandEstimate|null=null,lastAction:InteractionResult|null=null,lastStatus="",lastOutcome="";
 let found:Marker[]=[],usedIds:number[]=[],trackingError:number|null=null;
 const trace:{time:number;kind:string;data:unknown}[]=[];
@@ -23,7 +24,7 @@ const record=(kind:string,data:unknown):void=>{trace.push({time:performance.now(
 const skeleton=[[0,1,2,3,4],[0,5,6,7,8],[5,9,10,11,12],[9,13,14,15,16],[13,17,18,19,20],[0,17]];
 const outcome=(message:string):void=>{if(message===lastOutcome)return;lastOutcome=message;el("outcome").textContent=message;el("outcome").hidden=!message;};
 const reset=():void=>{
-  map.reset(Number(input("size").value)/100);hand.reset();pose=null;manual=[];manualFit=null;tableReady=false;mapSize=0;mapChanged=0;lastPose=0;lastHand=null;lastStatus="";
+  wasTracking=false;map.reset(Number(input("size").value)/100);hand.reset();pose=null;manual=[];manualFit=null;tableReady=false;mapSize=0;mapChanged=0;lastPose=0;lastHand=null;lastStatus="";
   scene?.hide();scene?.resetObjects();button("touch").hidden=true;outcome("");
   notice(anchor()==="manual"?"Выберите углы 60×40 см: дальний левый → дальний правый → ближний правый → ближний левый.":"Покажите вместе 2–3 разных маркера.");
   record("anchor-reset",{sizeM:map.size,mode:anchor()});
@@ -98,13 +99,13 @@ const applyHand=(result:HandLandmarkerResult,now:number):void=>{
   // Calibration can start as soon as landmarks exist, even if the current 3D pose is rejected.
   button("touch").disabled=estimate.pixels.length!==21||hand.collecting;
   button("touch").textContent=hand.collecting?"Настройка касания…":hand.metricScale===null?"Настроить касание":"Повторить касание";
-  if(estimate.points)lastAction=scene.hand(estimate.points,estimate.calibrated,now,estimate.pinch);
+  if(estimate.points)lastAction=scene.hand(estimate.points,estimate.calibrated,performance.now(),estimate.pinch);
   else{scene.loseHand();lastAction={action:"idle",reason:estimate.reason,target:null};}
   const state=hand.status;
   if(state!==lastStatus){
     lastStatus=state;record("calibration-state",{state,scale:hand.metricScale});
     if(state==="calibrated"){
-      const prompt="Касание настроено. Сведите пальцы у кубика или мяча.";notice(prompt);
+      const prompt="Касание настроено. Коснитесь кубика или мяча.";notice(prompt);
       setTimeout(()=>{if(el("notice").textContent===prompt)notice("");},3000);
     }
     if(state==="insufficient-stable-samples")notice("Касание не сохранено. Покажите кисть целиком и повторите, удерживая палец на столе.");
@@ -115,7 +116,7 @@ const applyHand=(result:HandLandmarkerResult,now:number):void=>{
     else if(lastAction?.action==="touch")outcome("Касание");
     else outcome("");
   }else if(!hand.collecting&&tableReady)notice(estimate.pixels.length?"Коснитесь стола указательным пальцем и нажмите «Настроить касание».":"Покажите кисть целиком над столом.");
-  record("hand",{landmarks:result.landmarks,worldLandmarks:result.worldLandmarks,handedness:result.handedness,estimate,interaction:lastAction,calibration:hand.snapshot(),pointerEvents:scene.original.events.slice(-6),pose,intrinsics:k});
+  record("hand",{landmarks:result.landmarks,worldLandmarks:result.worldLandmarks,handedness:result.handedness,estimate,interaction:lastAction,calibration:hand.snapshot(),pointerEvents:scene.original.events.slice(-6),physicalContacts:scene.physicalContacts.slice(-8),sourceAgeMs:performance.now()-now,pose,intrinsics:k});
 };
 const drawHand=(points:Pixel[]):void=>{
   if(points.length!==21)return;ctx.strokeStyle="#b5ffe9";ctx.lineWidth=1.6;
@@ -142,19 +143,25 @@ const tick=(now:number):void=>{
     }else{found=[];usedIds=[];fit=manualFit;manual.forEach(p=>{ctx.fillStyle="#a4f0d7";ctx.beginPath();ctx.arc(p.x,p.y,5,0,Math.PI*2);ctx.fill();});}
     trackingError=fit?.error??null;
     if(fit && tableReady){
-      pose=smoothPose(started-lastPose>300?null:pose,fit.pose,dt,.045);lastPose=started;scene.pose(pose,k);
+      if(!wasTracking)notice(hand.metricScale===null?"Стол привязан. Покажите кисть над столом.":"");
+      wasTracking=true;
+      pose=smoothPose(started-lastPose>300?null:pose,fit.pose,dt,.045);scene.pose(pose,k);
       if(hands&&handEnabled)applyHand(hands.detectForVideo(processing,started),started);
       else{scene.loseHand();button("touch").hidden=true;}
+      lastPose=performance.now();
+    }else if(tableReady && pose && started-lastPose<Math.max(400,Math.min(1000,dt*2200))){
+      // A missed detection is not a new table or an immediate screen flash.
+      scene.loseHand();
     }else{
-      pose=null;scene.hide();button("touch").hidden=true;lastAction={action:"idle",reason:tableReady?"table-tracking-lost":"table-calibration-pending",target:null};
-      if(tableReady){notice("Верните хотя бы один из привязанных маркеров в кадр.");outcome("");}
+      wasTracking=false;pose=null;scene.hide();button("touch").hidden=true;lastAction={action:"idle",reason:tableReady?"table-tracking-lost":"table-calibration-pending",target:null};
+      if(tableReady){notice(found.some(m=>map.markers.has(m.id))?"Маркеры видны. Уточняю привязку стола…":"Верните хотя бы один из привязанных маркеров в кадр.");outcome("");}
       else if(anchor()==="aruco")notice(mapSize<2?"Покажите вместе 2–3 разных маркера.":"Подержите телефон спокойно — привязываем стол.");
     }
-    record("frame",{observations:found,visibleIds:found.map(m=>m.id),mappedIds:[...map.markers.keys()],mapDecisions:[...map.decisions],usedIds,inliers:fit?.inliers??0,poseError:trackingError,tableReady,trackingState:scene.enabled?"tracked":tableReady?"lost":"calibrating",processingMs:performance.now()-started,action:lastAction});
+    record("frame",{observations:found,visibleIds:found.map(m=>m.id),mappedIds:[...map.markers.keys()],mapDecisions:[...map.decisions],usedIds,inliers:fit?.inliers??0,poseMode:fit?.mode??null,poseAgeMs:performance.now()-lastPose,poseError:trackingError,tableReady,trackingState:scene.enabled?(fit?"tracked":"coasting"):tableReady?"lost":"calibrating",processingMs:performance.now()-started,action:lastAction});
   }catch(error){record("processing-error",String(error));stop();notice("Обработка остановилась. Откройте камеру снова; запись проверки сохранена в настройках.");}
 };
 button("export").onclick=()=>{
-  const data={version:2,date:new Date().toISOString(),originalDemo:"startBabylon",intrinsics:k,map:[...map.markers],layout:scene?.layout,calibration:hand.snapshot(),events:trace};
+  const data={version:3,date:new Date().toISOString(),originalDemo:"startBabylon",intrinsics:k,map:[...map.markers],layout:scene?.layout,calibration:hand.snapshot(),events:trace};
   const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="ar-interaction-trace.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
 const markerDialog=el<HTMLDialogElement>("marker-dialog");

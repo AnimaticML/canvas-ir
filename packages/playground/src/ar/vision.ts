@@ -5,7 +5,7 @@ import { markerCorners, onTable, project, sub, length, median, toTable, type Int
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type CV = any;
 export interface Marker { id: number; pixels: Pixel[] }
-export interface Fit { pose: Pose; error: number; inliers: number; usedPoints?: number[]; markerIds?: number[] }
+export interface Fit { pose: Pose; error: number; inliers: number; usedPoints?: number[]; markerIds?: number[]; mode?: "joint" | "consensus" | "single-fallback" }
 export const loadCV = async (): Promise<CV> => {
   const w = window as unknown as { cv: CV };
   if (!w.cv) await new Promise<void>((resolve, reject) => {
@@ -57,25 +57,38 @@ export class Vision {
     try { this.cv.generateImageMarker(this.dictionary, id, 240, m, 1); this.cv.imshow(canvas, m); return canvas; }
     finally { m.delete(); }
   }
-  fit(points: V3[], pixels: Pixel[], k: Intrinsics, robust = false): Fit | null {
+  fit(points: V3[], pixels: Pixel[], k: Intrinsics, robust = false, previous: Pose | null = null): Fit | null {
     if (points.length < 4 || pixels.length !== points.length) return null;
     if (robust && points.length >= 8) {
       // Marker-level consensus avoids coplanar EPnP degeneracy in OpenCV's
       // RANSAC and rejects entire bad/moved markers before a joint refinement.
-      let best: number[] = [];
+      // A visible usable marker must not become unusable merely because another
+      // marker disagrees with an imperfect hand-drawn map or approximate intrinsics.
+      const joint = this.fit(points, pixels, k, false, previous);
+      if (joint && joint.error <= 3 && toTable(joint.pose,[0,0,0])[1]>.03) return {...joint, mode:"joint"};
+      let best: number[] = [], bestCandidate: Fit|null = null, bestScore = Infinity;
+      const continuity=(candidate:Fit):number=>{
+        if(!previous)return 0;
+        return length(sub(toTable(candidate.pose,[0,0,0]),toTable(previous,[0,0,0]))) +
+          Math.sqrt(candidate.pose.r.reduce((sum,v,i)=>sum+(v-previous.r[i]!)**2,0))*.05;
+      };
       for (let offset = 0; offset < points.length; offset += 4) {
-        const candidate = this.fit(points.slice(offset, offset + 4), pixels.slice(offset, offset + 4), k);
-        if (!candidate || candidate.error > 3) continue;
+        const candidate = this.fit(points.slice(offset, offset + 4), pixels.slice(offset, offset + 4), k, false, previous);
+        if (!candidate || candidate.error > 3 || toTable(candidate.pose,[0,0,0])[1]<.03) continue;
         const selected: number[] = [];
         for (let m = 0; m < points.length; m += 4) {
           const indices = [m, m + 1, m + 2, m + 3];
           if (indices.every(i => { const q = project(candidate.pose, k, points[i]!); return Math.hypot(q.x - pixels[i]!.x, q.y - pixels[i]!.y) < 4; })) selected.push(...indices);
         }
-        if (selected.length > best.length) best = selected;
+        const score=continuity(candidate)+candidate.error*.001;
+        if (selected.length > best.length || selected.length===best.length && score<bestScore) {
+          best=selected;bestCandidate=candidate;bestScore=score;
+        }
       }
-      if (best.length < Math.max(4, points.length * 0.6)) return null;
-      const refined = this.fit(best.map(i => points[i]!), best.map(i => pixels[i]!), k);
-      return refined ? { ...refined, inliers: best.length, usedPoints: best } : null;
+      if (!bestCandidate || best.length<4) return null;
+      const refined = this.fit(best.map(i => points[i]!), best.map(i => pixels[i]!), k, false, bestCandidate.pose);
+      const accepted=refined && refined.error<=3 && toTable(refined.pose,[0,0,0])[1]>.03?refined:bestCandidate;
+      return {...accepted,inliers:best.length,usedPoints:best,mode:best.length===4?"single-fallback":"consensus"};
     }
     const cv = this.cv;
     const objects = cv.matFromArray(points.length, 1, cv.CV_64FC3, points.flat());
@@ -83,7 +96,13 @@ export class Vision {
     const camera = cv.matFromArray(3, 3, cv.CV_64F, [k.fx, 0, k.cx, 0, k.fy, k.cy, 0, 0, 1]);
     const distortion = cv.Mat.zeros(5, 1, cv.CV_64F), rv = new cv.Mat(), tv = new cv.Mat(), rotation = new cv.Mat();
     try {
-      const ok = cv.solvePnP(objects, images, camera, distortion, rv, tv, false, cv.SOLVEPNP_SQPNP);
+      const seeded=previous && points.every(p=>Math.abs(p[1])<1e-6);
+      if(seeded){
+        const prior=cv.matFromArray(3,3,cv.CV_64F,previous.r);
+        try{cv.Rodrigues(prior,rv);}finally{prior.delete();}
+        tv.create(3,1,cv.CV_64F);tv.data64F.set(previous.t);
+      }
+      const ok = cv.solvePnP(objects, images, camera, distortion, rv, tv, !!seeded, seeded?cv.SOLVEPNP_ITERATIVE:cv.SOLVEPNP_SQPNP);
       if (!ok) return null;
       cv.Rodrigues(rv, rotation);
       const pose: Pose = { r: Array.from(rotation.data64F), t: Array.from(tv.data64F) as V3 };
@@ -91,6 +110,7 @@ export class Vision {
       const selected = points.map((_, i) => i);
       const errors = selected.map(i => { const q = project(pose, k, points[i]!); return Math.hypot(q.x - pixels[i]!.x, q.y - pixels[i]!.y); });
       const error = Math.sqrt(errors.reduce((s, e) => s + e * e, 0) / errors.length);
+      if(seeded && (error>3 || toTable(pose,[0,0,0])[1]<.03))return this.fit(points,pixels,k);
       if (pose.t[2] <= 0) return null;
       return { pose, error, inliers: selected.length, usedPoints: selected };
     } catch { return null; }
@@ -111,23 +131,25 @@ export class Vision {
   dispose(): void { for (const m of [this.detector, this.dictionary, this.parameters, this.refine]) m.delete(); }
 }
 
-interface Candidate { centers: V3[]; angles: number[] }
+interface Candidate { centers: V3[]; corners: V3[][] }
 /** Session-only map. New IDs require overlap with an existing marker; loss never re-anchors it. */
 export class MarkerMap {
   readonly markers = new Map<number, V3[]>();
   private candidates = new Map<number, Candidate>();
   readonly decisions=new Map<number,unknown>();
+  private previous:Pose|null=null;
   learning = true;
   constructor(public size: number) {}
-  reset(size = this.size): void { this.size = size; this.markers.clear(); this.candidates.clear(); this.decisions.clear(); this.learning = true; }
+  reset(size = this.size): void { this.size = size; this.markers.clear(); this.candidates.clear(); this.decisions.clear(); this.previous=null; this.learning = true; }
   update(found: Marker[], vision: Vision, k: Intrinsics): Fit | null {
     if (!this.markers.size && found.length && this.learning) this.markers.set([...found].sort((a, b) => a.id - b.id)[0]!.id, markerCorners(this.size));
     const known = found.filter(m => this.markers.has(m.id));
     if (!known.length) {for(const m of found)this.decisions.set(m.id,{reason:"no-known-marker-overlap"});return null; }
-    const fit = vision.fit(known.flatMap(m => this.markers.get(m.id)!), known.flatMap(m => m.pixels), k, true);
+    const fit = vision.fit(known.flatMap(m => this.markers.get(m.id)!), known.flatMap(m => m.pixels), k, true, this.previous);
     if (!fit || fit.error > 3 || toTable(fit.pose, [0, 0, 0])[1] < 0.03) {
       for(const m of known)this.decisions.set(m.id,{reason:"pose-rejected",error:fit?.error??null});return null;
     }
+    this.previous=fit.pose;
     const agreement=known.filter((_,i)=>[0,1,2,3].every(j=>fit.usedPoints?.includes(i*4+j)));
     fit.markerIds=agreement.map(m=>m.id);
     for(const m of known)this.decisions.set(m.id,{reason:fit.markerIds.includes(m.id)?"used-in-pose":"pose-outlier"});
@@ -140,19 +162,19 @@ export class MarkerMap {
       const sides=p.map((v,i)=>length(sub(v,p[(i+1)%4]!)));
       if(sides.some(side=>Math.abs(side-this.size)>this.size*.25)){this.decisions.set(marker.id,{reason:"inconsistent-marker-size",expectedM:this.size,sidesM:sides});continue;}
       const center: V3 = [p.reduce((s, v) => s + v[0], 0) / 4, 0, p.reduce((s, v) => s + v[2], 0) / 4];
-      const edge = sub(p[1]!, p[0]!);
-      const angle = Math.atan2(edge[2], edge[0]);
       let c = this.candidates.get(marker.id);
-      if (!c) {c={centers:[],angles:[]};this.candidates.set(marker.id,c);}
-      c.centers.push(center); c.angles.push(angle);this.decisions.set(marker.id,{reason:"collecting-layout",samples:c.centers.length});
-      if(c.centers.length>20){c.centers.shift();c.angles.shift();}
+      if (!c) {c={centers:[],corners:[]};this.candidates.set(marker.id,c);}
+      c.centers.push(center); c.corners.push(p);this.decisions.set(marker.id,{reason:"collecting-layout",samples:c.centers.length});
+      if(c.centers.length>20){c.centers.shift();c.corners.shift();}
       if (c.centers.length >= 8) {
         const mx=median(c.centers.map(v=>v[0])),mz=median(c.centers.map(v=>v[2]));
         const spread=median(c.centers.map(v=>Math.hypot(v[0]-mx,v[2]-mz)));
         if(spread>this.size*.15){this.decisions.set(marker.id,{reason:"layout-unstable",spreadM:spread,samples:c.centers.length});continue;}
         const stable: V3 = [median(c.centers.map(v => v[0])), 0, median(c.centers.map(v => v[2]))];
-        const a = Math.atan2(c.angles.reduce((s, v) => s + Math.sin(v), 0), c.angles.reduce((s, v) => s + Math.cos(v), 0));
-        this.markers.set(marker.id, markerCorners(this.size, stable, a));
+        // Preserve the measured quadrilateral, rather than replacing a slightly
+        // imperfect drawing with a mathematically perfect rotated square.
+        const corners:V3[]=Array.from({length:4},(_,i)=>[median(c.corners.map(q=>q[i]![0])),0,median(c.corners.map(q=>q[i]![2]))]);
+        this.markers.set(marker.id, corners);
         this.candidates.delete(marker.id);this.decisions.set(marker.id,{reason:"mapped",center:stable});
       }
     }

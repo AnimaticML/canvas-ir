@@ -153,3 +153,25 @@ describe("production hand-to-table pipeline",()=>{
     tracking.calibrate(7000);expect(tracking.collecting).toBe(true);
   });
 });
+
+describe("tracking with imperfect real marker maps",()=>{
+  test("adding disagreeing visible markers never discards a usable known marker",()=>{
+    const root=markerCorners(.06),left=markerCorners(.06,[-.15,0,.04]),right=markerCorners(.06,[.15,0,-.04]);
+    const observedPoints=[root,markerCorners(.06,[-.17,0,.04]),markerCorners(.06,[.17,0,-.04])];
+    const image=observedPoints.flatMap(points=>points.map(p=>project(tilted,k,p)));
+    const single=vision.fit(root,image.slice(0,4),k)!;
+    const all=vision.fit([...root,...left,...right],image,k,true,single.pose)!;
+    expect(all).not.toBeNull();expect(all.mode).toBe("single-fallback");
+    all.pose.t.forEach((v,i)=>expect(v).toBeCloseTo(single.pose.t[i]!,5));
+  });
+  test("learns the measured paper quadrilateral instead of substituting a perfect square",()=>{
+    const root=markerCorners(.06),paper=markerCorners(.06,[.14,0,.09],.3);
+    paper[1]![0]+=.004;paper[2]![2]-=.003;
+    const map=new MarkerMap(.06);
+    for(let i=0;i<15;i++)map.update([observed(0,root),observed(1,paper)],vision,k);
+    const saved=map.markers.get(1)!;
+    expect(saved).toBeDefined();saved.forEach((v,i)=>v.forEach((n,j)=>expect(n).toBeCloseTo(paper[i]![j]!,4)));
+    const joint=map.update([observed(0,root),observed(1,paper)],vision,k)!;
+    expect(joint.inliers).toBe(8);
+  });
+});

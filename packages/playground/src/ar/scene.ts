@@ -5,7 +5,8 @@ import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Matrix, Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
-import { PhysicsMotionType } from "@babylonjs/core/Physics/v2/IPhysicsEnginePlugin";
+import { PhysicsAggregate } from "@babylonjs/core/Physics/v2/physicsAggregate";
+import { PhysicsMotionType, PhysicsShapeType } from "@babylonjs/core/Physics/v2/IPhysicsEnginePlugin";
 import { startBabylon, type BabylonRuntime, type BabylonThing } from "../babylon";
 import { cross, length, sub, unit, type Intrinsics, type Pose, type V3 } from "./geometry";
 
@@ -32,10 +33,17 @@ export class ARScene {
   private center: V3 = [0,0,0];
   private roomCenter: Vector3;
   private fingertip;
+  private fingerProxy;
   private cursorMaterial: StandardMaterial;
+  private fingerBody:PhysicsAggregate|null=null;
+  private fingerTarget:Vector3|null=null;
+  private fingerEnabled=false;
+  private handInterval=100;
+  readonly physicalContacts:{time:number;target:string;impulse:number;position:V3;velocity:V3;point:V3|null}[]=[];
+  physicsTouches=0;
   private held: { thing: BabylonThing; offset: Vector3; relative: Quaternion; target: Vector3; rotation: Quaternion } | null = null;
   private pinched = false;
-  private contact: { kind: "board" | "panel"; point: Vector3; frames: number; down: boolean; clickOnly?: boolean } | null = null;
+  private contact: { kind: "board" | "panel"; point: Vector3; frames: number; down: boolean; lastValid: number; clickOnly?: boolean } | null = null;
   private lastHand = 0;
   presses = 0;
   grabs = 0;
@@ -46,14 +54,21 @@ export class ARScene {
     this.roomCenter = original.floor.table.center.clone();
     this.camera = new FreeCamera("ar-camera", Vector3.Zero(), this.scene);
     this.scene.activeCamera = this.camera;
-    this.fingertip = CreateSphere("ar-finger-cursor", { diameter: 0.22 }, this.scene);
+    this.fingertip = CreateSphere("ar-finger-cursor", { diameter: 1 }, this.scene);
     this.fingertip.isPickable = false; this.fingertip.isVisible = false;
+    this.fingerProxy=CreateSphere("ar-finger-physics",{diameter:1},this.scene);
+    this.fingerProxy.isPickable=false;this.fingerProxy.isVisible=false;
     this.cursorMaterial = new StandardMaterial("ar-finger", this.scene);
     this.cursorMaterial.emissiveColor = Color3.FromHexString("#91ffe0"); this.fingertip.material = this.cursorMaterial;
     this.scene.onBeforePhysicsObservable.add(() => {
       if (this.held) this.held.thing.body.body.setTargetTransform(this.held.target, this.held.rotation);
+      if(this.fingerEnabled && this.fingerBody && this.fingerTarget){
+        const from=this.fingerProxy.position,delta=this.fingerTarget.subtract(from),max=.025/this.scale;
+        const target=delta.length()>max?from.add(delta.normalize().scale(max)):this.fingerTarget;
+        this.fingerBody.body.setTargetTransform(target,Quaternion.Identity());
+      }
     });
-    this.scene.onBeforeRenderObservable.add(() => { if (performance.now() - this.lastHand > 250) this.loseHand(); });
+    this.scene.onBeforeRenderObservable.add(() => { if (performance.now() - this.lastHand > this.handTimeout) this.loseHand(); });
   }
   static async create(canvas: HTMLCanvasElement): Promise<ARScene> {
     const original = await startBabylon({ canvas, frame: document.getElementById("original-board") as HTMLIFrameElement,
@@ -75,6 +90,24 @@ export class ARScene {
     this.roomCenter.copyFrom(room.center);
     // Reuse the original components at a finger-sized physical scale.
     this.original.panel.scaling.setAll(.14/(2.88*this.scale));
+    this.fingerBody?.dispose();
+    this.fingertip.scaling.setAll(.006/this.scale);
+    this.fingerBody=new PhysicsAggregate(this.fingerProxy,PhysicsShapeType.SPHERE,{mass:0,radius:.009/this.scale,restitution:0,friction:.5},this.scene);
+    this.fingerBody.body.setMotionType(PhysicsMotionType.ANIMATED);
+    this.fingerBody.body.disableSync=false;
+    this.fingerBody.shape.filterCollideMask=0;
+    this.fingerEnabled=false;
+    this.fingerBody.body.setCollisionCallbackEnabled(true);
+    this.fingerBody.body.getCollisionObservable().add(event=>{
+      const other=event.collider===this.fingerBody?.body?event.collidedAgainst:event.collider;
+      const id=other.transformNode.name;
+      if(!this.original.things.has(id))return;
+      const item=this.original.things.get(id)!,velocity=item.body.body.getLinearVelocity();
+      this.physicalContacts.push({time:performance.now(),target:id,impulse:event.impulse,position:this.table(item.mesh.position),velocity:[velocity.x*this.scale,velocity.y*this.scale,-velocity.z*this.scale],point:event.point?this.table(event.point):null});
+      if(this.physicalContacts.length>60)this.physicalContacts.shift();
+      if(event.type==="COLLISION_STARTED")this.physicsTouches++;
+      this.result={action:"touch",reason:"havok-contact",target:id};
+    });
   }
   room(p: V3): Vector3 { return new Vector3((p[0]-this.center[0])/this.scale+this.roomCenter.x, p[1]/this.scale, -(p[2]-this.center[2])/this.scale+this.roomCenter.z); }
   table(p: Vector3): V3 { return [(p.x-this.roomCenter.x)*this.scale+this.center[0],p.y*this.scale,-(p.z-this.roomCenter.z)*this.scale+this.center[2]]; }
@@ -96,13 +129,16 @@ export class ARScene {
   }
   hide(): void { this.original.visible=false; this.loseHand(true); this.engine.clear(new Color4(0,0,0,0),true,true,true); }
   hand(points: V3[], allow3D: boolean, now: number, pinchRatio?: number): InteractionResult {
-    this.lastHand=now;
+    const arrival=performance.now();
+    if(this.lastHand)this.handInterval=this.handInterval*.8+Math.min(1500,arrival-this.lastHand)*.2;
+    this.lastHand=arrival;
     const tip=points[8]!,thumb=points[4]!, at=this.room(tip);
-    this.fingertip.position.copyFrom(at); this.fingertip.isVisible=true;
-    if (!allow3D) { this.endContact(true); this.release(); return this.result={action:"idle",reason:"calibrate-touch",target:null}; }
+    this.fingertip.position.copyFrom(at);this.fingertip.isVisible=true;
+    if (!allow3D) { this.disableFinger();this.fingertip.position.copyFrom(at); this.endContact(true); this.release(); return this.result={action:"idle",reason:"calibrate-touch",target:null}; }
     const gap=length(sub(tip,thumb)), palm=Math.max(.035,length(sub(points[5]!,points[17]!)));
     const ratio=pinchRatio ?? gap/palm;
     const pinching=ratio<(this.pinched ? .48 : .30);
+    if(pinching)this.disableFinger();else this.moveFinger(at);
     const midpoint=this.room([(tip[0]+thumb[0])/2,(tip[1]+thumb[1])/2,(tip[2]+thumb[2])/2]);
     const x=unit(sub(points[5]!,points[17]!)),forward=unit(sub(points[9]!,points[0]!));
     const z=unit(cross(x,forward)),y=unit(cross(z,x));
@@ -141,22 +177,37 @@ export class ARScene {
   }
   private touch(at: Vector3, height: number): void {
     const panel=this.original.panel;
-    const local=Vector3.TransformCoordinates(at,panel.computeWorldMatrix(true).clone().invert());
-    const inPanel=Math.abs(local.x)<1.44 && Math.abs(local.y)<.9;
-    const onPanel=inPanel && Math.abs(local.z)*this.original.panel.scaling.z*this.scale<.015;
+    const inverse=panel.computeWorldMatrix(true).clone().invert();
+    const local=Vector3.TransformCoordinates(at,inverse);
+    const eye=Vector3.TransformCoordinates(this.camera.globalPosition,inverse);
+    const ray=local.subtract(eye),t=Math.abs(ray.z)>1e-8?-eye.z/ray.z:-1;
+    const surface=eye.add(ray.scale(t));
+    const captured=this.contact?.down && this.contact.kind==="panel";
+    const inPanel=t>0 && Math.abs(surface.x)<1.44+(captured ? .2 : 0) && Math.abs(surface.y)<.9+(captured ? .2 : 0);
+    const onPanel=inPanel && Math.abs(local.z)*this.original.panel.scaling.z*this.scale<(captured ? .045 : .022);
     const board=this.original.floor.table;
-    const onBoard=height>-.018 && height<(this.contact?.down ? .025 : .014) && Math.abs(at.x-board.center.x)<board.width/2 && Math.abs(at.z-board.center.z)<board.depth/2;
+    const onBoard=height>-.025 && height<(this.contact?.down ? .045 : .022) && Math.abs(at.x-board.center.x)<board.width/2 && Math.abs(at.z-board.center.z)<board.depth/2;
     const actor=[...this.original.things.values()].find(thing=>{
       thing.mesh.computeWorldMatrix(true);const box=thing.mesh.getBoundingInfo().boundingBox;
       return Vector3.Distance(at,Vector3.Clamp(at,box.minimumWorld,box.maximumWorld))*this.scale<.009;
     });
-    if(actor){this.endContact(true);this.result={action:"hover",reason:"over-object",target:actor.mesh.name};return;}
+    if(actor){
+      this.endContact(true);
+      const recent=this.physicalContacts.at(-1);
+      this.result={action:recent?.target===actor.mesh.name && performance.now()-recent.time<350?"touch":"hover",reason:"physical-finger-contact",target:actor.mesh.name};return;
+    }
     const kind=onPanel?"panel":onBoard?"board":null;
-    if(!kind) { this.endContact(false); this.result={action:"hover",reason:"above-surface",target:null,distanceM:height}; return; }
-    const point=kind==="panel"?Vector3.TransformCoordinates(new Vector3(local.x,local.y,0),panel.getWorldMatrix()):new Vector3(at.x,0,at.z);
+    if(!kind) {
+      if(this.contact?.down && performance.now()-this.contact.lastValid<180){this.result={action:"touch",reason:"contact-grace",target:this.contact.kind};return;}
+      this.endContact(false); this.result={action:"hover",reason:"above-surface",target:null,distanceM:height}; return; }
+    const worldRay=at.subtract(this.camera.globalPosition);
+    const floorT=Math.abs(worldRay.y)>1e-8?-this.camera.globalPosition.y/worldRay.y:0;
+    // Once near the plane, route the measured image ray to it. Flattening the
+    // noisy 3D point vertically shifts sliders/buttons under an oblique camera.
+    const point=kind==="panel"?Vector3.TransformCoordinates(new Vector3(surface.x,surface.y,0),panel.getWorldMatrix()):this.camera.globalPosition.add(worldRay.scale(floorT));
     if(this.contact && this.contact.kind!==kind) this.endContact(true);
-    if(!this.contact) this.contact={kind,point,frames:0,down:false};
-    this.contact.point=point; this.contact.frames++;
+    if(!this.contact) this.contact={kind,point,frames:0,down:false,lastValid:performance.now()};
+    this.contact.point=point; this.contact.frames++;this.contact.lastValid=performance.now();
     if(!this.contact.down && this.contact.frames>=2) {
       const control=kind==="panel"?this.original.controlAt(point):null;
       this.original.pointer("down",point,kind); this.contact.down=true; this.presses++;
@@ -170,9 +221,33 @@ export class ARScene {
     if(this.contact?.down && !this.contact.clickOnly) this.original.pointer(cancel?"cancel":"up",this.contact.point,this.contact.kind);
     this.contact=null;
   }
+  private get handTimeout():number{return Math.max(700,Math.min(1800,this.handInterval*2.5));}
+  private disableFinger():void{
+    this.fingerEnabled=false;this.fingerTarget=null;
+    if(this.fingerBody){this.fingerBody.shape.filterCollideMask=0;this.fingerBody.body.setLinearVelocity(Vector3.Zero());}
+  }
+  private moveFinger(at:Vector3):void{
+    const target=at.clone();target.y=Math.max(.009/this.scale,target.y);
+    if(!this.fingerBody)return;
+    if(!this.fingerEnabled){
+      // Teleport with collisions disabled on re-acquisition, never sweep through
+      // the table from a stale/offscreen position.
+      this.fingerProxy.position.copyFrom(target);this.fingerBody.body.disablePreStep=false;
+      this.fingerBody.shape.filterCollideMask=0;
+      this.scene.onAfterPhysicsObservable.addOnce(()=>{
+        if(!this.fingerBody)return;this.fingerBody.body.disablePreStep=true;
+        if(this.fingerEnabled)this.fingerBody.shape.filterCollideMask=0xffffffff;
+      });
+    }
+    this.fingerEnabled=true;this.fingerTarget=target;
+  }
   loseHand(immediate=false): void {
-    this.fingertip.isVisible=false; this.endContact(true);
-    if(immediate||performance.now()-this.lastHand>650) { this.release(); this.pinched=false; }
+    // The timestamp is arrival time, not the beginning of a slow inference pass.
+    // A single missing sample must not cancel every two-frame contact.
+    const age=performance.now()-this.lastHand;
+    if(!immediate && age<=this.handTimeout)return;
+    this.fingertip.isVisible=false;this.endContact(true);this.disableFinger();
+    this.release();this.pinched=false;
     this.result={action:"idle",reason:"hand-lost",target:null};
   }
   private release(): string|null {

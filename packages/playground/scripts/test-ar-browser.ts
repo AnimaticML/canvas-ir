@@ -43,7 +43,7 @@ dictionary.delete();
 const videoPath = join(temporary,"markers.y4m");
 const file = Bun.file(videoPath).writer();
 file.write(`YUV4MPEG2 W${width} H${height} F${fps}:1 Ip A1:1 C420jpeg\n`);
-for(const [seconds,frame] of [[5,all],[1.5,blank],[4,one],[1.5,blank]] as const) {
+for(const [seconds,frame] of [[7,all],[1.5,blank],[4,one],[1.5,blank]] as const) {
   for(let i=0;i<seconds*fps;i++){file.write("FRAME\n");file.write(frame);}
 }
 await file.end();
@@ -85,6 +85,16 @@ try {
   });
   assert(projection.every(v=>v<.1),`original LH scene projects into RH table correctly: ${projection}`);
   await page.screenshot({path:join(temporary,"tracked.png")});
+  // Reproduce "one visible marker works, three visible markers blank out":
+  // corrupt only the learned map, while the real camera still sees all three.
+  const savedMap=await page.evaluate(()=>[...window.canvasIrAR.map.markers]);
+  await page.evaluate(()=>{
+    const map=window.canvasIrAR.map.markers;
+    for(const id of [1,2])map.set(id,map.get(id)!.map(p=>[p[0]+(id===1?.02:-.02),p[1],p[2]]));
+  });
+  await page.waitForFunction(()=>window.canvasIrAR.trace.some((e:any)=>e.kind==="frame"&&e.data.visibleIds.length===3&&e.data.poseMode==="single-fallback"),null,{timeout:5000});
+  assert(await page.evaluate(()=>window.canvasIrAR.scene.enabled),"three disagreeing visible markers retain a usable pose instead of hiding the demo");
+  await page.evaluate(saved=>{const map=window.canvasIrAR.map.markers;for(const [id,points] of saved)map.set(id,points);},savedMap);
   const layoutBefore=await page.evaluate(()=>window.canvasIrAR.scene.layout);
   await page.waitForFunction(()=>!window.canvasIrAR.scene.enabled,null,{timeout:10000});
   await page.waitForFunction(()=>window.canvasIrAR.scene.enabled&&window.canvasIrAR.snapshot().usedIds.length===1,null,{timeout:10000});
@@ -148,6 +158,56 @@ try {
   });
   assert(panelCounts.after===panelCounts.before+1,`touch executes original Drop crate component: ${JSON.stringify(panelCounts)}`);
   assert(await page.evaluate(()=>window.canvasIrAR.trace.some((e:any)=>e.kind==="hand"&&e.data.interaction?.action==="grab")),"trace records successful interaction and pose/rejection inputs");
+  // Physical touch, not pinch: feed open-hand landmarks through the production
+  // reconstruction and require actual Havok contacts AND movement of each actor.
+  const replayTip=async(point:V3,ageMs=500):Promise<void>=>{
+    await page.evaluate(({point,ageMs})=>{
+      const ar=window.canvasIrAR,{pose:p,intrinsics:k}=ar.snapshot(),metric=ar.hand.metricScale!;
+      const c:V3=[p.r[0]!*point[0]+p.r[1]!*point[1]+p.r[2]!*point[2]+p.t[0],p.r[3]!*point[0]+p.r[4]!*point[1]+p.r[5]!*point[2]+p.t[1],p.r[6]!*point[0]+p.r[7]!*point[1]+p.r[8]!*point[2]+p.t[2]];
+      const shape:V3[]=Array.from({length:21},(_,j)=>[(j%5-2)*.012,(Math.floor(j/5)-2)*.018,(j%3)*.004]);
+      shape[8]=[0,0,0];shape[4]=[.06,0,0];shape[5]=[.035,-.025,0];shape[17]=[-.035,-.025,0];shape[0]=[0,.045,.004];shape[9]=[0,-.035,.004];
+      const camera=shape.map(v=>[(v[0]+c[0])/metric,(v[1]+c[1])/metric,(v[2]+c[2])/metric] as V3);
+      ar.replayHand({landmarks:[camera.map(v=>({x:(k.fx*v[0]/v[2]+k.cx)/k.width,y:(k.fy*v[1]/v[2]+k.cy)/k.height,z:0}))],worldLandmarks:[shape.map(v=>({x:v[0]/metric,y:v[1]/metric,z:v[2]/metric}))],handedness:[[{categoryName:"Right",displayName:"Right",score:1,index:0}]]},performance.now()-ageMs);
+    },{point,ageMs});
+  };
+  for(const kind of ["crate","ball"]){
+    const initial=await page.evaluate(kind=>{
+      const s=window.canvasIrAR.scene;s.loseHand(true);
+      const item=[...s.original.things.values()].find(t=>t.mesh.name.startsWith(kind))!;
+      item.body.body.disablePreStep=false;item.mesh.rotationQuaternion!.set(0,0,0,1);
+      item.mesh.position.set(s.original.floor.table.center.x,kind==="crate"?.88:.755,s.original.floor.table.center.z);
+      item.body.body.setLinearVelocity(item.mesh.position.scale(0));item.body.body.setAngularVelocity(item.mesh.position.scale(0));
+      s.scene.onAfterPhysicsObservable.addOnce(()=>{item.body.body.disablePreStep=true;});
+      return{id:item.mesh.name,point:s.table(item.mesh.position)};
+    },kind);
+    await page.waitForTimeout(180);
+    for(let step=0;step<=12;step++){
+      const point:V3=[initial.point[0]-.035+step*.0025,initial.point[1],initial.point[2]];
+      await replayTip(point);await page.waitForTimeout(75);
+    }
+    const touched=await page.evaluate(id=>{
+      const s=window.canvasIrAR.scene,actor=s.original.things.get(id)!;
+      return{point:s.table(actor.mesh.position),contacts:s.physicalContacts.filter(e=>e.target===id)};
+    },initial.id);
+    assert(touched.contacts.length>0,`open fingertip has real Havok collision with ${kind}`);
+    assert(touched.point[0]>initial.point[0]+.002,`touch physically moves original ${kind}: ${initial.point[0]} → ${touched.point[0]}`);
+    assert(await page.evaluate(()=>window.canvasIrAR.scene.holding)==="—","physical touch does not require a pinch");
+  }
+  // A 500 ms-old source frame and 320 ms between samples must not cancel a slider.
+  const sliderPoint=async(x:number):Promise<V3>=>page.evaluate(x=>{
+    const s=window.canvasIrAR.scene,panel=s.original.panel,m=panel.computeWorldMatrix(true).m;
+    const u=(x/480-.5)*2.88,v=(.5-179/300)*1.8;
+    const world=s.camera.position.clone();world.set(u*m[0]!+v*m[4]!+m[12]!,u*m[1]!+v*m[5]!+m[13]!,u*m[2]!+v*m[6]!+m[14]!);
+    // Add normal error along the measured camera ray; its screen position stays fixed.
+    world.addInPlace(s.camera.globalPosition.subtract(world).normalize().scale(.015/s.layout.scale));
+    return s.table(world);
+  },x);
+  await page.evaluate(()=>window.canvasIrAR.scene.loseHand(true));
+  await replayTip(await sliderPoint(100));await page.waitForTimeout(320);
+  await replayTip(await sliderPoint(100));await page.waitForTimeout(320);
+  await replayTip(await sliderPoint(370));await page.waitForTimeout(100);
+  const bounce=await page.evaluate(()=>[...window.canvasIrAR.scene.original.things.values()][0]!.body.shape.material.restitution);
+  assert(Math.abs(bounce-(370-24)/432)<.025,`slider remains captured across slow/noisy frames: restitution ${bounce}`);
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(temporary,"mobile.png")});
   assert(await page.evaluate(()=>document.documentElement.scrollHeight===innerHeight&&document.documentElement.scrollWidth===innerWidth),"camera fills the viewport with no diagnostic panels or scrolling");
   await page.locator("#menu").click();await page.locator("#stop").click();assert(await page.evaluate(()=>document.querySelector<HTMLVideoElement>("#video")!.srcObject===null),"stop releases camera tracks");
