@@ -18,6 +18,7 @@ import { CreateCylinder } from "@babylonjs/core/Meshes/Builders/cylinderBuilder"
 import { CreateGround } from "@babylonjs/core/Meshes/Builders/groundBuilder";
 import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
 import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
+import { CreateTorus } from "@babylonjs/core/Meshes/Builders/torusBuilder";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import "@babylonjs/core/Physics/joinedPhysicsEngineComponent";
@@ -29,7 +30,8 @@ import HavokPhysics from "@babylonjs/havok";
 import havokWasm from "@babylonjs/havok/lib/esm/HavokPhysics.wasm" with { type: "file" };
 import { type ObjectHandle, Objects, Surface, World } from "@canvas-ir/babylon";
 import { type ComponentHandle, Components, EventRouter, type Point, type RouterEvent } from "canvas-ir";
-import { Floor, type FloorPage, type FloorThing, UNITS } from "./floor";
+import { Floor, type FloorPage, type FloorThing, TABLE, UNITS } from "./floor";
+import { thumbsticks } from "./thumbsticks";
 
 const FONT = "system-ui, -apple-system, Segoe UI, sans-serif";
 const PALETTE = ["#f97316", "#0ea5e9", "#8b5cf6", "#10b981", "#ef4444", "#eab308", "#ec4899", "#14b8a6"];
@@ -54,7 +56,7 @@ const loadPage = (frame: HTMLIFrameElement): Promise<FloorPage> =>
     wait();
   });
 
-export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d" }): Promise<void> => {
+export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; fly: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d" }): Promise<void> => {
   const { canvas, frame, toggle } = options;
   const engine = new Engine(canvas, true, { stencil: true, preserveDrawingBuffer: false }, true);
   engine.setHardwareScalingLevel(1 / Math.min(2, window.devicePixelRatio || 1));
@@ -79,12 +81,6 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   const shadows = new ShadowGenerator(2048, sun);
   shadows.useBlurExponentialShadowMap = true;
   shadows.blurKernel = 16;
-
-  // The floor's body: the board is drawn on meshes of the floor's own, and this slab is what things land on.
-  const slab = CreateGround("", { width: 160, height: 160 }, scene);
-  slab.isVisible = false;
-  slab.isPickable = false;
-  new PhysicsAggregate(slab, PhysicsShapeType.BOX, { mass: 0, restitution: 0.4, friction: 0.7 }, scene);
 
   // The panel on its stand: a drawing on a plane, facing the camera, and a thin box behind it that the crates bounce off.
   const stand = new TransformNode("stand", scene);
@@ -112,6 +108,15 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   const world = new World({ scene, size: () => size });
   const page = await loadPage(frame);
   const floor = new Floor(page, scene, world);
+  // The table's body, made again when the board grows; and the room's floor, where what fell off lands before it comes back.
+  let tableBody: PhysicsAggregate | null = null;
+  floor.onResize = (top) => {
+    tableBody?.dispose();
+    tableBody = new PhysicsAggregate(top, PhysicsShapeType.BOX, { mass: 0, restitution: 0.4, friction: 0.7 }, scene);
+  };
+  floor.onResize(floor.top);
+  new PhysicsAggregate(floor.ground, PhysicsShapeType.BOX, { mass: 0, restitution: 0.2, friction: 0.9 }, scene);
+  for (const m of [floor.top]) shadows.addShadowCaster(m);
   const router = new EventRouter(world, { dragThreshold: 4 });
   const objects = new Objects(router);
   const panelSurface = world.add(new Surface({ version: 1, ops: [] }, { mesh: panel, width: W, height: H, pixelRatio: 2.5, background: "#f8fafc" }));
@@ -332,38 +337,116 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     },
   }));
 
-  // The camera: a drag on the floor or the sky looks around, the wheel or a pinch comes closer, and a double click looks at what it hit.
+  // Getting around. What is under the finger decides what a gesture does: on something drawn on the table it goes to the board,
+  // on a crate or a ball it grabs it, and on empty table or sky it moves the camera: one finger or the left button orbits the pin,
+  // two fingers or the right button slide along the table, a pinch or the wheel comes closer to the point under it, and a
+  // two-finger twist turns. A click on empty table moves the pin there; a double click looks down on that spot, in 2D.
   let flight: { from: Vector3; to: Vector3; r0: number; r1: number; t0: number } | null = null;
   const lookAt = (mesh: AbstractMesh): void => {
     flight = { from: camera.target.clone(), to: mesh.getAbsolutePosition().clone(), r0: camera.radius, r1: Math.max(camera.lowerRadiusLimit ?? 2, 3), t0: performance.now() };
   };
-  let lastClick = { at: 0, target: "" };
+  /** The point on the table (y = 0) under a host pixel, in the room, or null above the horizon. */
+  const onTable = (p: Point): Vector3 | null => world.onPlane(p, Vector3.Zero(), Vector3.Up());
+
+  // The pin: the point the camera turns around and comes closer to. The last few stay on the table as markers to jump back to.
+  const pinMaterial = new StandardMaterial("pin", scene);
+  pinMaterial.diffuseColor = Color3.FromHexString("#2563eb");
+  pinMaterial.emissiveColor = Color3.FromHexString("#1d4ed8");
+  const oldPinMaterial = new StandardMaterial("pin/old", scene);
+  oldPinMaterial.diffuseColor = Color3.FromHexString("#94a3b8");
+  oldPinMaterial.emissiveColor = new Color3(0.25, 0.28, 0.33);
+  const pins: TransformNode[] = [];
+  const makePin = (i: number): TransformNode => {
+    const node = new TransformNode(`pin-${i}`, scene);
+    const head = CreateSphere(`pin-${i}/head`, { diameter: 0.16, segments: 12 }, scene);
+    head.position.y = 0.32;
+    const needle = CreateCylinder(`pin-${i}/needle`, { height: 0.3, diameterTop: 0.03, diameterBottom: 0.005 }, scene);
+    needle.position.y = 0.15;
+    const ring = CreateTorus(`pin-${i}/ring`, { diameter: 0.34, thickness: 0.025, tessellation: 32 }, scene);
+    ring.position.y = 0.01;
+    for (const m of [head, needle, ring]) m.parent = node;
+    return node;
+  };
+  const paintPins = (): void => {
+    pins.forEach((p, i) => {
+      for (const m of p.getChildMeshes()) m.material = i === pins.length - 1 ? pinMaterial : oldPinMaterial;
+    });
+  };
+  /** Moves the pin to a point on the table, gliding the camera's target there; the old pin stays as a marker. */
+  const pinAt = (at: Vector3, remember = true): void => {
+    at.y = 0;
+    const near = pins.findIndex((p) => Vector3.Distance(p.position, at) < 0.4);
+    if (near >= 0) {
+      const [p] = pins.splice(near, 1);
+      pins.push(p!);
+    } else if (remember) {
+      const p = pins.length >= 5 ? pins.shift()! : makePin(pins.length);
+      p.position.copyFrom(at);
+      pins.push(p);
+    }
+    paintPins();
+    void glide({ ...pose(), target: at }, 500);
+  };
+
+  let lastClick = { at: 0, target: "", x: 0, y: 0 };
   router.on("*", "click", (e) => {
-    const target = e.path.find((id) => things.has(id) || id === "stand") ?? "";
+    const target = e.path.find((id) => things.has(id) || id === "stand" || id.startsWith("pin-")) ?? "";
+    const { x, y } = e.input as Point;
     const now = performance.now();
-    if (target && target === lastClick.target && now - lastClick.at < 350) {
-      lookAt(target === "stand" ? panel : things.get(target)!.mesh);
-      lastClick = { at: 0, target: "" };
+    const double = target === lastClick.target && now - lastClick.at < 350 && Math.hypot(x - lastClick.x, y - lastClick.y) < 24;
+    lastClick = double ? { at: 0, target: "", x, y } : { at: now, target, x, y };
+    if (target.startsWith("pin-")) {
+      const pin = pins.find((p) => p.name === target.split("/")[0]);
+      if (pin) pinAt(pin.position.clone(), false);
       return;
     }
-    lastClick = { at: now, target };
-    log(`click: ${e.path.join(" → ") || "nothing"}`);
+    if (target) {
+      if (double) lookAt(target === "stand" ? panel : things.get(target)!.mesh);
+      log(`click: ${e.path.join(" → ")}`);
+      return;
+    }
+    // Empty table: the pin goes there; twice, and the camera looks down on it, in 2D.
+    const at = onTable({ x, y });
+    if (!at) return;
+    if (double) void focusTable(at);
+    else pinAt(at);
   });
-  let orbiting: { x: number; y: number } | null = null;
+  let orbiting: { x: number; y: number; slide: boolean } | null = null;
   router.on("*", "dragstart", (e) => {
     if (held || e.path.some((id) => id === "stand" || id === "panel")) return;
-    orbiting = { x: (e.input as { x: number }).x, y: (e.input as { y: number }).y };
+    const input = e.input as Point & { button?: number; shiftKey?: boolean };
+    orbiting = { x: input.x, y: input.y, slide: input.button === 2 || input.button === 1 || input.shiftKey === true };
   });
   router.on("*", "drag", (e) => {
     if (!orbiting) return;
-    const { x, y } = e.input as { x: number; y: number };
-    camera.alpha -= (x - orbiting.x) * 0.006;
-    camera.beta = Math.max(0.15, Math.min(1.5, camera.beta - (y - orbiting.y) * 0.006));
-    orbiting = { x, y };
+    const { x, y } = e.input as Point;
+    if (orbiting.slide) slide(orbiting, { x, y });
+    else orbit(x - orbiting.x, y - orbiting.y);
+    orbiting = { ...orbiting, x, y };
   });
   router.on("*", "dragend", () => (orbiting = null));
-  const zoom = (factor: number): void => {
-    camera.radius = Math.max(camera.lowerRadiusLimit ?? 2, Math.min(camera.upperRadiusLimit ?? 30, camera.radius * factor));
+  const orbit = (dx: number, dy: number): void => {
+    camera.alpha -= dx * 0.006;
+    camera.beta = Math.max(0.05, Math.min(1.52, camera.beta - dy * 0.006));
+  };
+  /** Slides the camera along the table so the point under `from` ends up under `to`. */
+  const slide = (from: Point, to: Point): void => {
+    const a = onTable(from);
+    const b = onTable(to);
+    if (!a || !b) return;
+    const d = a.subtract(b);
+    // Far toward the horizon a pixel is a long way: no jumps across the room.
+    const most = camera.radius * 0.5;
+    if (d.length() > most) d.normalize().scaleInPlace(most);
+    aim(camera.target.add(d));
+  };
+  /** Comes closer (factor below 1) or goes back, toward the table point under a host pixel. */
+  const zoom = (factor: number, at?: Point): void => {
+    const radius = Math.max(camera.lowerRadiusLimit ?? 1, Math.min(camera.upperRadiusLimit ?? 150, camera.radius * factor));
+    const k = 1 - radius / camera.radius;
+    const toward = at ? onTable(at) : null;
+    if (toward && Vector3.Distance(toward, camera.target) < camera.radius * 4) aim(camera.target.add(toward.subtract(camera.target).scale(k)));
+    camera.radius = radius;
   };
 
   // The board under the room: presses on what is drawn there go to the page, at the board point under the pointer.
@@ -384,44 +467,42 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       }),
     );
   };
-  /** The board point on the floor under a host pixel, or null off the floor. */
-  const onFloor = (p: Point): Point | null => {
-    const at = world.onPlane(p, Vector3.Zero(), Vector3.Up());
-    return at ? floor.toBoard(at) : null;
-  };
   let forwarding: number | null = null;
   let overPage = false;
 
-  // Pointer input: one pointer goes to the router, or to the page for what is drawn on the floor; a second finger makes a pinch.
+  // Pointer input: one pointer goes to the router, or to the page for what is drawn on the table; two fingers move the camera.
   const pointer = (e: PointerEvent | WheelEvent) => {
     const r = canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top, button: e.button, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
   };
-  const fingers = new Map<number, { x: number; y: number }>();
-  let pinch: number | null = null;
+  const fingers = new Map<number, Point>();
+  let pinch: { mid: Point; spread: number; angle: number } | null = null;
   let pointerId: number | null = null;
-  const spread = (): number => {
+  const twoFingers = (): { mid: Point; spread: number; angle: number } => {
     const [a, b] = [...fingers.values()];
-    return Math.hypot(a!.x - b!.x, a!.y - b!.y);
+    return { mid: { x: (a!.x + b!.x) / 2, y: (a!.y + b!.y) / 2 }, spread: Math.hypot(a!.x - b!.x, a!.y - b!.y), angle: Math.atan2(b!.y - a!.y, b!.x - a!.x) };
   };
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "touch") fingers.set(e.pointerId, pointer(e));
     if (fingers.size === 2) {
       if (pointerId !== null) router.pointerCancel();
+      if (forwarding !== null) pageCanvas()?.dispatchEvent(new pageWindow.PointerEvent("pointercancel", { pointerId: forwarding, pointerType: "touch" }));
       pointerId = null;
       forwarding = null;
       held = null;
       orbiting = null;
-      pinch = spread();
+      pinch = twoFingers();
       return;
     }
     if (pinch !== null || pointerId !== null || forwarding !== null || moving) return;
+    flight = null;
     const p = pointer(e);
     try {
       canvas.setPointerCapture(e.pointerId);
     } catch {}
     const hit = world.hit(p);
-    if (hit && floor.holds(hit.mesh)) {
+    if (hit && floor.holds(hit.mesh) && e.button === 0) {
       const at = floor.toBoard(hit.point);
       if (page.hits(at)) {
         forwarding = e.pointerId;
@@ -435,21 +516,26 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   canvas.addEventListener("pointermove", (e) => {
     if (fingers.has(e.pointerId)) fingers.set(e.pointerId, pointer(e));
     if (pinch !== null && fingers.size === 2) {
-      const now = spread();
-      zoom(pinch / Math.max(1, now));
+      // Two fingers: the table under them follows them, their spread comes closer to the point between them, and their twist turns the view.
+      const now = twoFingers();
+      slide(pinch.mid, now.mid);
+      zoom(pinch.spread / Math.max(1, now.spread), now.mid);
+      let twist = now.angle - pinch.angle;
+      twist -= Math.round(twist / (2 * Math.PI)) * 2 * Math.PI;
+      camera.alpha -= twist;
       pinch = now;
       return;
     }
     const p = pointer(e);
     if (forwarding !== null) {
       if (e.pointerId !== forwarding) return;
-      const at = onFloor(p);
-      if (at) sendToPage(e, "pointermove", at);
+      const at = onTable(p);
+      if (at) sendToPage(e, "pointermove", floor.toBoard(at));
       return;
     }
     if (pointerId !== null && e.pointerId !== pointerId) return;
     router.pointerMove(p);
-    // Hovering what is drawn on the floor lights it up as on the page.
+    // Hovering what is drawn on the table lights it up as on the page.
     if (pointerId === null) {
       const hit = world.hit(p);
       const at = hit && floor.holds(hit.mesh) ? floor.toBoard(hit.point) : null;
@@ -466,8 +552,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     }
     if (e.pointerId === forwarding) {
       forwarding = null;
-      const at = onFloor(pointer(e));
-      if (at) sendToPage(e, cancel ? "pointercancel" : "pointerup", at);
+      const at = onTable(pointer(e));
+      if (at) sendToPage(e, cancel ? "pointercancel" : "pointerup", floor.toBoard(at));
       return;
     }
     if (e.pointerId !== pointerId) return;
@@ -484,11 +570,78 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     "wheel",
     (e) => {
       e.preventDefault();
+      flight = null;
       const scale = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? size.height : 1;
-      zoom(Math.exp(e.deltaY * scale * 0.0012));
+      zoom(Math.exp(e.deltaY * scale * 0.0012), pointer(e));
     },
     { passive: false },
   );
+
+  // Keys: WASD or the arrows slide along the table the way the camera faces, Q and E turn, R and F tilt; Escape looks down, in 2D.
+  const keys = new Set<string>();
+  window.addEventListener("keydown", (e) => {
+    if (mode !== "3d") return;
+    if (e.key === "Escape" && !moving) void focusTable(camera.target.clone());
+    keys.add(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+  });
+  window.addEventListener("keyup", (e) => keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key));
+  window.addEventListener("blur", () => keys.clear());
+  const steer = (dt: number): void => {
+    if (keys.size === 0 || mode !== "3d") return;
+    const down = (...k: string[]): number => (k.some((x) => keys.has(x)) ? 1 : 0);
+    const ahead = down("w", "ArrowUp") - down("s", "ArrowDown");
+    const side = down("d", "ArrowRight") - down("a", "ArrowLeft");
+    if (ahead || side) {
+      flight = null;
+      // Along the table, as the camera faces: speed grows with distance, so it's the same on screen near or far.
+      const yaw = camera.alpha;
+      const forward = new Vector3(-Math.cos(yaw), 0, -Math.sin(yaw));
+      const right = new Vector3(Math.sin(yaw), 0, -Math.cos(yaw));
+      const speed = camera.radius * 0.9 * dt;
+      aim(camera.target.add(forward.scale(ahead * speed)).add(right.scale(side * speed)));
+    }
+    camera.alpha += (down("q") - down("e")) * 1.6 * dt;
+    camera.beta = Math.max(0.05, Math.min(1.52, camera.beta + (down("f") - down("r")) * 1.2 * dt));
+  };
+
+  // Fly: two thumbsticks, the left floating the way the camera looks, up and down included, the right looking around from where it is.
+  const sticks = thumbsticks(
+    {
+      move: (x, y, dt) => {
+        flight = null;
+        const forward = camera.target.subtract(camera.position).normalize();
+        const right = Vector3.Cross(Vector3.Up(), forward).normalize();
+        const speed = Math.max(2, camera.radius) * 1.2 * dt;
+        const d = forward.scale(-y * speed).add(right.scale(x * speed));
+        camera.position.addInPlace(d);
+        camera.setTarget(camera.target.add(d));
+      },
+      look: (x, y, dt) => {
+        flight = null;
+        // Turning the head: the camera stays where it is and its target goes round it.
+        const eye = camera.position.clone();
+        const forward = camera.target.subtract(eye);
+        const r = forward.length();
+        const yaw = Math.atan2(forward.x, forward.z) + x * 1.8 * dt;
+        let pitch = Math.asin(Math.max(-1, Math.min(1, forward.y / r))) - y * 1.2 * dt;
+        pitch = Math.max(-1.45, Math.min(1.2, pitch));
+        const to = eye.add(new Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)).scale(r));
+        camera.setTarget(to);
+        camera.setPosition(eye);
+      },
+    },
+    { shown: false },
+  );
+  let flying = false;
+  const fly = (on: boolean): void => {
+    flying = on;
+    sticks.show(on && mode === "3d");
+    document.body.classList.toggle("flying", on && mode === "3d");
+    options.fly.textContent = on ? "Stop flying" : "Fly";
+    options.fly.setAttribute("aria-pressed", String(on));
+  };
+  options.fly.addEventListener("click", () => fly(!flying));
+
 
   const resize = (): void => {
     size.width = canvas.clientWidth || 1;
@@ -546,7 +699,9 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     mode = m;
     frame.style.pointerEvents = m === "2d" ? "auto" : "none";
     canvas.style.visibility = m === "3d" ? "visible" : "hidden";
-    toggle.textContent = m === "2d" ? "View in 3D" : "Back to 2D";
+    toggle.textContent = m === "2d" ? "View in 3D" : "Look from above";
+    sticks.show(flying && m === "3d");
+    document.body.classList.toggle("flying", flying && m === "3d");
     options.onMode?.(m);
   };
   const footprints = (): FloorThing[] =>
@@ -568,13 +723,25 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     frame.style.opacity = "1";
     scene.render();
     await fade(false);
-    await glide({ alpha: SEEN.alpha - 0.35, beta: 1.0, radius: Math.min(radius, 9), target: target.add(new Vector3(0, 0.6, 0)) }, 1400);
+    await glide({ alpha: SEEN.alpha - 0.35, beta: 1.0, radius: Math.min(radius, 9), target }, 1400);
+    pinAt(target);
     moving = false;
   };
-  const to2d = async (): Promise<void> => {
+  /**
+   * Looks straight down on a point of the table and hands over to the page, in 2D: the page's view is set to show the
+   * board there at the size the camera shows it, so the fade has nothing to jump. From as far as the camera is now, within reason.
+   */
+  const focusTable = async (at: Vector3): Promise<void> => {
+    if (moving || mode !== "3d") return;
     moving = true;
-    const { target, radius } = overhead();
-    await glide({ ...SEEN, radius, target }, 1100);
+    flight = null;
+    at.y = 0;
+    const radius = Math.max(2, Math.min(40, camera.radius));
+    await glide({ ...SEEN, radius, target: at }, 1100);
+    const r = stageRect();
+    const k = size.height / (2 * radius * Math.tan(camera.fov / 2) * UNITS);
+    const b = floor.toBoard(at);
+    page.setView({ a: k, b: 0, c: 0, d: k, e: r.width / 2 - k * b.x, f: r.height / 2 - k * b.y });
     page.footprints(footprints());
     await fade(true);
     show("2d");
@@ -582,7 +749,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   };
   toggle.addEventListener("click", () => {
     if (moving) return;
-    void (mode === "2d" ? to3d() : to2d());
+    void (mode === "2d" ? to3d() : focusTable(camera.target.clone()));
   });
   // A footprint dragged on the board drags its thing along the floor.
   page.onFootprint = (id, phase, point) => {
@@ -601,7 +768,14 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   const ease = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
   const velocity = new Vector3();
   /** What happens each frame in either mode: flights, the held body, things that fell off, and in 2D the footprints. */
+  let last = performance.now();
+  const fallen = new Map<string, number>();
   const tick = (): void => {
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    steer(dt);
+    sticks.apply(dt);
     if (flight) {
       const t = Math.min(1, (performance.now() - flight.t0) / 700);
       aim(Vector3.Lerp(flight.from, flight.to, ease(t)));
@@ -617,14 +791,23 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       held.thing.body.body.setLinearVelocity(velocity);
       held.thing.body.body.setAngularVelocity(Vector3.Zero());
     }
-    // What fell off the edge comes back from the sky.
-    for (const t of things.values()) {
-      if (t.mesh.position.y < -15) {
-        t.body.body.disablePreStep = false;
-        t.mesh.position.set(0, 6, 0);
-        t.body.body.setLinearVelocity(Vector3.Zero());
-        scene.onAfterPhysicsObservable.addOnce(() => (t.body.body.disablePreStep = true));
+    // What rolled off the table lies on the room's floor a moment, then comes back, dropped onto the table from above.
+    for (const [id, t] of things) {
+      if (t.mesh.position.y > -TABLE.height * 0.5 && t.mesh.position.y > -30) {
+        fallen.delete(id);
+        continue;
       }
+      if (held?.thing === t) held = null;
+      const since = fallen.get(id) ?? now;
+      fallen.set(id, since);
+      if (now - since < 1500 && t.mesh.position.y > -30) continue;
+      fallen.delete(id);
+      t.body.body.disablePreStep = false;
+      t.mesh.position.set((Math.random() - 0.5) * 2, 4, (Math.random() - 0.5) * 2);
+      t.body.body.setLinearVelocity(Vector3.Zero());
+      t.body.body.setAngularVelocity(Vector3.Zero());
+      scene.onAfterPhysicsObservable.addOnce(() => (t.body.body.disablePreStep = true));
+      log(`${id} fell off the table and came back`);
     }
     if (mode === "2d" && !moving) page.footprints(footprints());
   };

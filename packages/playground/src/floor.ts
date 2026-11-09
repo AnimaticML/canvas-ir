@@ -9,11 +9,16 @@ import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTextur
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
+import { CreateCylinder } from "@babylonjs/core/Meshes/Builders/cylinderBuilder";
 import { CreateGround } from "@babylonjs/core/Meshes/Builders/groundBuilder";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene as BabylonScene } from "@babylonjs/core/scene";
 import type { World } from "@canvas-ir/babylon";
 import { Focus, type FocusRegion, type FocusWorld, type Matrix2D, type Point, Renderer, type Scene } from "canvas-ir";
+
+/** The table under the board, in meters. */
+export const TABLE = { thickness: 0.12, height: 1.6 };
 
 /** Board units per meter: the board is a big table, and a 0.6 m ball is about the size of a feature's icon. */
 export const UNITS = 300;
@@ -25,6 +30,7 @@ export interface FloorPage {
   images(src: string): CanvasImageSource | undefined;
   lod(): boolean;
   view(): Matrix2D;
+  setView(view: Matrix2D): void;
   bounds(): { x: number; y: number; width: number; height: number } | null;
   background(): string;
   hits(point: Point): boolean;
@@ -220,8 +226,13 @@ export class Floor {
   /** The board's extent drawn as the base layer, with a margin. */
   private area: Box;
   private lastBase = 0;
-  /** A plane under the whole room, the page's background beyond the board. */
+  /** The table the board lies on: its top is the board's area, and what rolls past its edge falls to the room's floor. */
+  readonly top: Mesh;
+  private readonly legs: Mesh[] = [];
+  /** The room's floor, below the table. */
   readonly ground: Mesh;
+  /** Called when the table changes size, as the board grows: the host gives it a body again. */
+  onResize: ((top: Mesh) => void) | null = null;
 
   constructor(
     readonly page: FloorPage,
@@ -232,14 +243,30 @@ export class Floor {
     this.origin = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
     this.area = this.extent();
     this.background = page.background() || this.background;
-    this.ground = CreateGround("floor", { width: 400, height: 400 }, scene);
-    this.ground.position.y = -0.002;
+    // The table: a slab as thick as a tabletop under the board's area, on four legs, over the room's floor.
+    this.top = CreateBox("table", { width: 1, height: TABLE.thickness, depth: 1 }, scene);
+    this.top.receiveShadows = true;
+    const paper = new StandardMaterial("table", scene);
+    paper.diffuseColor = Color3.FromHexString(toHex(this.background));
+    paper.emissiveColor = new Color3(0.3, 0.3, 0.3);
+    paper.specularColor = Color3.Black();
+    this.top.material = paper;
+    const wood = new StandardMaterial("table/legs", scene);
+    wood.diffuseColor = Color3.FromHexString("#94a3b8");
+    wood.specularColor = new Color3(0.1, 0.1, 0.1);
+    for (let i = 0; i < 4; i++) {
+      const leg = CreateCylinder(`table/leg-${i}`, { height: TABLE.height - TABLE.thickness, diameter: 0.35 }, scene);
+      leg.material = wood;
+      leg.isPickable = false;
+      this.legs.push(leg);
+    }
+    this.ground = CreateGround("room", { width: 600, height: 600 }, scene);
+    this.ground.position.y = -TABLE.height;
     this.ground.receiveShadows = true;
-    const material = new StandardMaterial("floor", scene);
-    material.diffuseColor = Color3.FromHexString(toHex(this.background));
-    material.emissiveColor = new Color3(0.32, 0.32, 0.32);
-    material.specularColor = Color3.Black();
-    this.ground.material = material;
+    const floorMaterial = new StandardMaterial("room", scene);
+    floorMaterial.diffuseColor = Color3.FromHexString("#8796ab");
+    floorMaterial.specularColor = Color3.Black();
+    this.ground.material = floorMaterial;
     this.base = new Layer("floor/board", scene, this, 0, true);
     this.detail = new Layer("floor/near", scene, this, 0.002, false);
     this.measure = CreateGround("", { width: 1, height: 1 }, scene);
@@ -282,7 +309,7 @@ export class Floor {
 
   /** Whether a mesh is part of the floor. */
   holds(mesh: unknown): boolean {
-    return mesh === this.ground || this.base.holds(mesh) || this.detail.holds(mesh);
+    return mesh === this.top || this.base.holds(mesh) || this.detail.holds(mesh);
   }
 
   /** Draws the floor for this frame: the near part when the view needs it, and the whole board at most a few times a second as it changes. */
@@ -314,12 +341,25 @@ export class Floor {
     return Math.min(4096 / this.area.width, 4096 / this.area.height, 2);
   }
 
+  /** The table's top, in the room: its center and size in meters. */
+  get table(): { center: Vector3; width: number; depth: number } {
+    const c = this.toRoom({ x: this.area.x + this.area.width / 2, y: this.area.y + this.area.height / 2 });
+    return { center: c, width: this.area.width / UNITS, depth: this.area.height / UNITS };
+  }
+
   private showBase(): void {
     this.base.show({ ...this.area, scale: this.baseScale() });
-    const c = this.toRoom({ x: this.area.x + this.area.width / 2, y: this.area.y + this.area.height / 2 });
+    const { center: c, width, depth } = this.table;
     this.measure.position.set(c.x, 0, c.z);
-    this.measure.scaling.set(this.area.width / UNITS, 1, this.area.height / UNITS);
+    this.measure.scaling.set(width, 1, depth);
     this.measure.computeWorldMatrix(true);
+    this.top.position.set(c.x, -TABLE.thickness / 2 - 0.003, c.z);
+    this.top.scaling.set(width, 1, depth);
+    this.top.computeWorldMatrix(true);
+    this.legs.forEach((leg, i) => {
+      leg.position.set(c.x + (i % 2 ? 1 : -1) * (width / 2 - 0.6), -TABLE.thickness - (TABLE.height - TABLE.thickness) / 2, c.z + (i < 2 ? 1 : -1) * (depth / 2 - 0.6));
+    });
+    this.onResize?.(this.top);
   }
 
   /** The board's extent with a margin, at least the room's size around its origin. */

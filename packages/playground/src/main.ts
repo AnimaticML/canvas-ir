@@ -277,6 +277,7 @@ const floorHost = window as unknown as {
     images(src: string): CanvasImageSource | undefined;
     lod(): boolean;
     view(): Matrix2D;
+    setView(view: Matrix2D): void;
     bounds(): { x: number; y: number; width: number; height: number } | null;
     background(): string;
     hits(point: Point): boolean;
@@ -291,6 +292,7 @@ floorHost.canvasIrFloor = {
   images: (src) => images.get(src),
   lod: () => settings.lod,
   view: () => view,
+  setView: (next) => setView(next),
   bounds: () => boardBox(),
   background: () => getComputedStyle(stage).backgroundColor || getComputedStyle(document.body).backgroundColor,
   hits: (point) => scene.hitTest(point).length > 0 || cards.scene.hitTest(point).length > 0,

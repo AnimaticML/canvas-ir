@@ -15,19 +15,26 @@
       .title { margin-left: auto; color: #475569; }
       .title a { color: inherit; pointer-events: auto; }
       #page { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 2; background: transparent; }
-      #toggle { position: fixed; right: 16px; bottom: 16px; z-index: 3; border: 0; border-radius: 999px; padding: 12px 20px; background: #0f172a; color: #fff; font: 600 15px/1 system-ui, sans-serif; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.25); cursor: pointer; }
-      #toggle:hover { background: #1e293b; }
+      .controls { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 3; display: flex; gap: 8px; }
+      .controls button { border: 0; border-radius: 999px; padding: 12px 20px; background: #0f172a; color: #fff; font: 600 15px/1 system-ui, sans-serif; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.25); cursor: pointer; white-space: nowrap; }
+      .controls button:hover { background: #1e293b; }
+      .flying .controls { bottom: 156px; }
+      .controls #fly { background: rgba(255, 255, 255, 0.9); color: #0f172a; }
+      .controls #fly[aria-pressed="true"] { background: #2563eb; color: #fff; }
     </style>
   </head>
   <body>
     <canvas id="scene" aria-label="A Babylon.js scene of crates and balls under Havok physics, with a panel of controls drawn with CanvasIR"></canvas>
     <div class="hud">
       <span class="chip" id="event">Drag a crate or a ball to throw it</span>
-      <span class="chip" id="hint">Click what is drawn on the floor to use it · drag a crate or ball to throw it · drag the floor to look around · wheel to come closer</span>
+      <span class="chip" id="hint">Click what is drawn on the table to use it · drag to orbit the pin, right-drag or Shift to slide · wheel toward the pointer · click the table to move the pin, double-click to look down · WASD, Q/E, R/F</span>
       <span class="title chip">The board in 3D · Babylon.js and Havok with CanvasIR · <a href="./space.html">three.js</a> · <a href="./">playground</a></span>
     </div>
     <iframe id="page" src="./index.html" title="The playground's board"></iframe>
-    <button id="toggle" type="button">View in 3D</button>
+    <div class="controls">
+      <button id="fly" type="button" aria-pressed="false" hidden>Fly</button>
+      <button id="toggle" type="button">View in 3D</button>
+    </div>
     <script type="module" src="./babylon-main.ts"></script>
   </body>
 </html>

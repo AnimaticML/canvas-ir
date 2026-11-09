@@ -3,17 +3,20 @@ import { startBabylon } from "./babylon";
 
 const event = document.getElementById("event")!;
 if (matchMedia("(pointer: coarse)").matches) {
-  document.getElementById("hint")!.textContent = "Tap what is drawn on the floor to use it · drag a crate or ball to throw it · drag the floor to look around · pinch to come closer";
+  document.getElementById("hint")!.textContent = "Tap what is drawn on the table to use it · drag to orbit the pin · two fingers slide, pinch and turn · tap the table to move the pin, double-tap to look down";
 }
 const hud = document.querySelector(".hud") as HTMLElement;
+const fly = document.getElementById("fly") as HTMLButtonElement;
 void startBabylon({
   canvas: document.getElementById("scene") as HTMLCanvasElement,
   frame: document.getElementById("page") as HTMLIFrameElement,
   toggle: document.getElementById("toggle") as HTMLButtonElement,
+  fly: fly,
   start: location.hash === "#3d" ? "3d" : "2d",
   onEvent: (text) => (event.textContent = text),
   onMode: (mode) => {
     hud.style.display = mode === "3d" ? "" : "none";
+    fly.hidden = mode !== "3d";
     history.replaceState(null, "", mode === "3d" ? "#3d" : location.pathname + location.search);
   },
 });
