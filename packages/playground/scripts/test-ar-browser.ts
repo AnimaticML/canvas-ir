@@ -48,11 +48,11 @@ for(const [seconds,frame] of [[5,all],[1.5,blank],[4,one],[1.5,blank]] as const)
 }
 await file.end();
 const dist = resolve(import.meta.dir,"../dist");
-const server = Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){
+const server = Bun.serve({hostname:"127.0.0.1",port:0,async fetch(request){
   if(new URL(request.url).pathname==="/test-hand.jpg")return new Response(Bun.file(process.env.AR_HAND_IMAGE||join(temporary,"hand.jpg")));
   const path = resolve(dist,"." + decodeURIComponent(new URL(request.url).pathname));
   if(!path.startsWith(dist+sep))return new Response("Not found",{status:404});
-  return new Response(Bun.file(path));
+  const file=Bun.file(path);return await file.exists()?new Response(file):new Response("Not found",{status:404});
 }});
 const browser = await chromium.launch({ ...(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH}:{}), headless:true,
   args:["--no-sandbox","--use-fake-ui-for-media-stream","--use-fake-device-for-media-stream",`--use-file-for-fake-video-capture=${videoPath}`] });
@@ -131,10 +131,12 @@ try {
   };
   await gesture(false,0);await gesture(true,0);
   assert((await page.evaluate(()=>window.canvasIrAR.snapshot().interaction))?.action==="grab","production landmark pipeline grabs an original crate");
-  const before=await page.evaluate(()=>{const t=[...window.canvasIrAR.scene.original.things.values()].find(t=>t.mesh.name.startsWith("crate"))!;return window.canvasIrAR.scene.table(t.mesh.position)[1];});
+  const before=await page.evaluate(()=>{const t=[...window.canvasIrAR.scene.original.things.values()].find(t=>t.mesh.name.startsWith("crate"))!;return {height:window.canvasIrAR.scene.table(t.mesh.position)[1],rotation:t.mesh.rotationQuaternion!.asArray()};});
   for(let i=0;i<5;i++){await gesture(true,.015,.4);await page.waitForTimeout(75);}
-  const after=await page.evaluate(()=>{const t=[...window.canvasIrAR.scene.original.things.values()].find(t=>t.mesh.name.startsWith("crate"))!;return window.canvasIrAR.scene.table(t.mesh.position)[1];});
-  assert(after>before+.02,`original Havok crate lifts with the landmark pipeline: ${before} → ${after}`);
+  const after=await page.evaluate(()=>{const t=[...window.canvasIrAR.scene.original.things.values()].find(t=>t.mesh.name.startsWith("crate"))!;return {height:window.canvasIrAR.scene.table(t.mesh.position)[1],rotation:t.mesh.rotationQuaternion!.asArray()};});
+  assert(after.height>before.height+.02,`original Havok crate lifts with the landmark pipeline: ${before.height} → ${after.height}`);
+  const quaternionDot=Math.abs(before.rotation.reduce((sum,v,i)=>sum+v*after.rotation[i]!,0));
+  assert(quaternionDot<.995,`original Havok crate rotates with the reconstructed palm: quaternion dot ${quaternionDot}`);
   await gesture(false,0);assert(await page.evaluate(()=>window.canvasIrAR.scene.holding)==="—","opening the pinch returns the original body to Havok dynamics");
   // Real CanvasIR panel component: two contact frames must execute Drop crate.
   const panelCounts=await page.evaluate(()=>{
@@ -149,6 +151,13 @@ try {
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(temporary,"mobile.png")});
   assert(await page.evaluate(()=>document.documentElement.scrollHeight===innerHeight&&document.documentElement.scrollWidth===innerWidth),"camera fills the viewport with no diagnostic panels or scrolling");
   await page.locator("#menu").click();await page.locator("#stop").click();assert(await page.evaluate(()=>document.querySelector<HTMLVideoElement>("#video")!.srcObject===null),"stop releases camera tracks");
+  const originalPage=await browser.newPage();await originalPage.goto(`http://127.0.0.1:${server.port}/babylon.html#3d`);
+  await originalPage.waitForFunction(()=>(window as unknown as {canvasIrBabylon:unknown}).canvasIrBabylon,null,{timeout:30000});
+  const baseline=await originalPage.evaluate(()=>{
+    const old=(window as unknown as {canvasIrBabylon:{things:Map<string,{mesh:{getBoundingInfo:()=>{boundingBox:{extendSize:{x:number}}}}}>;drop:(kind:string)=>void}}).canvasIrBabylon;
+    const width=old.things.get("crate-1")!.mesh.getBoundingInfo().boundingBox.extendSize.x*2,before=old.things.size;old.drop("crate");return{width,before,after:old.things.size};
+  });
+  assert(Math.abs(baseline.width-.7)<.001&&baseline.after===baseline.before+1,"original non-AR demo still boots with its original geometry and behavior");await originalPage.close();
   assert(errors.length===0,`browser errors: ${errors.join("; ")}`);
   console.log("PASS: original Babylon reuse, three-marker placement/occlusion, real MediaPipe geometry and touch calibration, landmark-to-Havok grab/lift/release, original control click, fullscreen UI and trace.");console.log(`Screenshots: ${temporary}`);
 } catch(error){console.error("Snapshot:",await page.evaluate(()=>window.canvasIrAR?.snapshot()));await page.screenshot({path:join(temporary,"failure.png")});console.error("Failure screenshot:",join(temporary,"failure.png"));throw error;}

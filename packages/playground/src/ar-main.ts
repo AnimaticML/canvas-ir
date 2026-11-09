@@ -150,7 +150,7 @@ const tick=(now:number):void=>{
       if(tableReady){notice("Верните хотя бы один из привязанных маркеров в кадр.");outcome("");}
       else if(anchor()==="aruco")notice(mapSize<2?"Покажите вместе 2–3 разных маркера.":"Подержите телефон спокойно — привязываем стол.");
     }
-    record("frame",{visibleIds:found.map(m=>m.id),mappedIds:[...map.markers.keys()],mapDecisions:[...map.decisions],usedIds,inliers:fit?.inliers??0,poseError:trackingError,tableReady,trackingState:scene.enabled?"tracked":tableReady?"lost":"calibrating",processingMs:performance.now()-started,action:lastAction});
+    record("frame",{observations:found,visibleIds:found.map(m=>m.id),mappedIds:[...map.markers.keys()],mapDecisions:[...map.decisions],usedIds,inliers:fit?.inliers??0,poseError:trackingError,tableReady,trackingState:scene.enabled?"tracked":tableReady?"lost":"calibrating",processingMs:performance.now()-started,action:lastAction});
   }catch(error){record("processing-error",String(error));stop();notice("Обработка остановилась. Откройте камеру снова; запись проверки сохранена в настройках.");}
 };
 button("export").onclick=()=>{
@@ -167,7 +167,7 @@ void(async()=>{
   try{
     const [cv,s]=await Promise.all([loadCV(),ARScene.create(el<HTMLCanvasElement>("scene"))]);vision=new Vision(cv);scene=s;layout();
     // Read-only snapshots plus a replay entry point for recorded landmark frames.
-    (window as unknown as {canvasIrAR:unknown}).canvasIrAR={scene:s,map,hand,trace,snapshot:()=>({running,pose,intrinsics:k,tableReady,visibleIds:found.map(m=>m.id),usedIds,hand:lastHand,interaction:lastAction,layout:s.layout}),replayHand:applyHand,analyzeHand:async(source:HTMLCanvasElement)=>{await loadHands();if(!hands)throw Error("Hand model unavailable");const now=performance.now(),result=hands.detectForVideo(source,now);applyHand(result,now);return result;}};
+    (window as unknown as {canvasIrAR:unknown}).canvasIrAR={scene:s,map,hand,trace,snapshot:()=>({running,pose,intrinsics:k,tableReady,visibleIds:found.map(m=>m.id),usedIds,hand:lastHand,interaction:lastAction,layout:s.layout}),replayHand:(result:HandLandmarkerResult,time:number)=>{ctx.clearRect(0,0,overlay.width,overlay.height);applyHand(result,time);},analyzeHand:async(source:HTMLCanvasElement)=>{await loadHands();if(!hands)throw Error("Hand model unavailable");const now=performance.now(),result=hands.detectForVideo(source,now);ctx.clearRect(0,0,overlay.width,overlay.height);applyHand(result,now);return result;}};
     button("start").disabled=button("markers").disabled=false;notice("");
   }catch(error){record("initialization-error",String(error));notice(`Демо не загрузилось: ${String(error)}`);}
 })();
