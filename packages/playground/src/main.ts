@@ -48,6 +48,7 @@ import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, samples } from "./samples";
 import { Chrome, type Settings } from "./ui/chrome";
 import { type Feature, ICON_REACH, featureIcon } from "./ui/features";
+import { windowFrame } from "./ui/window";
 import { CardLayer } from "./ui/cards";
 import { textSink } from "./ui/kit";
 
@@ -586,8 +587,9 @@ const wire = (): void => {
       return;
     }
     // Dragging a selected object moves the whole selection.
-    const ids = selected.includes(id) ? selected : [id];
     if (!selected.includes(id)) select([id]);
+    // A window's frame, its drawing and its controls move as one.
+    const ids = withWindows(selected.includes(id) ? selected : [id]);
     // Bounds points and vertices are what usually lines up; keep the list short so each move stays cheap.
     const anchors = ids
       .flatMap((i) => scene.anchors(i).filter((a) => a.kind === "bounds" || (a.kind === "vertex" && ids.length === 1)))
@@ -1055,7 +1057,9 @@ const morphDemo = (): void => {
     const m = dayToNight();
     log(`morph demo: ${m.paired} ops paired by their groups' names, ${m.removed} fading out, ${m.added} fading in`);
   }
-  for (const spec of morphControls(morphTo, (id) => components?.get(id))) if (!components!.get(spec.id)) components!.mount(spec);
+  const controls = morphControls(morphTo, (id) => components?.get(id));
+  for (const spec of controls) if (!components!.get(spec.id)) components!.mount(spec);
+  frameAround(MORPH_ID, "Morph: day to night", [MORPH_ID, ...controls.map((c) => c.id)], closeMorph);
   const b = scene.bounds(MORPH_ID)!;
   reveal({ ...b, height: b.height + 70 });
 };
@@ -1093,6 +1097,7 @@ const pelicanDemo = (): void => {
   if (!components!.get("pelican-ride")) {
     components!.mount(rideButton(PELICAN_AT, () => (components?.get<{ riding: boolean }>("pelican-ride")?.state.riding ? stopRiding() : startRiding())));
   }
+  frameAround(PELICAN_ID, "A pelican riding a bicycle", [PELICAN_ID, "pelican-ride"], closePelican);
   const b = scene.bounds(PELICAN_ID)!;
   reveal({ ...b, height: b.height + 50 });
   startRiding();
@@ -1148,6 +1153,7 @@ const physicsDemo = (): void => {
     );
   }
   components?.get<{ bodies: number }>("physics-drop")?.setState({ bodies: count() });
+  frameAround(PHYSICS_ID, "Physics: crates, balls and stars", [PHYSICS_ID, "physics-drop"], closePhysics);
   const b = scene.bounds(PHYSICS_ID)!;
   reveal({ ...b, height: b.height + 50 });
   runPhysics();
@@ -1169,6 +1175,7 @@ const graphDemo = (): void => {
     );
   }
   if (!components!.get("graph-shake")) components!.mount(graphButton(() => graph?.simulation.alpha(1).restart()));
+  frameAround(GRAPH_ID, "A force-directed graph", [GRAPH_ID, "graph-shake"], closeGraph);
   const b = scene.bounds(GRAPH_ID)!;
   reveal({ ...b, height: b.height + 50 });
 };
@@ -1178,6 +1185,7 @@ const showPaint = (source: PaintSource): void => {
   if (components!.get(PAINT_ID)) components!.unmount(PAINT_ID);
   const t0 = performance.now();
   components!.mount(paintComponent(source));
+  frameAround(PAINT_ID, `Paint by numbers: ${source.name}`, [PAINT_ID], closePaint);
   log(`paint by numbers: ${source.name}, ${source.canvas.width}×${source.canvas.height}, vectorized and drawn in ${(performance.now() - t0).toFixed(0)} ms`);
   reveal(scene.bounds(PAINT_ID)!);
 };
@@ -1248,6 +1256,42 @@ const declarationDemo = (): void => {
   reveal(rights.bounds);
 };
 
+/** Frames around demos drawn straight on the board, by frame id, with what each holds. */
+const frames = new Map<string, readonly string[]>();
+/** The ids, with every window any of them belongs to: its frame and all it holds. */
+function withWindows(ids: readonly string[]): string[] {
+  const out = new Set(ids);
+  for (const [frame, held] of frames) if (ids.includes(frame) || held.some((h) => ids.includes(h))) for (const x of [frame, ...held]) out.add(x);
+  return [...out].filter((x) => scene.getGroup(x) !== undefined || scene.get(x) !== undefined);
+}
+/** Puts a frame with a title bar and a close button around a demo and its controls, as they are now. */
+const frameAround = (id: string, title: string, held: readonly string[], close: () => void): void => {
+  const frame = `${id}:window`;
+  components!.unmount(frame);
+  frames.delete(frame);
+  const there = held.filter((h) => scene.getGroup(h) !== undefined);
+  const box = boxOf(there);
+  if (!box) return;
+  const pad = 16;
+  components!.mount(
+    windowFrame({
+      id: frame,
+      title,
+      rect: { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad },
+      onClose: () => {
+        close();
+        refreshIcons();
+        render();
+      },
+    }),
+  );
+  frames.set(frame, there);
+};
+const unframe = (id: string): void => {
+  components!.unmount(`${id}:window`);
+  frames.delete(`${id}:window`);
+};
+
 const closeReader = (reader: Reader | null): void => {
   reader?.close();
   refreshIcons();
@@ -1255,28 +1299,37 @@ const closeReader = (reader: Reader | null): void => {
 
 // Closing a demo takes its window, and whatever runs it, off the board.
 const closePelican = (): void => {
+  unframe(PELICAN_ID);
   stopRiding();
   components!.unmount("pelican-ride");
   if (scene.getGroup(PELICAN_ID)) scene.remove(PELICAN_ID);
 };
 const closePhysics = (): void => {
+  unframe(PHYSICS_ID);
   components!.unmount("physics-drop");
   if (scene.getGroup(PHYSICS_ID)) scene.remove(PHYSICS_ID);
   sandbox = null;
 };
 const closeGraph = (): void => {
+  unframe(GRAPH_ID);
   graph?.stop();
   graph = null;
   components!.unmount("graph-shake");
   if (scene.getGroup(GRAPH_ID)) scene.remove(GRAPH_ID);
 };
 const closeMorph = (): void => {
+  unframe(MORPH_ID);
   for (const spec of morphControls(morphTo, (id) => components?.get(id))) components!.unmount(spec.id);
   if (scene.getGroup(MORPH_ID)) scene.remove(MORPH_ID);
 };
 /** The ten thousand shapes' outermost ops and groups, while they're on the board. */
 let field: string[] = [];
 const fieldOpen = (): boolean => field.some((id) => scene.get(id) !== undefined || scene.getGroup(id) !== undefined);
+
+const closePaint = (): void => {
+  unframe(PAINT_ID);
+  components!.unmount(PAINT_ID);
+};
 
 // Every demo is an icon on the board, as on a desktop: pressing it opens the demo's window to its right, and pressing it again closes it.
 const DEMO = (at: { x: number; y: number }) => ({ x: at.x - ICON_REACH, y: at.y });
@@ -1296,7 +1349,7 @@ const features: Feature[] = [
   { id: "physics", name: "Physics", glyph: "physics", ...DEMO(PHYSICS_AT), tilt: 5, ...toggle(() => scene.getGroup(PHYSICS_ID) !== undefined, physicsDemo, closePhysics) },
   { id: "graph", name: "Graph", glyph: "graph", ...DEMO(GRAPH_AT), tilt: -4, ...toggle(() => scene.getGroup(GRAPH_ID) !== undefined, graphDemo, closeGraph) },
   { id: "morph", name: "Morph", glyph: "morph", ...DEMO(MORPH_AT), tilt: 7, ...toggle(() => scene.getGroup(MORPH_ID) !== undefined, morphDemo, closeMorph) },
-  { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, ...toggle(() => components?.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), () => components!.unmount(PAINT_ID)) },
+  { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, ...toggle(() => components?.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), closePaint) },
   { id: "table", name: "A million rows", glyph: "table", ...DEMO(TABLE_AT), tilt: -3, ...toggle(() => table?.alive === true, tableDemo, () => table?.close()) },
   { id: "points", name: "Ten million points", glyph: "points", ...DEMO(POINTS_AT), tilt: 5, ...toggle(() => points?.alive === true, pointsDemo, () => points?.close()) },
   { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...DEMO(GALAXY_AT), tilt: -4, ...toggle(() => galaxy?.alive === true, galaxyDemo, () => galaxy?.close()) },
