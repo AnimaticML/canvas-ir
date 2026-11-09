@@ -1250,34 +1250,34 @@ const declarationDemo = (): void => {
 const DEMO = (at: { x: number; y: number }) => ({ x: at.x - ICON_REACH, y: at.y });
 const sampleNamed = (name: string): Sample => samples.find((sample) => sample.name === name)!;
 const features: Feature[] = [
-  { id: "pelican", name: "Pelican", glyph: "pelican", ...DEMO(PELICAN_AT), tilt: -6, onClick: pelicanDemo },
-  { id: "physics", name: "Physics", glyph: "physics", ...DEMO(PHYSICS_AT), tilt: 5, onClick: physicsDemo },
-  { id: "graph", name: "Graph", glyph: "graph", ...DEMO(GRAPH_AT), tilt: -4, onClick: graphDemo },
-  { id: "morph", name: "Morph", glyph: "morph", ...DEMO(MORPH_AT), tilt: 7, onClick: morphDemo },
-  { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, onClick: () => showPaint(paintingSource()) },
-  { id: "table", name: "A million rows", glyph: "table", ...DEMO(TABLE_AT), tilt: -3, onClick: tableDemo },
-  { id: "points", name: "Ten million points", glyph: "points", ...DEMO(POINTS_AT), tilt: 5, onClick: pointsDemo },
-  { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...DEMO(GALAXY_AT), tilt: -4, onClick: galaxyDemo },
-  { id: "map", name: "World map", glyph: "map", ...DEMO(MAP_AT), tilt: 3, onClick: mapDemo },
-  { id: "book", name: "War and Peace", glyph: "book", ...DEMO(BOOK_AT), tilt: -5, onClick: bookDemo },
-  { id: "declaration", name: "Human rights in 529 languages", glyph: "languages", ...DEMO(DECLARATION_AT), tilt: 4, onClick: declarationDemo },
-  { id: "picture", name: "Paint my image…", glyph: "picture", x: PAINT_AT.x - ICON_REACH, y: PAINT_AT.y + 240, tilt: 4, onClick: () => pictureInput.click() },
+  { id: "pelican", name: "Pelican", glyph: "pelican", ...DEMO(PELICAN_AT), tilt: -6, about: "Eight drawn poses per pedal turn, morphed into every frame between.", onClick: pelicanDemo },
+  { id: "physics", name: "Physics", glyph: "physics", ...DEMO(PHYSICS_AT), tilt: 5, about: "Crates, balls and stars drawn as canvas code and thrown by a physics engine.", onClick: physicsDemo },
+  { id: "graph", name: "Graph", glyph: "graph", ...DEMO(GRAPH_AT), tilt: -4, about: "A force-directed graph: each node is a group moved by a live transform.", onClick: graphDemo },
+  { id: "morph", name: "Morph", glyph: "morph", ...DEMO(MORPH_AT), tilt: 7, about: "Day and night drawn separately; parts pair up by name and morph.", onClick: morphDemo },
+  { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, about: "A painting split into numbered regions to fill in, color by color.", onClick: () => showPaint(paintingSource()) },
+  { id: "table", name: "A million rows", glyph: "table", ...DEMO(TABLE_AT), tilt: -3, about: "A million rows: only the rows in view are ever recorded.", onClick: tableDemo },
+  { id: "points", name: "Ten million points", glyph: "points", ...DEMO(POINTS_AT), tilt: 5, about: "A year of readings every 3 seconds, drawn at the detail a pixel needs.", onClick: pointsDemo },
+  { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...DEMO(GALAXY_AT), tilt: -4, about: "Billions of stars, made region by region as you zoom down to a planet.", onClick: galaxyDemo },
+  { id: "map", name: "World map", glyph: "map", ...DEMO(MAP_AT), tilt: 3, about: "Countries, rivers and roads, with Wikipedia's articles about the places in view.", onClick: mapDemo },
+  { id: "book", name: "War and Peace", glyph: "book", ...DEMO(BOOK_AT), tilt: -5, about: "All of War and Peace to read, search, select and copy.", onClick: bookDemo },
+  { id: "declaration", name: "Human rights in 529 languages", glyph: "languages", ...DEMO(DECLARATION_AT), tilt: 4, about: "The same reader over 41 scripts, right to left included.", onClick: declarationDemo },
+  { id: "picture", name: "Paint my image…", glyph: "picture", x: PAINT_AT.x - ICON_REACH, y: PAINT_AT.y + 300, tilt: 4, about: "Your own photo, turned into regions to paint.", onClick: () => pictureInput.click() },
   ...(
     [
-      ["Badge", "badge", -650, -720, 6],
-      ["Chart", "chart", 0, -780, -7],
-      ["Star", "star", 800, -700, 9],
-      ["Text block", "text", 1300, -760, -3],
-      ["Text around shapes", "wrap", 2050, -720, 5],
-      ["Text in a circle", "circle", 2800, -760, -6],
-      ["Canvas shapes", "shapes", 2650, 40, 4],
-      ["Controls", "controls", 1700, 560, -8],
-      ["Chart.js chart", "chartjs", 2650, 620, 6],
-      ["D3 chart", "d3", 2300, 1080, -5],
-      ["HTML and 3D", "embed", 1000, 1900, 3],
-      ["10,000 shapes", "many", 2000, 1850, -4],
+      ["Badge", "badge", -650, -720, 6, "An SVG file drawn through canvg into the same ops as everything else."],
+      ["Chart", "chart", 0, -780, -7, "An SVG chart: its bars are shapes you can select and drag."],
+      ["Star", "star", 800, -700, 9, "An SVG star. Press its icon again for another copy."],
+      ["Text block", "text", 1300, -760, -3, "Rich text laid out by CanvasIR, with links that light up on hover."],
+      ["Text around shapes", "wrap", 2050, -720, 5, "Drag the shape or the sticker and every line is laid out again."],
+      ["Text in a circle", "circle", 2800, -760, -6, "Text that fills a circle instead of a box."],
+      ["Canvas shapes", "shapes", 2650, 40, 4, "Plain canvas calls: gradients, dashes and curves, recorded as ops."],
+      ["Controls", "controls", 1700, 560, -8, "A knob, a slider and a button built as components. They change the wrapped text."],
+      ["Chart.js chart", "chartjs", 2650, 620, 6, "Chart.js drawing into the recorder as if it were a canvas."],
+      ["D3 chart", "d3", 2300, 1080, -5, "D3's shape generators with the recorder as their context."],
+      ["HTML and 3D", "embed", 1000, 1900, 3, "A form and a WebGL cube showing through holes in the drawing."],
+      ["10,000 shapes", "many", 2000, 1850, -4, "Ten thousand objects, to see what a frame redraws."],
     ] as const
-  ).map(([name, glyph, x, y, tilt]): Feature => ({ id: glyph, name, glyph, x, y, tilt, onClick: () => void add(sampleNamed(name), { x, y }) })),
+  ).map(([name, glyph, x, y, tilt, about]): Feature => ({ id: glyph, name, glyph, x, y, tilt, about, onClick: () => void add(sampleNamed(name), { x, y }) })),
 ];
 for (const f of features) cards.components.mount(featureIcon(f, () => cards.colors));
 
@@ -1313,6 +1313,10 @@ chrome.setText("log", logLines.join("\n"));
 chrome.setText("a11y", a11yText);
 showSelection();
 
-for (const sample of initialSamples) await add(sample);
+// The basic showcases are on the board from the start, each beside its icon, which says what it shows.
+for (const sample of initialSamples) {
+  const f = features.find((f) => f.name === sample.name);
+  await add(sample, f && { x: f.x, y: f.y });
+}
 initial = false;
 setView(home());

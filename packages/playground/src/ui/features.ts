@@ -3,7 +3,7 @@
 // They are components on the cards' layer, so they zoom with the board but
 // are never part of the drawing.
 import type { ComponentSpec, RecordingContext } from "canvas-ir";
-import { FONT, type Palette } from "./kit";
+import { FONT, type Palette, wrap } from "./kit";
 
 /** A tile's side in world units; what it adds goes this far right of its left edge, and a gap more. */
 export const ICON = 150;
@@ -44,6 +44,8 @@ export interface Feature {
   readonly y: number;
   /** A slight turn, in degrees, so the tiles look scattered rather than laid out. */
   readonly tilt: number;
+  /** A line or two under the name saying what it shows. */
+  readonly about?: string;
   readonly onClick: () => void;
 }
 
@@ -116,6 +118,11 @@ export const featureIcon = (f: Feature, colors: () => Palette): ComponentSpec<nu
       c.fillStyle = INK;
       // The board stays light in dark mode, so the label keeps dark ink.
       c.fillText(f.name, ICON / 2, ICON + 12);
+      if (f.about) {
+        c.font = `16px ${FONT}`;
+        c.fillStyle = "#475569";
+        wrap(c, f.about, ICON + 70).forEach((line, i) => c.fillText(line, ICON / 2, ICON + 44 + i * 21));
+      }
       c.textAlign = "start";
     },
     on: {

@@ -495,4 +495,4 @@ export const samples: readonly Sample[] = [
 ];
 
 /** The samples on the board at first; the rest are a button away. */
-export const initialSamples: readonly Sample[] = samples.filter((s) => s !== shapes && s !== field && s !== d3Chart && s !== chartJs && s !== embedSample);
+export const initialSamples: readonly Sample[] = samples.filter((s) => s !== field && s !== d3Chart && s !== chartJs && s !== embedSample);
