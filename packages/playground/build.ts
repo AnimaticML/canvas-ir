@@ -28,3 +28,26 @@ await page("main.ts", "index.html", "index.html", '<script type="module" src="./
 await page("game-main.ts", "game.html", "game.html", '<script type="module" src="./game-main.ts"></script>');
 await page("space-main.ts", "space.html", "space.html", '<script type="module" src="./space-main.ts"></script>');
 await page("babylon-main.ts", "babylon.html", "babylon.html", '<script type="module" src="./babylon-main.ts"></script>');
+await page("ar-main.ts", "ar.html", "ar.html", '<script type="module" src="./ar-main.ts"></script>');
+// Keep large vision runtimes outside the inline application bundle, at stable
+// relative URLs so GitHub Pages works under any repository base path.
+await Bun.write(new URL("./dist/ar-vendor/opencv.js", import.meta.url), Bun.file(import.meta.resolve("@techstark/opencv-js/dist/opencv.js").replace("file://", "")));
+for (const name of ["vision_wasm_internal.js", "vision_wasm_internal.wasm", "vision_wasm_nosimd_internal.js", "vision_wasm_nosimd_internal.wasm"]) {
+  const root = new URL("./", import.meta.resolve("@mediapipe/tasks-vision"));
+  await Bun.write(new URL(`./dist/ar-vendor/mediapipe/${name}`, import.meta.url), Bun.file(new URL(`wasm/${name}`, root)));
+}
+// Fetch the fixed, checksum-verified model at build time, so the deployed app
+// needs only its own static origin (no Google requests from the user's camera page).
+const handModelCache = new URL("./.ar-cache/hand_landmarker.task", import.meta.url);
+const handModelFile = Bun.file(process.env.AR_HAND_MODEL_PATH || handModelCache);
+const handModel = await handModelFile.exists()
+  ? new Uint8Array(await handModelFile.arrayBuffer())
+  : await (async () => {
+      const response = await fetch("https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task");
+      if (!response.ok) throw new Error(`Hand model download failed: ${response.status}`);
+      return new Uint8Array(await response.arrayBuffer());
+    })();
+const handModelHash = new Bun.CryptoHasher("sha256").update(handModel).digest("hex");
+if (handModelHash !== "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1") throw new Error("Hand model SHA-256 mismatch");
+await Bun.write(handModelCache, handModel);
+await Bun.write(new URL("./dist/ar-vendor/hand_landmarker.task", import.meta.url), handModel);

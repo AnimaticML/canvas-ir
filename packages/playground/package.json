@@ -14,6 +14,8 @@
     "@canvas-ir/text": "workspace:*",
     "@canvas-ir/three": "workspace:*",
     "@canvas-ir/vectorize": "workspace:*",
+    "@mediapipe/tasks-vision": "0.10.32",
+    "@techstark/opencv-js": "4.11.0-release.1",
     "canvas-ir": "workspace:*",
     "canvg": "4.0.3",
     "chart.js": "4.4.7",
@@ -27,6 +29,7 @@
     "@types/d3-force": "3.0.10",
     "@types/d3-scale": "4.0.8",
     "@types/d3-shape": "3.1.6",
-    "@types/three": "0.170.0"
+    "@types/three": "0.170.0",
+    "playwright-core": "1.56.1"
   }
 }

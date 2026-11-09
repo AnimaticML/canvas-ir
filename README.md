@@ -4,6 +4,8 @@ CanvasIR is a stand-in for `CanvasRenderingContext2D` that records drawing inste
 
 Design: [docs/design.md](docs/design.md). What comes next: [docs/roadmap.md](docs/roadmap.md).
 
+Experimental **[AR Table Lab](docs/ar-table.md)** adds a browser camera page (`ar.html`) on the existing Babylon.js / Havok / CanvasIR stack: multi-marker ArUco anchoring, manual calibration, MediaPipe hand depth experiments, and physical touch/pinch interactions. See the guide for setup, smartphone validation, and monocular accuracy limits.
+
 ## Status
 
 All five phases: recording, the IR, serialization and replay; geometry queries; the full Canvas 2D drawing API; rich text layout; groups, events and SVG export, with a playground.

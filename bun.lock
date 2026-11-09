@@ -60,6 +60,8 @@
         "@canvas-ir/text": "workspace:*",
         "@canvas-ir/three": "workspace:*",
         "@canvas-ir/vectorize": "workspace:*",
+        "@mediapipe/tasks-vision": "0.10.32",
+        "@techstark/opencv-js": "4.11.0-release.1",
         "canvas-ir": "workspace:*",
         "canvg": "4.0.3",
         "chart.js": "4.4.7",
@@ -74,6 +76,7 @@
         "@types/d3-scale": "4.0.8",
         "@types/d3-shape": "3.1.6",
         "@types/three": "0.170.0",
+        "playwright-core": "1.56.1",
       },
     },
     "packages/text": {
@@ -129,6 +132,10 @@
     "@chenglou/pretext": ["@chenglou/pretext@1.0.0", "", {}, "sha512-BxKiDMxWJhyzL8asvcgg3T9YnUU7OUFsKO8oRaR2SYAPX4Sh2wM9gqTBjrBaZ4fnl84cEQ8czC0Q1M83z3chsA=="],
 
     "@kurkle/color": ["@kurkle/color@0.3.4", "", {}, "sha512-M5UknZPHRu3DEDWoipU6sE8PdkZ6Z/S+v4dD+Ke8IaNlpdSQah50lz1KtcFBa2vsdOnwbbnxJwVM4wty6udA5w=="],
+
+    "@mediapipe/tasks-vision": ["@mediapipe/tasks-vision@0.10.32", "", {}, "sha512-3tiAZnmKloYnRXYoO3dKltTUGnqeCwzC4lV03uY0vCsE+aveJTyEVQyZHOlQGQNsjK+gRHzkf9q08C99Qm2K0Q=="],
+
+    "@techstark/opencv-js": ["@techstark/opencv-js@4.11.0-release.1", "", {}, "sha512-d5h8cMiSbbnme5+I1ta4++EJ3mkca1zkVNh0A4+5ASJYOmO5OhVPRX3oPnNzs9I3KyGVX7QeFU8gVoI7I0w8RQ=="],
 
     "@tweenjs/tween.js": ["@tweenjs/tween.js@23.1.3", "", {}, "sha512-vJmvvwFxYuGnF2axRtPYocag6Clbb5YS7kLL+SO/TeVFzHqDIWrNKYtcsPMibjDx9O+bu+psAy9NKfWklassUA=="],
 
