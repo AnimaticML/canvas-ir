@@ -286,6 +286,7 @@ const floorHost = window as unknown as {
     onFootprint: ((id: string, phase: "start" | "move" | "end", point: Point) => void) | null;
     windows(): FloorWindow[];
     moveWindow(id: string, dx: number, dy: number): void;
+    wheel(point: Point, deltaX: number, deltaY: number): boolean;
   };
 };
 /** An open demo window on the board: its group, its title and its box, title bar included. */
@@ -318,6 +319,17 @@ floorHost.canvasIrFloor = {
     }
     showSelection();
     render();
+  },
+  // A wheel at a board point, for what keeps one there (the map, the stars, the million rows); false when nothing does.
+  wheel: (at, deltaX, deltaY) => {
+    const p = { x: view.a * at.x + view.c * at.y + view.e, y: view.b * at.x + view.d * at.y + view.f };
+    const input = { ...p, deltaX, deltaY, altKey: false, shiftKey: false, ctrlKey: false, metaKey: false };
+    if (cards.hits(p) && cards.wheel(input)) return true;
+    wheelFree = false;
+    router.wheel(input);
+    if (wheelFree) return false;
+    render();
+    return true;
   },
   footprints: (things) => {
     if (!components) return;

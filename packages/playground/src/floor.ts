@@ -40,6 +40,8 @@ export interface FloorPage {
   windows(): FloorWindow[];
   /** Moves a window, with all it holds, across the board. */
   moveWindow(id: string, dx: number, dy: number): void;
+  /** Offers a wheel at a board point to what is drawn there; false when nothing keeps it. */
+  wheel(point: Point, deltaX: number, deltaY: number): boolean;
 }
 
 /** An open demo window on the board: its group, its title and its box in board units, title bar included. */
