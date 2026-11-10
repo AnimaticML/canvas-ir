@@ -21,6 +21,8 @@
       .flying .controls { bottom: 156px; }
       .controls #fly { background: rgba(255, 255, 255, 0.9); color: #0f172a; }
       .controls #fly[aria-pressed="true"] { background: #2563eb; color: #fff; }
+      .controls #head { background: rgba(255, 255, 255, 0.9); color: #0f172a; }
+      .controls #head[aria-pressed="true"] { background: #2563eb; color: #fff; }
     </style>
   </head>
   <body>
@@ -33,6 +35,7 @@
     <iframe id="page" src="./index.html" title="The playground's board"></iframe>
     <div class="controls">
       <button id="fly" type="button" aria-pressed="false" hidden>Fly</button>
+      <button id="head" type="button" aria-pressed="false" hidden>Look with your head</button>
       <button id="toggle" type="button">View in 3D</button>
     </div>
     <script type="module" src="./babylon-main.ts"></script>

@@ -4,6 +4,7 @@
 // are Objects, the same 3D components the three.js page uses: they light up
 // under the pointer, and a drag picks one up and throws it.
 import { ArcRotateCamera } from "@babylonjs/core/Cameras/arcRotateCamera";
+import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
@@ -33,6 +34,8 @@ import { type ComponentHandle, Components, EventRouter, type Point, type RouterE
 import { Floor, type FloorPage, type FloorThing, type FloorWindow, TABLE, UNITS } from "./floor";
 import { type HandOptions, type HandSurface, Hands } from "./hands";
 import { Tablet } from "./tablet";
+import { FaceTracker } from "./face";
+import { type Eye, screenMeters, throughWindow } from "./viewer";
 import { thumbsticks } from "./thumbsticks";
 
 const FONT = "system-ui, -apple-system, Segoe UI, sans-serif";
@@ -77,11 +80,16 @@ export interface BabylonRuntime {
   pressAt: (phase: "down" | "move" | "up" | "cancel", at: Vector3, pointer?: Partial<Press>) => void;
   /** Hands: give them each frame's tracked joints, in room coordinates; see hands.ts. */
   hands: Hands;
+  /**
+   * Looking through the screen as through a window: give it where the viewer's eye is, in meters from the middle of the
+   * screen (x right, y up, z toward the viewer), each frame it's known, and null to look as the navigation does.
+   */
+  viewer: { update(eye: Eye | null): void; readonly screen: { width: number; height: number } };
   /** Room point to canvas pixel, through the active camera. */
   toCanvas: (at: Vector3) => Point;
 }
 
-export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; fly: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d"; tilt?: boolean; ar?: boolean; hands?: Partial<HandOptions> }): Promise<BabylonRuntime> => {
+export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; fly: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d"; tilt?: boolean; ar?: boolean; hands?: Partial<HandOptions>; head?: HTMLButtonElement }): Promise<BabylonRuntime> => {
   const { canvas, frame, toggle } = options;
   const engine = new Engine(canvas, true, { alpha: !!options.ar, stencil: true, preserveDrawingBuffer: false }, true);
   engine.setHardwareScalingLevel(1 / Math.min(2, window.devicePixelRatio || 1));
@@ -888,6 +896,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     toggle.textContent = m === "2d" ? "View in 3D" : "Look from above";
     sticks.show(flying && m === "3d");
     document.body.classList.toggle("flying", flying && m === "3d");
+    if (m === "2d" && options.head?.getAttribute("aria-pressed") === "true") options.head.click();
     options.onMode?.(m);
   };
   const footprints = (): FloorThing[] =>
@@ -999,7 +1008,93 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     }
     if (mode === "2d" && !moving) page.footprints(footprints());
   };
+  // Looking through the screen as through a window, from where the viewer's eye is. The navigation camera still decides
+  // what the window looks onto; a camera of its own stands at the eye and looks through the window's edges.
+  const viewerCamera = new FreeCamera("viewer", camera.position.clone(), scene);
+  let eyeWanted: Eye | null = null;
+  let eyeShown: Eye | null = null;
+  let eyeSince = 0;
+  const screenSize = (): { width: number; height: number } => screenMeters(canvas.clientWidth || 1, canvas.clientHeight || 1, matchMedia("(pointer: coarse)").matches);
+  /** Where the eye has to be for the navigation camera's own view: on the axis, as far as its field of view says for this screen. */
+  const nominalEye = (): Eye => ({ x: 0, y: 0, z: screenSize().height / 2 / Math.tan(camera.fov / 2) });
+  const viewer = {
+    get screen() {
+      return screenSize();
+    },
+    update(eye: Eye | null): void {
+      eyeWanted = eye;
+      if (eye) eyeSince = performance.now();
+      if (eye && !eyeShown) eyeShown = nominalEye();
+    },
+  };
+  const placeViewer = (dt: number): void => {
+    // A face lost for a moment keeps its place; lost for longer, the view eases back to the navigation's own.
+    const lost = !eyeWanted && performance.now() - eyeSince > 600;
+    if (!eyeShown || options.ar || mode !== "3d") {
+      if (scene.activeCamera === viewerCamera) scene.activeCamera = camera;
+      return;
+    }
+    const goal = eyeWanted ?? (lost ? nominalEye() : eyeShown);
+    const k = 1 - Math.exp(-dt * 14);
+    eyeShown = { x: eyeShown.x + (goal.x - eyeShown.x) * k, y: eyeShown.y + (goal.y - eyeShown.y) * k, z: eyeShown.z + (goal.z - eyeShown.z) * k };
+    const target = camera.target;
+    const forward = target.subtract(camera.position).normalize();
+    const right = Vector3.Cross(Vector3.Up(), forward).normalize();
+    const up = Vector3.Cross(forward, right).normalize();
+    const halfHeight = camera.radius * Math.tan(camera.fov / 2);
+    const w = { center: target.clone(), right, up, forward, halfHeight, halfWidth: halfHeight * (size.width / size.height) };
+    const far = camera.maxZ || 10000;
+    const { position, projection } = throughWindow(eyeShown, screenSize(), w, camera.minZ, far);
+    viewerCamera.position.copyFrom(position);
+    viewerCamera.setTarget(position.add(forward));
+    viewerCamera.minZ = camera.minZ;
+    viewerCamera.maxZ = far;
+    viewerCamera.freezeProjectionMatrix(projection);
+    scene.activeCamera = viewerCamera;
+    if (lost && Math.abs(eyeShown.x) + Math.abs(eyeShown.y) + Math.abs(eyeShown.z - goal.z) < 1e-3) {
+      eyeShown = null;
+      scene.activeCamera = camera;
+    }
+  };
+  // The front camera, for "Look with your head".
+  const headButton = options.head;
+  const head = headButton
+    ? new FaceTracker((eye) => {
+        viewer.update(eye);
+        const now = performance.now();
+        if (eye && now - headLogged > 700) {
+          headLogged = now;
+          log(`eye ${Math.round(eye.z * 100)} cm from the screen, ${Math.round(Math.abs(eye.x) * 100)} cm ${eye.x < 0 ? "left" : "right"}, ${Math.round(Math.abs(eye.y) * 100)} cm ${eye.y < 0 ? "down" : "up"}`);
+        }
+      }, { fov: 63, camera: { x: 0, y: screenSize().height / 2 + 0.008 } })
+    : null;
+  let headLogged = 0;
+  const headOn = async (on: boolean): Promise<void> => {
+    if (!head || !headButton) return;
+    if (!on) {
+      head.stop();
+      headButton.setAttribute("aria-pressed", "false");
+      headButton.textContent = "Look with your head";
+      return;
+    }
+    headButton.textContent = "Starting the camera…";
+    try {
+      head.options = { ...head.options, camera: { x: 0, y: screenSize().height / 2 + 0.008 } };
+      await head.start();
+      headButton.setAttribute("aria-pressed", "true");
+      headButton.textContent = "Stop looking with your head";
+      log("move your head: the screen is a window onto the table");
+    } catch (error) {
+      headButton.textContent = "Look with your head";
+      log(`no front camera: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  headButton?.addEventListener("click", () => void headOn(!head?.active));
+  let lastViewer = performance.now();
   scene.onBeforeRenderObservable.add(() => {
+    const now = performance.now();
+    placeViewer(Math.min(0.1, (now - lastViewer) / 1000));
+    lastViewer = now;
     if (pointerId === null && forwarding === null) router.refreshHover();
     world.draw();
     if (tablets.size > 0) {
@@ -1094,7 +1189,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     { metersPerUnit: 1, ...(options.hands ?? {}) },
   );
   const runtime: BabylonRuntime = {
-    press, pressAt, hands, toCanvas: (at) => onHost(at),
+    press, pressAt, hands, viewer, toCanvas: (at) => onHost(at),
     engine, scene, world, floor, panel, things, drop, resize, visible: !options.ar, events: [],
     controlAt: point => router.pick(onHost(point)).path.find(id=>handles.has(id))??null,
     pointer: (phase, point, target) => {
@@ -1133,7 +1228,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     return { x: Math.round(q.x), y: Math.round(q.y) };
   };
   (window as unknown as { canvasIrBabylon?: unknown }).canvasIrBabylon = {
-    scene, camera, world, things, drop, hands, press, pressAt, handHolds,
+    scene, camera, world, things, drop, hands, press, pressAt, handHolds, viewer, viewerCamera,
     at: (id: string) => onHost(things.get(id)!.mesh.getAbsolutePosition()),
     onBoard: (x: number, y: number) => onHost(floor.toRoom({ x, y })),
     floor,

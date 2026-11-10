@@ -7,17 +7,20 @@ if (matchMedia("(pointer: coarse)").matches) {
 }
 const hud = document.querySelector(".hud") as HTMLElement;
 const fly = document.getElementById("fly") as HTMLButtonElement;
+const head = document.getElementById("head") as HTMLButtonElement;
 void startBabylon({
   canvas: document.getElementById("scene") as HTMLCanvasElement,
   frame: document.getElementById("page") as HTMLIFrameElement,
   toggle: document.getElementById("toggle") as HTMLButtonElement,
   fly: fly,
+  head,
   start: location.hash === "#3d" ? "3d" : "2d",
   tilt: location.hash === "#tilt",
   onEvent: (text) => (event.textContent = text),
   onMode: (mode) => {
     hud.style.display = mode === "3d" ? "" : "none";
     fly.hidden = mode !== "3d";
+    head.hidden = mode !== "3d" || !navigator.mediaDevices?.getUserMedia;
     history.replaceState(null, "", mode === "3d" ? "#3d" : location.pathname + location.search);
   },
 });

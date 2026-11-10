@@ -31,6 +31,10 @@ Tracking stays on the tracker's side: finding the table and the camera's pose fr
 
 For the AR page, moving onto this means: `hands.configure({ metersPerUnit: scale })` once the table is placed, then each frame `hands.update([{ id, joints: points.map(room), pinch }])`, and `hands.clear()` when the scene hides. Its own contact, pinch and hold code in `ar/scene.ts` then has nothing left to do.
 
+## Looking with your head
+
+`runtime.viewer.update(eye)` takes where the viewer's eye is, in meters from the middle of the screen (x right, y up, z toward the viewer), each frame it's known, and `null` when it's lost. The screen becomes a window onto the room: the navigation camera still decides what the window looks onto (across its view, through the point it turns around, at the size its field of view shows there), and a camera of its own stands at the eye with an off-axis projection through the window's edges (`throughWindow` in `src/viewer.ts`). An eye at the distance where the field of view is right for this screen sees what the navigation camera sees. A face lost for longer than a moment eases the view back. `runtime.viewer.screen` is the screen's size in meters, guessed from CSS pixels. The page's **Look with your head** button feeds it from the front camera through `src/face.ts`: MediaPipe's face landmarker, the eye's distance from how big the irises look (11.7 mm across, a 63° camera assumed), the camera taken to sit just above the middle of the screen, and a One Euro filter on each axis. It is for the 3D page on a computer or a phone held in front of you; in AR the rear camera is busy and the phone's own pose already moves the view.
+
 ## Tests
 
-`packages/playground/test/hands.test.ts` runs the gestures against a stand-in board (presses, hovers, the gap between pressing and letting go, holding and letting go, a lost hand) and the flat-hand calibration against a synthetic camera.
+`packages/playground/test/hands.test.ts` runs the gestures against a stand-in board (presses, hovers, the gap between pressing and letting go, holding and letting go, a lost hand) and the flat-hand calibration against a synthetic camera. `test/viewer.test.ts` checks that the window's corners stay at the screen's corners from any eye, that what's behind the window moves against the eye, the eye's distance from the iris, and the filter.

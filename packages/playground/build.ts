@@ -51,3 +51,16 @@ const handModelHash = new Bun.CryptoHasher("sha256").update(handModel).digest("h
 if (handModelHash !== "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1") throw new Error("Hand model SHA-256 mismatch");
 await Bun.write(handModelCache, handModel);
 await Bun.write(new URL("./dist/ar-vendor/hand_landmarker.task", import.meta.url), handModel);
+// The face model, for looking through the 3D page's screen with your head: fetched and checked the same way.
+const faceModelCache = new URL("./.ar-cache/face_landmarker.task", import.meta.url);
+const faceModelFile = Bun.file(process.env.AR_FACE_MODEL_PATH || faceModelCache);
+const faceModel = await faceModelFile.exists()
+  ? new Uint8Array(await faceModelFile.arrayBuffer())
+  : await (async () => {
+      const response = await fetch("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task");
+      if (!response.ok) throw new Error(`Face model download failed: ${response.status}`);
+      return new Uint8Array(await response.arrayBuffer());
+    })();
+if (new Bun.CryptoHasher("sha256").update(faceModel).digest("hex") !== "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff") throw new Error("Face model SHA-256 mismatch");
+await Bun.write(faceModelCache, faceModel);
+await Bun.write(new URL("./dist/ar-vendor/face_landmarker.task", import.meta.url), faceModel);
