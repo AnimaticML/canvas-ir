@@ -151,7 +151,7 @@ const drawMarkerStates=():void=>{
     const used=usedIds.includes(marker.id),known=map.markers.has(marker.id);
     const decision=map.decisions.get(marker.id) as {reason?:string;samples?:number}|undefined;
     const rejected=decision?.reason==="inconsistent-marker-size"||known&&!used;
-    const status=used?"в работе":known?"не использован":decision?.reason==="inconsistent-marker-size"?"геометрия не подходит":`добавляю ${Math.min(8,decision?.samples??0)}/8`;
+    const status=used?"в работе":known?(decision?.reason==="pose-outlier"?"не совпадает с картой":"поза не подтверждена"):decision?.reason==="inconsistent-marker-size"?"размер/геометрия не совпали":decision?.reason==="no-known-marker-overlap"?"покажите с привязанным кодом":decision?.reason==="layout-unstable"?"уточняю положение":`добавляю ${Math.min(8,decision?.samples??0)}/8`;
     const label=`ID ${marker.id}${marker.id===origin?" · начало":""} · ${status}`;
     ctx.strokeStyle=used?"#72f2b5":rejected?"#ffae9c":"#ffe298";
     ctx.beginPath();marker.pixels.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.stroke();
@@ -232,11 +232,11 @@ const captureDiagnostic=async(frameData:unknown):Promise<void>=>{
     const [rawBytes,compositeBytes]=await Promise.all([raw,overlays]);shots.add({id,data,raw:rawBytes,composite:compositeBytes});button("export-zip").textContent=`Скачать ZIP со снимками (${shots.shots.length})`;el("capture-status").textContent=`Кадр ${capture.frameId} сохранён локально. Изображения камеры: ${(shots.bytes/1048576).toFixed(1)} МБ. Скачайте ZIP.`;record("diagnostic-captured",{id,capture});
   }catch(error){el("capture-status").textContent=`Снимок не сохранён: ${String(error)}`;}finally{captureBusy=false;button("capture").disabled=!running;}
 };
-const syncFieldInputs=():void=>{if(!fieldSettings)return;for(const [key,id] of [["width","width"],["depth","depth"],["x","x"],["z","z"],["angle","angle"]] as const)input(`field-${id}`).value=String(+(fieldSettings[key]*(key==="angle"?1:100)).toFixed(2));input("tilt-enabled").checked=correction.enabled;input("tilt-pitch").value=String(correction.pitch);input("tilt-roll").value=String(correction.roll);};
+const syncFieldInputs=():void=>{if(!fieldSettings)return;input("tilt-enabled").checked=correction.enabled;input("tilt-pitch").value=String(correction.pitch);input("tilt-roll").value=String(correction.roll);};
 const applyField=(f:Field):void=>{if(!scene||!validField(f))return;fieldSettings={...f};scene.setField(f);syncFieldInputs();if(pose&&k)scene.pose(pose,k);persist();record("field-changed",{mapId,field:f});};
 button("edit-field").onclick=()=>{if(!scene||!tableReady){notice("Сначала привяжите плоскость стола.");return;}scene.editing=true;scene.loseHand(true);lastAction={action:"idle",reason:"field-editing",target:null};outcome("");fieldSettings=scene.field;syncFieldInputs();el("field-editor").hidden=false;button("touch").hidden=true;el<HTMLDialogElement>("settings").close();};
 button("finish-field").onclick=()=>{if(scene)scene.editing=false;el("field-editor").hidden=true;persist();};
-for(const id of ["width","depth","x","z","angle"])input(`field-${id}`).onchange=()=>{const f={width:+input("field-width").value/100,depth:+input("field-depth").value/100,x:+input("field-x").value/100,z:+input("field-z").value/100,angle:+input("field-angle").value};if(validField(f))applyField(f);else syncFieldInputs();};
+
 const updateTilt=():void=>{const pitch=+input("tilt-pitch").value,roll=+input("tilt-roll").value;if(![pitch,roll].every(v=>Number.isFinite(v)&&Math.abs(v)<=30))return;correction={enabled:input("tilt-enabled").checked,pitch,roll};hand.reset();lastHand=null;lastHandResult=null;handSource=null;handPoseSource=null;handAppliedPose=null;scene?.loseHand(true);if(planePose&&k){pose=compose(planePose,correctionPose(correction));scene?.pose(pose,k);}persist();record("plane-correction",correction);};
 for(const id of ["tilt-enabled","tilt-pitch","tilt-roll"])input(id).onchange=updateTilt;
 button("reset-tilt").onclick=()=>{correction=defaultCorrection();syncFieldInputs();updateTilt();};
@@ -271,7 +271,7 @@ void(async()=>{
   try{
     const [cv,s]=await Promise.all([loadCV(),ARScene.create(el<HTMLCanvasElement>("scene"))]);vision=new Vision(cv);scene=s;layout();
     // Read-only snapshots plus a replay entry point for recorded landmark frames.
-    (window as unknown as {canvasIrAR:unknown}).canvasIrAR={scene:s,map,hand,trace,shots,traceData,settings:()=>({sizes,mapId,field:fieldSettings,correction}),snapshot:()=>({running,pose,intrinsics:k,tableReady,visibleIds:found.map(m=>m.id),usedIds,hand:lastHand,interaction:lastAction,layout:s.layout,handRuntime:hands.snapshot()}),replayHand:(result:HandLandmarkerResult,time:number)=>{ctx.clearRect(0,0,overlay.width,overlay.height);applyHand(result,time);},analyzeHand:async(source:HTMLCanvasElement)=>{await loadHands();if(!hands.active)throw Error("Hand model unavailable");const now=performance.now(),result=hands.detect(source,now);if(!result)throw Error("Hand backend is switching to CPU");ctx.clearRect(0,0,overlay.width,overlay.height);applyHand(result,now);return result;}};
+    (window as unknown as {canvasIrAR:unknown}).canvasIrAR={scene:s,map,hand,trace,shots,traceData,editField:applyField,settings:()=>({sizes,mapId,field:fieldSettings,correction}),snapshot:()=>({running,pose,intrinsics:k,tableReady,visibleIds:found.map(m=>m.id),usedIds,hand:lastHand,interaction:lastAction,layout:s.layout,handRuntime:hands.snapshot()}),replayHand:(result:HandLandmarkerResult,time:number)=>{ctx.clearRect(0,0,overlay.width,overlay.height);applyHand(result,time);},analyzeHand:async(source:HTMLCanvasElement)=>{await loadHands();if(!hands.active)throw Error("Hand model unavailable");const now=performance.now(),result=hands.detect(source,now);if(!result)throw Error("Hand backend is switching to CPU");ctx.clearRect(0,0,overlay.width,overlay.height);applyHand(result,now);return result;}};
     button("start").disabled=button("markers").disabled=false;notice("");
   }catch(error){record("initialization-error",String(error));notice(`Демо не загрузилось: ${String(error)}`);}
 })();

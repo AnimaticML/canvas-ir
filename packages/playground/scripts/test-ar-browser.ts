@@ -228,7 +228,8 @@ try {
   // Field edits go through the real UI; the scene, picking and Havok slab must agree.
   await page.evaluate(()=>{const s=window.canvasIrAR.scene,t=[...s.original.things.values()][0]!;s.loseHand(true);t.body.body.disablePreStep=false;t.mesh.position.x=100;t.mesh.position.z=100;t.body.body.setLinearVelocity(t.mesh.position.scale(.01));});
   await page.locator('#menu').click();await page.locator('#edit-field').click();
-  for(const [key,value] of [['width','85'],['depth','52'],['x','18'],['z','-12'],['angle','33']]){await page.locator(`#field-${key}`).fill(value!);await page.locator(`#field-${key}`).press('Tab');}
+  assert(await page.locator('#field-width').count()===0,'field editor has no numeric forms');
+  await page.evaluate(()=>(window.canvasIrAR as any).editField({width:.85,depth:.52,x:.18,z:-.12,angle:33}));
   const fieldCheck=await page.evaluate(()=>{
     const s=window.canvasIrAR.scene,f=s.field,table=s.original.floor.table;
     const point:V3=[.27,.03,-.17],round=s.table(s.room(point));
