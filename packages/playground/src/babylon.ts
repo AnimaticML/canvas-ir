@@ -1113,7 +1113,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   };
   // The front camera, for "Look with your head", with its settings: the webcam's field of view and how strong the effect is.
   const headButton = options.head;
-  type Kept = { fov?: number; diagonal?: number };
+  type Kept = { fov?: number; diagonal?: number; lid?: number };
   const kept = ((): Kept => {
     try {
       return JSON.parse(localStorage.getItem("canvasIrHead") ?? "{}") as Kept;
@@ -1123,7 +1123,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   })();
   const keepHead = (): void => {
     try {
-      localStorage.setItem("canvasIrHead", JSON.stringify({ fov: head?.options.fov, diagonal: diagonal ?? undefined }));
+      localStorage.setItem("canvasIrHead", JSON.stringify({ fov: head?.options.fov, diagonal: diagonal ?? undefined, lid: kept.lid }));
     } catch {}
   };
   diagonal = kept.diagonal ?? null;
@@ -1190,7 +1190,40 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       describe();
       measure.disabled = false;
     });
-    settings.append(size, measure, status);
+    // The window view: the table behind the screen at a tenth of its size, level with the real desk through the tilted lid,
+    // its near edge at the screen's bottom edge, so it reads as a small tabletop under glass.
+    const lid = document.createElement("label");
+    const lidName = document.createElement("span");
+    lidName.textContent = "Lid";
+    const lidInput = document.createElement("input");
+    Object.assign(lidInput, { type: "number", min: "90", max: "180", step: "1", value: String(kept.lid ?? 110), title: "The angle between the keyboard and the screen" });
+    const degrees = document.createElement("span");
+    degrees.textContent = "° open";
+    lid.append(lidName, lidInput, degrees);
+    lidInput.addEventListener("change", () => {
+      kept.lid = Math.max(90, Math.min(180, Number(lidInput.value) || 110));
+      keepHead();
+    });
+    const windowView = document.createElement("button");
+    windowView.type = "button";
+    windowView.textContent = "Window view";
+    windowView.addEventListener("click", () => {
+      if (mode !== "3d" || moving) return;
+      kept.lid = Math.max(90, Math.min(180, Number(lidInput.value) || 110));
+      keepHead();
+      // Looking through a screen leaned back this far looks down as far.
+      const down = ((kept.lid - 90) * Math.PI) / 180;
+      const SCALE = 10;
+      const half = (SCALE * screenSize().height) / 2;
+      const radius = Math.max(camera.lowerRadiusLimit ?? 0, half / Math.tan(camera.fov / 2));
+      // The pin above the table by the window's half height, so the window's bottom edge meets the table.
+      const on = camera.target.clone();
+      on.y = half * Math.cos(down);
+      flight = null;
+      void glide({ alpha: camera.alpha, beta: Math.PI / 2 - down, radius, target: on }, 900);
+      log(`window view: the table at a tenth of its size behind the screen, level with your desk through a lid open ${kept.lid}°`);
+    });
+    settings.append(size, measure, lid, windowView, status);
     describe();
     headButton.parentElement?.before(settings);
   }

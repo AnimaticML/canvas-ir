@@ -41,28 +41,55 @@ describe("looking through the screen", () => {
 
 describe("the eye from the face", () => {
   const options = { fov: 60, camera: { x: 0, y: 0.17 } };
-  const face = (cx: number, cy: number, iris: number) => {
-    const marks = Array.from({ length: 478 }, () => ({ x: 0.5, y: 0.5 }));
-    const put = (i: number, x: number, y: number) => (marks[i] = { x: x / 640, y: y / 480 });
-    for (const [c, a, b, dx] of [[468, 469, 471, -30], [473, 474, 476, 30]] as const) {
-      put(c, cx + dx, cy);
-      put(a, cx + dx + iris / 2, cy);
-      put(b, cx + dx - iris / 2, cy);
+  const f = 320 / Math.tan(Math.PI / 6);
+  /** A face with its eyes `span` pixels apart (outer corners) around (cx, cy), irises `iris` wide, looking `gaze` pixels aside, eyes open or not. */
+  const face = (cx: number, cy: number, span: number, iris: number, o: { gaze?: number; open?: [boolean, boolean] } = {}) => {
+    const marks = Array.from({ length: 478 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
+    const put = (i: number, x: number, y: number) => (marks[i] = { x: x / 640, y: y / 480, z: 0 });
+    const eye = span * 0.3;
+    // The viewer's right eye is on the image's left.
+    for (const [side, outer, inner, upper, lower, c, a, b, open] of [
+      [-1, 33, 133, 159, 145, 468, 469, 471, o.open?.[0] ?? true],
+      [1, 263, 362, 386, 374, 473, 474, 476, o.open?.[1] ?? true],
+    ] as const) {
+      const ox = cx + (side * span) / 2;
+      const ix = ox - side * eye;
+      const mid = (ox + ix) / 2;
+      put(outer, ox, cy);
+      put(inner, ix, cy);
+      put(upper, mid, cy - (open ? eye * 0.15 : eye * 0.02));
+      put(lower, mid, cy + (open ? eye * 0.15 : eye * 0.02));
+      const g = mid + (o.gaze ?? 0);
+      put(c, g, cy);
+      put(a, g + iris / 2, cy);
+      put(b, g - iris / 2, cy);
     }
     return marks;
   };
 
-  test("an iris's size in the image says how far the eye is", () => {
-    const f = 320 / Math.tan(Math.PI / 6);
-    const near = eyeFrom(face(320, 240, 20), 640, 480, options)!;
-    expect(near.eye.z).toBeCloseTo((f * 0.0117) / 20, 6);
-    expect(eyeFrom(face(320, 240, 10), 640, 480, options)!.eye.z).toBeCloseTo(near.eye.z * 2, 6);
+  test("how far apart the eyes look says how far away they are", () => {
+    const near = eyeFrom(face(320, 240, 120, 16), 640, 480, options, 0.09)!;
+    expect(near.eye.z).toBeCloseTo((f * 0.09) / 120, 6);
+    expect(eyeFrom(face(320, 240, 60, 8), 640, 480, options, 0.09)!.eye.z).toBeCloseTo(near.eye.z * 2, 6);
   });
 
   test("a face on the image's left is the viewer's right, and the camera sits above the screen's middle", () => {
-    const e = eyeFrom(face(200, 240, 20), 640, 480, options)!.eye;
+    const e = eyeFrom(face(200, 240, 120, 16), 640, 480, options)!.eye;
     expect(e.x).toBeGreaterThan(0);
     expect(e.y).toBeCloseTo(0.17, 6);
+  });
+
+  test("looking around or blinking doesn't move the eye", () => {
+    const still = eyeFrom(face(300, 240, 120, 16), 640, 480, options)!.eye;
+    expect(eyeFrom(face(300, 240, 120, 16, { gaze: 6 }), 640, 480, options)!.eye).toEqual(still);
+    const blink = eyeFrom(face(300, 240, 120, 16, { open: [false, false] }), 640, 480, options)!;
+    expect(blink.eye).toEqual(still);
+    expect(blink.iris).toBeNull();
+  });
+
+  test("closing one eye doesn't move the view", () => {
+    const both = eyeFrom(face(320, 240, 120, 16), 640, 480, options)!.eye;
+    expect(eyeFrom(face(320, 240, 120, 16, { open: [true, false] }), 640, 480, options)!.eye).toEqual(both);
   });
 });
 
