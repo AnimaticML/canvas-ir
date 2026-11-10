@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Matrix, Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { eyeFrom } from "../src/face";
-import { OneEuro, throughWindow } from "../src/viewer";
+import { eyeFrom, fovFromIris } from "../src/face";
+import { OneEuro, screenGeometry, throughWindow } from "../src/viewer";
 
 const window = { center: new Vector3(0, 0, 10), right: new Vector3(1, 0, 0), up: new Vector3(0, 1, 0), forward: new Vector3(0, 0, 1), halfWidth: 4, halfHeight: 3 };
 const screen = { width: 0.4, height: 0.3 };
@@ -73,4 +73,20 @@ test("the One Euro filter smooths a still signal and follows a moving one", () =
   expect(Math.abs(out)).toBeLessThan(0.005);
   for (let i = 60; i < 120; i++) out = f.filter((i - 60) * 0.02, i * 16);
   expect(out).toBeGreaterThan(1.0);
+});
+
+describe("calibrating", () => {
+  test("a 14-inch 16:10 screen's canvas is its real size, with the webcam above its top edge", () => {
+    // 1512 by 945 CSS pixels over 14 inches: about 4247 pixels a meter; the canvas below a 90-pixel toolbar.
+    const g = screenGeometry({ diagonalInches: 14, screen: { width: 1512, height: 945 }, canvas: { left: 0, top: 90, width: 1512, height: 855 }, bezel: 0.008 });
+    expect(g.width).toBeCloseTo(0.3016, 3);
+    expect(g.camera.x).toBeCloseTo(0, 6);
+    // From the canvas's middle up to the screen's top, then the bezel.
+    expect(g.camera.y).toBeCloseTo((90 + 855 / 2) / (Math.hypot(1512, 945) / (14 * 0.0254)) + 0.008, 6);
+  });
+
+  test("the webcam's angle comes back from how big an iris looks at a known distance", () => {
+    const f = 320 / Math.tan((63 * Math.PI) / 360);
+    expect(fovFromIris((f * 0.0117) / 0.307, 0.307, 640)).toBeCloseTo(63, 6);
+  });
 });

@@ -28,6 +28,8 @@ export class FaceTracker {
   private readonly filters = [new OneEuro(1.2, 0.8), new OneEuro(1.2, 0.8), new OneEuro(0.8, 0.5)];
   /** The last eye seen, before smoothing, and how big the iris looked in pixels: for a status line. */
   last: { eye: Eye; iris: number } | null = null;
+  /** Irises measured while calibrating the webcam's field of view. */
+  private measuring: number[] | null = null;
 
   constructor(
     private readonly onEye: (eye: Eye | null) => void,
@@ -63,6 +65,23 @@ export class FaceTracker {
     loop();
   }
 
+  /**
+   * Measures the webcam's field of view with the eyes held at a known distance from the screen (in meters): how big the
+   * irises look there says how far a pixel reaches, for this webcam and these eyes. Resolves with the angle, in degrees,
+   * and keeps it; rejects when the face wasn't seen steadily enough.
+   */
+  async calibrate(distance: number, ms = 1500): Promise<number> {
+    this.measuring = [];
+    await new Promise((done) => setTimeout(done, ms));
+    const irises = this.measuring.sort((a, b) => a - b);
+    this.measuring = null;
+    if (irises.length < 8) throw new Error("the face wasn't seen long enough");
+    const iris = irises[Math.floor(irises.length / 2)]!;
+    const fov = fovFromIris(iris, distance, this.video.videoWidth);
+    this.options = { ...this.options, fov };
+    return fov;
+  }
+
   stop(): void {
     this.running = false;
     for (const t of this.stream?.getTracks() ?? []) t.stop();
@@ -85,6 +104,7 @@ export class FaceTracker {
       return;
     }
     this.last = eye;
+    this.measuring?.push(eye.iris);
     const [x, y, z] = this.filters as [OneEuro, OneEuro, OneEuro];
     this.onEye({ x: x.filter(eye.eye.x, now), y: y.filter(eye.eye.y, now), z: z.filter(eye.eye.z, now) });
   }
@@ -115,4 +135,10 @@ export const eyeFrom = (face: readonly { x: number; y: number }[], width: number
   const v = (l.y + r.y) / 2 - height / 2;
   // The front camera faces the viewer: the image's right is the viewer's left, and its down is down.
   return { eye: { x: o.camera.x - (u * z) / f, y: o.camera.y - (v * z) / f, z }, iris };
+};
+
+/** The webcam's horizontal field of view, in degrees, from how big an iris looks (pixels) at a known distance (meters) in an image so wide. */
+export const fovFromIris = (iris: number, distance: number, width: number): number => {
+  const f = (iris * distance) / IRIS;
+  return (2 * Math.atan(width / 2 / f) * 180) / Math.PI;
 };

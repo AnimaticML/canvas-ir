@@ -92,3 +92,27 @@ export const screenMeters = (cssWidth: number, cssHeight: number, coarse: boolea
   const meters = coarse ? 0.00016 : 0.00026;
   return { width: cssWidth * meters, height: cssHeight * meters };
 };
+
+/**
+ * The canvas's real size, and where the webcam is from its middle, in meters (x right, y up), from the screen's diagonal
+ * and where the canvas is on the screen: the browser knows the screen's size and the window's place on it in CSS pixels,
+ * and the diagonal says how many of those make a meter. The webcam is taken to sit `bezel` meters above the middle of the
+ * screen's top edge, as a laptop's does.
+ */
+export const screenGeometry = (o: {
+  diagonalInches: number;
+  /** The whole screen, in CSS pixels. */
+  screen: { width: number; height: number };
+  /** The canvas on the screen, in CSS pixels from the screen's top left. */
+  canvas: { left: number; top: number; width: number; height: number };
+  bezel?: number;
+}): { width: number; height: number; camera: { x: number; y: number } } => {
+  const perMeter = Math.hypot(o.screen.width, o.screen.height) / (o.diagonalInches * 0.0254);
+  const cx = o.canvas.left + o.canvas.width / 2;
+  const cy = o.canvas.top + o.canvas.height / 2;
+  return {
+    width: o.canvas.width / perMeter,
+    height: o.canvas.height / perMeter,
+    camera: { x: (o.screen.width / 2 - cx) / perMeter, y: cy / perMeter + (o.bezel ?? 0.008) },
+  };
+};

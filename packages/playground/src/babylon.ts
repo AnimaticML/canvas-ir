@@ -35,7 +35,7 @@ import { Floor, type FloorPage, type FloorThing, type FloorWindow, TABLE, UNITS 
 import { type HandOptions, type HandSurface, Hands, meshHandSurface } from "./hands";
 import { Tablet } from "./tablet";
 import { FaceTracker } from "./face";
-import { type Eye, screenMeters, throughWindow } from "./viewer";
+import { type Eye, screenGeometry, screenMeters, throughWindow } from "./viewer";
 import { thumbsticks } from "./thumbsticks";
 
 const FONT = "system-ui, -apple-system, Segoe UI, sans-serif";
@@ -1028,7 +1028,19 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   let anchor: { raw: Eye; shown: Eye } | null = null;
   let eyeScale = 1;
   let releasing = false;
-  const screenSize = (): { width: number; height: number } => screenMeters(canvas.clientWidth || 1, canvas.clientHeight || 1, matchMedia("(pointer: coarse)").matches);
+  /** The screen's diagonal in inches, once the viewer has said it: then the window is the real screen and the eye is where it really is. */
+  let diagonal: number | null = null;
+  /** The canvas's real size and where the webcam is from its middle, from the diagonal and where the browser window is on the screen. */
+  const geometry = (): { width: number; height: number; camera: { x: number; y: number } } | null => {
+    if (!diagonal) return null;
+    const r = canvas.getBoundingClientRect();
+    const top = window.screenY + Math.max(0, window.outerHeight - window.innerHeight);
+    const left = window.screenX + Math.max(0, (window.outerWidth - window.innerWidth) / 2);
+    return screenGeometry({ diagonalInches: diagonal, screen: { width: screen.width, height: screen.height }, canvas: { left: left + r.left, top: top + r.top, width: r.width || 1, height: r.height || 1 } });
+  };
+  const screenSize = (): { width: number; height: number } => geometry() ?? screenMeters(canvas.clientWidth || 1, canvas.clientHeight || 1, matchMedia("(pointer: coarse)").matches);
+  /** Until when the view eases in slowly, after it starts: a true window shows less than the navigation's wide view. */
+  let easeUntil = 0;
   /** Where the eye has to be for the navigation camera's own view: on the axis, as far as its field of view says for this screen. */
   const nominalEye = (): Eye => ({ x: 0, y: 0, z: screenSize().height / 2 / Math.tan(camera.fov / 2) });
   const viewer = {
@@ -1046,6 +1058,13 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       if (!eyeShown) {
         eyeShown = nominalEye();
         eyeScale = eyeShown.z / Math.max(0.05, eye.z);
+        easeUntil = performance.now() + 1200;
+      }
+      // Calibrated, the window is the real screen: the eye where it really is, as through a real window.
+      if (diagonal) {
+        anchor = null;
+        eyeGoal = { ...eye, z: Math.max(0.05, eye.z) };
+        return;
       }
       anchor ??= { raw: eye, shown: eyeGoal ?? eyeShown };
       const k = eyeScale * viewer.strength;
@@ -1062,12 +1081,14 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     },
   };
   const placeViewer = (dt: number): void => {
+    // The browser window may have moved on the screen, and the webcam with it, as seen from the canvas.
+    if (head?.active && diagonal) head.options = { ...head.options, camera: cameraAt() };
     if (!eyeShown || options.ar || mode !== "3d") {
       if (scene.activeCamera === viewerCamera) scene.activeCamera = camera;
       return;
     }
     const goal = eyeGoal ?? eyeShown;
-    const k = 1 - Math.exp(-dt * 14);
+    const k = 1 - Math.exp(-dt * (performance.now() < easeUntil ? 3 : 14));
     eyeShown = { x: eyeShown.x + (goal.x - eyeShown.x) * k, y: eyeShown.y + (goal.y - eyeShown.y) * k, z: eyeShown.z + (goal.z - eyeShown.z) * k };
     const target = camera.target;
     const forward = target.subtract(camera.position).normalize();
@@ -1092,54 +1113,86 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   };
   // The front camera, for "Look with your head", with its settings: the webcam's field of view and how strong the effect is.
   const headButton = options.head;
-  const kept = (() => {
+  type Kept = { fov?: number; diagonal?: number };
+  const kept = ((): Kept => {
     try {
-      return JSON.parse(localStorage.getItem("canvasIrHead") ?? "{}") as { fov?: number; strength?: number };
+      return JSON.parse(localStorage.getItem("canvasIrHead") ?? "{}") as Kept;
     } catch {
       return {};
     }
   })();
-  viewer.strength = kept.strength ?? 1;
+  const keepHead = (): void => {
+    try {
+      localStorage.setItem("canvasIrHead", JSON.stringify({ fov: head?.options.fov, diagonal: diagonal ?? undefined }));
+    } catch {}
+  };
+  diagonal = kept.diagonal ?? null;
+  const cameraAt = (): { x: number; y: number } => geometry()?.camera ?? { x: 0, y: screenSize().height / 2 + 0.008 };
   const head = headButton
     ? new FaceTracker((eye) => {
         viewer.update(eye);
         const now = performance.now();
         if (eye && now - headLogged > 700) {
           headLogged = now;
-          log(`eye ${Math.round(eye.z * 100)} cm from the screen, ${Math.round(Math.abs(eye.x) * 100)} cm ${eye.x < 0 ? "left" : "right"}, ${Math.round(Math.abs(eye.y) * 100)} cm ${eye.y < 0 ? "down" : "up"}`);
+          log(`eye ${Math.round(eye.z * 100)} cm from the screen, ${Math.round(Math.abs(eye.x) * 100)} cm ${eye.x < 0 ? "left" : "right"}, ${Math.round(Math.abs(eye.y) * 100)} cm ${eye.y < 0 ? "below" : "above"} the middle`);
         } else if (!eye && now - headLogged > 700) {
           headLogged = now;
           log("no face in view: the view stays where it is");
         }
-      }, { fov: kept.fov ?? 63, camera: { x: 0, y: screenSize().height / 2 + 0.008 } })
+      }, { fov: kept.fov ?? 63, camera: cameraAt() })
     : null;
   let headLogged = 0;
+  // Calibrating: the screen's diagonal, and the webcam measured with the eyes at a known distance (an A4 sheet's length).
   const settings = document.createElement("div");
   settings.className = "head-settings";
   settings.hidden = true;
-  const slider = (label: string, min: number, max: number, step: number, value: number, show: (v: number) => string, set: (v: number) => void): void => {
-    const row = document.createElement("label");
-    const name = document.createElement("span");
-    const input = document.createElement("input");
-    const out = document.createElement("output");
-    name.textContent = label;
-    Object.assign(input, { type: "range", min: String(min), max: String(max), step: String(step), value: String(value) });
-    out.textContent = show(value);
-    input.addEventListener("input", () => {
-      const v = Number(input.value);
-      out.textContent = show(v);
-      set(v);
-      try {
-        localStorage.setItem("canvasIrHead", JSON.stringify({ fov: head?.options.fov, strength: viewer.strength }));
-      } catch {}
-    });
-    row.append(name, input, out);
-    settings.append(row);
+  const status = document.createElement("span");
+  const describe = (): void => {
+    status.textContent = !diagonal
+      ? "Enter your screen's size to see through it as a window."
+      : `Webcam ${Math.round(head?.options.fov ?? 63)}°${kept.fov ? "" : " (a guess: measure it)"}`;
   };
-  if (head) {
-    slider("Webcam angle", 40, 100, 1, head.options.fov, (v) => `${v}°`, (v) => (head.options = { ...head.options, fov: v }));
-    slider("Strength", 0.25, 2, 0.05, viewer.strength, (v) => `${v.toFixed(2)}×`, (v) => (viewer.strength = v));
-    headButton?.parentElement?.before(settings);
+  if (head && headButton) {
+    const size = document.createElement("label");
+    const sizeName = document.createElement("span");
+    sizeName.textContent = "Screen";
+    const sizeInput = document.createElement("input");
+    Object.assign(sizeInput, { type: "number", min: "5", max: "100", step: "0.1", placeholder: "14", value: diagonal ? String(diagonal) : "" });
+    const inches = document.createElement("span");
+    inches.textContent = "inches";
+    sizeInput.addEventListener("change", () => {
+      const v = Number(sizeInput.value);
+      diagonal = v >= 5 && v <= 100 ? v : null;
+      head.options = { ...head.options, camera: cameraAt() };
+      keepHead();
+      describe();
+    });
+    size.append(sizeName, sizeInput, inches);
+    const measure = document.createElement("button");
+    measure.type = "button";
+    measure.textContent = "Measure the webcam";
+    measure.addEventListener("click", async () => {
+      measure.disabled = true;
+      for (let n = 3; n > 0; n--) {
+        log(`hold an A4 sheet's long side (29.7 cm) from the screen to the bridge of your nose, look at the webcam: ${n}`);
+        await new Promise((done) => setTimeout(done, 1000));
+      }
+      log("measuring, hold still…");
+      try {
+        // The eyes are about a centimeter behind the bridge of the nose.
+        const fov = await head.calibrate(0.297 + 0.01);
+        kept.fov = fov;
+        keepHead();
+        log(`the webcam sees ${fov.toFixed(1)}° across; you can put the sheet down`);
+      } catch (error) {
+        log(`couldn't measure: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      describe();
+      measure.disabled = false;
+    });
+    settings.append(size, measure, status);
+    describe();
+    headButton.parentElement?.before(settings);
   }
   const headOn = async (on: boolean): Promise<void> => {
     if (!head || !headButton) return;
@@ -1153,7 +1206,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     }
     headButton.textContent = "Starting the camera…";
     try {
-      head.options = { ...head.options, camera: { x: 0, y: screenSize().height / 2 + 0.008 } };
+      head.options = { ...head.options, camera: cameraAt() };
       await head.start();
       headButton.setAttribute("aria-pressed", "true");
       headButton.textContent = "Stop looking with your head";
