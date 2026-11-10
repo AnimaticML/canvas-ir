@@ -29,6 +29,16 @@
       .head-settings input { width: 120px; }
       .head-settings output { min-width: 3.2em; font-variant-numeric: tabular-nums; }
       .flying .head-settings { bottom: 212px; }
+      .laptop-setup { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: rgba(15, 23, 42, 0.35); padding: 16px; }
+      .laptop-card { width: min(640px, 100%); max-height: 100%; overflow: auto; background: #fff; color: #0f172a; border-radius: 16px; padding: 16px 20px; box-shadow: 0 12px 40px rgba(15, 23, 42, 0.3); font: 14px/1.4 system-ui, sans-serif; display: flex; flex-direction: column; gap: 10px; }
+      .laptop-card h2 { margin: 0; font-size: 18px; }
+      .laptop-card p { margin: 0; color: #475569; }
+      .laptop-card canvas { width: 100%; height: min(360px, 50vh); border-radius: 10px; touch-action: none; outline: none; }
+      .laptop-row { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; align-items: center; }
+      .laptop-row label { display: flex; align-items: center; gap: 8px; }
+      .laptop-row output { min-width: 3em; font-variant-numeric: tabular-nums; }
+      .laptop-row button { border: 0; border-radius: 999px; padding: 10px 18px; font: 600 14px/1 system-ui, sans-serif; cursor: pointer; background: #e2e8f0; color: #0f172a; }
+      .laptop-row button[data-done] { background: #2563eb; color: #fff; margin-left: auto; }
     </style>
   </head>
   <body>

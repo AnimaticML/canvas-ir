@@ -35,6 +35,7 @@ import { Floor, type FloorPage, type FloorThing, type FloorWindow, TABLE, UNITS 
 import { type HandOptions, type HandSurface, Hands, meshHandSurface } from "./hands";
 import { Tablet } from "./tablet";
 import { FaceTracker } from "./face";
+import { LAPTOP_DEFAULTS, setUpLaptop } from "./laptop-setup";
 import { type Eye, screenGeometry, screenMeters, throughWindow } from "./viewer";
 import { thumbsticks } from "./thumbsticks";
 
@@ -1028,6 +1029,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   let anchor: { raw: Eye; shown: Eye } | null = null;
   let eyeScale = 1;
   let releasing = false;
+  /** Where the webcam is from the middle of the screen's top edge, as the laptop's setup says. */
+  let webcamAt = (): { x: number; y: number } => LAPTOP_DEFAULTS.camera;
   /** The screen's diagonal in inches, once the viewer has said it: then the window is the real screen and the eye is where it really is. */
   let diagonal: number | null = null;
   /** The canvas's real size and where the webcam is from its middle, from the diagonal and where the browser window is on the screen. */
@@ -1036,7 +1039,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     const r = canvas.getBoundingClientRect();
     const top = window.screenY + Math.max(0, window.outerHeight - window.innerHeight);
     const left = window.screenX + Math.max(0, (window.outerWidth - window.innerWidth) / 2);
-    return screenGeometry({ diagonalInches: diagonal, screen: { width: screen.width, height: screen.height }, canvas: { left: left + r.left, top: top + r.top, width: r.width || 1, height: r.height || 1 } });
+    return screenGeometry({ diagonalInches: diagonal, screen: { width: screen.width, height: screen.height }, canvas: { left: left + r.left, top: top + r.top, width: r.width || 1, height: r.height || 1 }, webcam: webcamAt() });
   };
   const screenSize = (): { width: number; height: number } => geometry() ?? screenMeters(canvas.clientWidth || 1, canvas.clientHeight || 1, matchMedia("(pointer: coarse)").matches);
   /** Until when the view eases in slowly, after it starts: a true window shows less than the navigation's wide view. */
@@ -1113,7 +1116,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   };
   // The front camera, for "Look with your head", with its settings: the webcam's field of view and how strong the effect is.
   const headButton = options.head;
-  type Kept = { fov?: number; diagonal?: number; lid?: number };
+  type Kept = { fov?: number; diagonal?: number; lid?: number; webcam?: { x: number; y: number } };
   const kept = ((): Kept => {
     try {
       return JSON.parse(localStorage.getItem("canvasIrHead") ?? "{}") as Kept;
@@ -1123,10 +1126,11 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   })();
   const keepHead = (): void => {
     try {
-      localStorage.setItem("canvasIrHead", JSON.stringify({ fov: head?.options.fov, diagonal: diagonal ?? undefined, lid: kept.lid }));
+      localStorage.setItem("canvasIrHead", JSON.stringify({ fov: head?.options.fov, diagonal: diagonal ?? undefined, lid: kept.lid, webcam: kept.webcam }));
     } catch {}
   };
   diagonal = kept.diagonal ?? null;
+  webcamAt = () => kept.webcam ?? LAPTOP_DEFAULTS.camera;
   const cameraAt = (): { x: number; y: number } => geometry()?.camera ?? { x: 0, y: screenSize().height / 2 + 0.008 };
   const head = headButton
     ? new FaceTracker((eye) => {
@@ -1149,25 +1153,24 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   const status = document.createElement("span");
   const describe = (): void => {
     status.textContent = !diagonal
-      ? "Enter your screen's size to see through it as a window."
-      : `Webcam ${Math.round(head?.options.fov ?? 63)}°${kept.fov ? "" : " (a guess: measure it)"}`;
+      ? "Set up your laptop to see through its screen as a window."
+      : `${diagonal}″, lid ${kept.lid ?? LAPTOP_DEFAULTS.lid}°, webcam ${Math.round(head?.options.fov ?? 63)}°${kept.fov ? "" : " (a guess: measure it)"}`;
   };
   if (head && headButton) {
-    const size = document.createElement("label");
-    const sizeName = document.createElement("span");
-    sizeName.textContent = "Screen";
-    const sizeInput = document.createElement("input");
-    Object.assign(sizeInput, { type: "number", min: "5", max: "100", step: "0.1", placeholder: "14", value: diagonal ? String(diagonal) : "" });
-    const inches = document.createElement("span");
-    inches.textContent = "inches";
-    sizeInput.addEventListener("change", () => {
-      const v = Number(sizeInput.value);
-      diagonal = v >= 5 && v <= 100 ? v : null;
+    // The laptop's size, hinge and webcam, set on a model of it.
+    const setup = document.createElement("button");
+    setup.type = "button";
+    setup.textContent = "Your laptop…";
+    setup.addEventListener("click", async () => {
+      const set = await setUpLaptop({ diagonal: diagonal ?? LAPTOP_DEFAULTS.diagonal, lid: kept.lid ?? LAPTOP_DEFAULTS.lid, camera: webcamAt() }, screen.width / screen.height);
+      if (!set) return;
+      diagonal = set.diagonal;
+      kept.lid = set.lid;
+      kept.webcam = set.camera;
       head.options = { ...head.options, camera: cameraAt() };
       keepHead();
       describe();
     });
-    size.append(sizeName, sizeInput, inches);
     const measure = document.createElement("button");
     measure.type = "button";
     measure.textContent = "Measure the webcam";
@@ -1192,25 +1195,12 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     });
     // The window view: the table behind the screen at a tenth of its size, level with the real desk through the tilted lid,
     // its near edge at the screen's bottom edge, so it reads as a small tabletop under glass.
-    const lid = document.createElement("label");
-    const lidName = document.createElement("span");
-    lidName.textContent = "Lid";
-    const lidInput = document.createElement("input");
-    Object.assign(lidInput, { type: "number", min: "90", max: "180", step: "1", value: String(kept.lid ?? 110), title: "The angle between the keyboard and the screen" });
-    const degrees = document.createElement("span");
-    degrees.textContent = "° open";
-    lid.append(lidName, lidInput, degrees);
-    lidInput.addEventListener("change", () => {
-      kept.lid = Math.max(90, Math.min(180, Number(lidInput.value) || 110));
-      keepHead();
-    });
     const windowView = document.createElement("button");
     windowView.type = "button";
     windowView.textContent = "Window view";
     windowView.addEventListener("click", () => {
       if (mode !== "3d" || moving) return;
-      kept.lid = Math.max(90, Math.min(180, Number(lidInput.value) || 110));
-      keepHead();
+      kept.lid ??= LAPTOP_DEFAULTS.lid;
       // Looking through a screen leaned back this far looks down as far.
       const down = ((kept.lid - 90) * Math.PI) / 180;
       const SCALE = 10;
@@ -1223,7 +1213,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       void glide({ alpha: camera.alpha, beta: Math.PI / 2 - down, radius, target: on }, 900);
       log(`window view: the table at a tenth of its size behind the screen, level with your desk through a lid open ${kept.lid}°`);
     });
-    settings.append(size, measure, lid, windowView, status);
+    settings.append(setup, measure, windowView, status);
     describe();
     headButton.parentElement?.before(settings);
   }
