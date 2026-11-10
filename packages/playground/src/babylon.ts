@@ -1174,13 +1174,13 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     measure.addEventListener("click", async () => {
       measure.disabled = true;
       for (let n = 3; n > 0; n--) {
-        log(`hold an A4 sheet's long side (29.7 cm) from the screen to the bridge of your nose, look at the webcam: ${n}`);
+        log(`hold an A4 sheet on its edge beside your face, one short end touching the screen, the other your cheekbone next to your eye; look at the webcam: ${n}`);
         await new Promise((done) => setTimeout(done, 1000));
       }
       log("measuring, hold still…");
       try {
-        // The eyes are about a centimeter behind the bridge of the nose.
-        const fov = await head.calibrate(0.297 + 0.01);
+        // The sheet's 29.7 cm reach from the screen to the cheekbone, about level with the eyes.
+        const fov = await head.calibrate(0.297);
         kept.fov = fov;
         keepHead();
         log(`the webcam sees ${fov.toFixed(1)}° across; you can put the sheet down`);
