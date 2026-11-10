@@ -27,7 +27,7 @@ const cameraFrame = (ids: number[], camera = pose): Uint8Array => {
   const image = new cv.Mat(height,width,cv.CV_8UC1,new cv.Scalar(235));
   for (const id of ids) {
     const marker = new cv.Mat(), warped = new cv.Mat(); cv.generateImageMarker(dictionary,id,120,marker,1);
-    const corners = markerCorners(.06,centers[id]!).map(p=>project(camera,k,p));
+    const corners = markerCorners(id===2?.045:.06,centers[id]!).map(p=>project(camera,k,p));
     const source = cv.matFromArray(4,1,cv.CV_32FC2,[0,0,119,0,119,119,0,119]);
     const dest = cv.matFromArray(4,1,cv.CV_32FC2,corners.flatMap(p=>[p.x,p.y]));
     const transform = cv.getPerspectiveTransform(source,dest);
@@ -43,7 +43,7 @@ dictionary.delete();
 const videoPath = join(temporary,"markers.y4m");
 const file = Bun.file(videoPath).writer();
 file.write(`YUV4MPEG2 W${width} H${height} F${fps}:1 Ip A1:1 C420jpeg\n`);
-for(const [seconds,frame] of [[7,all],[1.5,blank],[4,one],[1.5,blank]] as const) {
+for(const [seconds,frame] of (process.env.AR_EXTENDED_ONLY?[[14,all] as const]:[[7,all],[1.5,blank],[4,one],[1.5,blank]] as const)) {
   for(let i=0;i<seconds*fps;i++){file.write("FRAME\n");file.write(frame);}
 }
 await file.end();
@@ -67,9 +67,12 @@ try {
   await page.locator("#markers").click(); assert(await page.locator("#marker-sheet canvas").count()===3,"three printable codes");await page.locator("#close-markers").click();
   assert(await page.locator("#size").inputValue()==="3","notebook 6×6 cells defaults to a 3 cm outer marker side");
   // This video fixture uses 6 cm printed markers; use their actual physical size.
-  await page.locator("#menu").click();await page.locator("#size").fill("6");await page.locator("#close-settings").click();
+  await page.locator("#menu").click();await page.locator("#size").fill("6");await page.locator("#settings details").first().locator("summary").click();await page.locator("#marker-id").fill("2");await page.locator("#marker-size").fill("4.5");await page.locator("#save-marker-size").click();await page.locator("#close-settings").click();
+  await page.locator("#markers").click();
+  const printSizes=await page.locator('#marker-sheet .marker').evaluateAll(nodes=>nodes.map(n=>(n as HTMLElement).style.getPropertyValue('--marker-mm')));
+  assert(printSizes.join()==='60mm,60mm,45mm','print sheet uses each marker ID outer black-square side');await page.locator('#close-markers').click();
   await page.locator("#start").click();
-  await page.waitForFunction(()=>window.canvasIrAR.snapshot().tableReady&&window.canvasIrAR.snapshot().usedIds.length===3,null,{timeout:15000});
+  await page.waitForFunction(()=>window.canvasIrAR.snapshot().tableReady&&window.canvasIrAR.snapshot().usedIds.length===3,null,{timeout:30000});
   const identity=await page.evaluate(()=>{const ar=window.canvasIrAR,old=(window as unknown as {canvasIrBabylon:{scene:unknown;things:unknown}}).canvasIrBabylon;return{sameScene:old.scene===ar.scene.scene,sameThings:old.things===ar.scene.original.things,ids:[...ar.scene.original.things.keys()],center:ar.scene.layout.center,used:ar.snapshot().usedIds};});
   assert(identity.sameScene&&identity.sameThings,"AR uses the original Babylon scene and the same physical objects");
   assert(identity.ids.some(id=>id.startsWith("ball"))&&identity.ids.some(id=>id.startsWith("crate")),"original balls, crates and their CanvasIR labels exist");
@@ -87,6 +90,7 @@ try {
     });
   });
   assert(projection.every(v=>v<.1),`original LH scene projects into RH table correctly: ${projection}`);
+  if(!process.env.AR_EXTENDED_ONLY){
   // Reproduce "one visible marker works, three visible markers blank out":
   // corrupt only the learned map, while the real camera still sees all three.
   // GPU shader warm-up can outlast the first fixture phase on a software
@@ -99,7 +103,7 @@ try {
     const map=window.canvasIrAR.map.markers;
     for(const id of [1,2])map.set(id,map.get(id)!.map(p=>[p[0]+(id===1?.02:-.02),p[1],p[2]]));
   });
-  await page.waitForFunction(()=>window.canvasIrAR.trace.some((e:any)=>e.kind==="frame"&&e.data.visibleIds.length===3&&e.data.poseMode==="single-fallback"),null,{timeout:5000});
+  await page.waitForFunction(()=>window.canvasIrAR.trace.some((e:any)=>e.kind==="frame"&&e.data.visibleIds.length===3&&e.data.poseMode==="single-fallback"),null,{timeout:20000});
   assert(await page.evaluate(()=>window.canvasIrAR.scene.enabled),"three disagreeing visible markers retain a usable pose instead of hiding the demo");
   await page.evaluate(saved=>{const map=window.canvasIrAR.map.markers;for(const [id,points] of saved)map.set(id,points);},savedMap);
   const layoutBefore=await page.evaluate(()=>window.canvasIrAR.scene.layout);
@@ -107,6 +111,8 @@ try {
   await page.waitForFunction(()=>window.canvasIrAR.scene.enabled&&window.canvasIrAR.snapshot().usedIds.length===1,null,{timeout:10000});
   const layoutAfter=await page.evaluate(()=>window.canvasIrAR.scene.layout);
   assert(JSON.stringify(layoutBefore)===JSON.stringify(layoutAfter),"occlusion does not recenter or rescale the original table");
+  }
+  if(!process.env.AR_EXTENDED_ONLY){
   // Pause inference only, retaining the current camera/table pose. Replays below
   // go through the production HandTracking pipeline, not just scene.hand().
   await page.evaluate(()=>{document.querySelector<HTMLVideoElement>("#video")!.pause();});
@@ -217,6 +223,74 @@ try {
   await replayTip(await sliderPoint(370));await page.waitForTimeout(100);
   const bounce=await page.evaluate(()=>[...window.canvasIrAR.scene.original.things.values()][0]!.body.shape.material.restitution);
   assert(Math.abs(bounce-(370-24)/432)<.025,`slider remains captured across slow/noisy frames: restitution ${bounce}`);
+  }else{await page.evaluate(()=>{document.querySelector<HTMLVideoElement>("#video")!.pause();window.canvasIrAR.hand.metricScale=1;});}
+  // Field edits go through the real UI; the scene, picking and Havok slab must agree.
+  await page.evaluate(()=>{const s=window.canvasIrAR.scene,t=[...s.original.things.values()][0]!;s.loseHand(true);t.body.body.disablePreStep=false;t.mesh.position.x=100;t.mesh.position.z=100;t.body.body.setLinearVelocity(t.mesh.position.scale(.01));});
+  await page.locator('#menu').click();await page.locator('#edit-field').click();
+  for(const [key,value] of [['width','85'],['depth','52'],['x','18'],['z','-12'],['angle','33']]){await page.locator(`#field-${key}`).fill(value!);await page.locator(`#field-${key}`).press('Tab');}
+  const fieldCheck=await page.evaluate(()=>{
+    const s=window.canvasIrAR.scene,f=s.field,table=s.original.floor.table;
+    const point:V3=[.27,.03,-.17],round=s.table(s.room(point));
+    s.camera.getViewMatrix(true);const m=s.camera.getViewMatrix().multiply(s.camera.getProjectionMatrix()).m,p=window.canvasIrAR.snapshot().pose,k=window.canvasIrAR.snapshot().intrinsics,q=s.room(point),w=q.x*m[3]!+q.y*m[7]!+q.z*m[11]!+m[15]!;
+    const projected=[((q.x*m[0]!+q.y*m[4]!+q.z*m[8]!+m[12]!)/w+1)*k.width/2,(1-(q.x*m[1]!+q.y*m[5]!+q.z*m[9]!+m[13]!)/w)*k.height/2],cam=p.r.map(()=>0);
+    const camera=[0,1,2].map(i=>p.r[i*3]!*point[0]+p.r[i*3+1]!*point[1]+p.r[i*3+2]!*point[2]+p.t[i]!);
+    const error=Math.hypot(projected[0]!-(k.fx*camera[0]!/camera[2]!+k.cx),projected[1]!-(k.fy*camera[1]!/camera[2]!+k.cy));
+    const action=s.hand(Array.from({length:21},()=>point),true,performance.now(),0);
+    const inside=[...s.original.things.values()].every(t=>Math.abs(t.mesh.position.x-table.center.x)<=table.width/2&&Math.abs(t.mesh.position.z-table.center.z)<=table.depth/2);
+    return {inside,f,width:table.width*s.layout.scale,depth:table.depth*s.layout.scale,slab:[s.original.floor.top.scaling.x*s.layout.scale,s.original.floor.top.scaling.z*s.layout.scale],round,error,action};
+  });
+  assert(Math.abs(fieldCheck.width-.85)<1e-6&&Math.abs(fieldCheck.depth-.52)<1e-6&&fieldCheck.f.angle===33,'independent field dimensions and rotation exceed the marker hull');
+  assert(fieldCheck.slab.every((v,i)=>Math.abs(v-[.85,.52][i]!)<1e-6)&&fieldCheck.round.every((v,i)=>Math.abs(v-[.27,.03,-.17][i]!)<1e-6)&&fieldCheck.error<.1,'Havok slab, hand coordinate transform and rendering agree after field rotation');
+  assert(fieldCheck.inside,'objects outside changed boundaries are moved safely inside the Havok slab');
+  assert(fieldCheck.action.reason==='field-editing','hand contacts and grabs are suspended during editing');
+  // Exercise the actual screen-space center handle on the estimated plane.
+  const handle=await page.evaluate(()=>{const s=window.canvasIrAR.scene,p=window.canvasIrAR.snapshot().pose,k=window.canvasIrAR.snapshot().intrinsics,f=s.field;const pixel=(x:number,z:number)=>{const q=[0,1,2].map(i=>p.r[i*3]!*x+p.r[i*3+2]!*z+p.t[i]!);const r=document.querySelector('#overlay')!.getBoundingClientRect();return {x:r.left+(k.fx*q[0]!/q[2]!+k.cx)*r.width/k.width,y:r.top+(k.fy*q[1]!/q[2]!+k.cy)*r.height/k.height};};return {from:pixel(f.x,f.z),to:pixel(f.x+.03,f.z-.02)};});
+  await page.mouse.move(handle.from.x,handle.from.y);await page.mouse.down();await page.mouse.move(handle.to.x,handle.to.y,{steps:4});await page.mouse.up();
+  assert(await page.evaluate(()=>Math.abs(window.canvasIrAR.scene.field.x-.21)<.005&&Math.abs(window.canvasIrAR.scene.field.z+.14)<.005),'pointer handle moves the field on the plane');
+  const rawBefore=await page.evaluate(()=>JSON.stringify(window.canvasIrAR.snapshot().pose));
+  await page.locator('#field-editor details summary').click();await page.locator('#tilt-pitch').fill('8');await page.locator('#tilt-pitch').press('Tab');await page.locator('#tilt-enabled').check();
+  assert(await page.evaluate(()=>window.canvasIrAR.hand.metricScale===null),'plane correction invalidates touch calibration');
+  assert(await page.evaluate(()=>JSON.stringify(window.canvasIrAR.snapshot().pose))!==rawBefore,'plane correction changes the applied camera transform');
+  await page.locator('#reset-tilt').click();assert(await page.evaluate(()=>JSON.stringify(window.canvasIrAR.snapshot().pose))===rawBefore,'reset restores the estimated plane without overwriting it');
+  await page.locator('#finish-field').click();
+  const rotatedTouch=await page.evaluate(()=>{
+    const s=window.canvasIrAR.scene,panel=s.original.panel,m=panel.computeWorldMatrix(true).m,u=(76/480-.5)*2.88,v=(.5-111/300)*1.8,p=s.camera.position.clone();p.set(u*m[0]!+v*m[4]!+m[12]!,u*m[1]!+v*m[5]!+m[13]!,u*m[2]!+v*m[6]!+m[14]!);const point=s.table(p),points:V3[]=Array.from({length:21},()=>[...point]);points[4]=[point[0]+.06,point[1],point[2]];points[5]=[point[0]+.03,point[1],point[2]];points[17]=[point[0]-.03,point[1],point[2]];const before=s.original.things.size;s.hand(points,true,performance.now(),1);s.hand(points,true,performance.now(),1);const after=s.original.things.size;const outside=s.hand(Array.from({length:21},()=>[s.field.x+2,0,s.field.z] as V3),true,performance.now(),1);return {before,after,outside};
+  });assert(rotatedTouch.after===rotatedTouch.before+1&&rotatedTouch.outside.reason==='outside-field','touching the original control works after rotation; outside-field hand interaction is rejected');
+  await page.evaluate(()=>document.querySelector<HTMLVideoElement>('#video')!.play());
+  await page.locator('#menu').click();
+  await page.waitForFunction(()=>window.canvasIrAR.scene.enabled&&window.canvasIrAR.snapshot().usedIds.length===3,null,{timeout:30000});
+  await page.locator('#capture').click();
+  await page.waitForFunction(()=>(window.canvasIrAR as any).shots.shots.length===1,null,{timeout:15000});
+  const shotCheck=await page.evaluate(async()=>{
+    const shot=(window.canvasIrAR as any).shots.shots[0],d=shot.data,raw=await createImageBitmap(new Blob([shot.raw],{type:'image/png'})),composite=await createImageBitmap(new Blob([shot.composite],{type:'image/png'}));
+    const canvas=document.createElement('canvas');canvas.width=raw.width;canvas.height=raw.height;const ctx=canvas.getContext('2d')!;ctx.drawImage(raw,0,0);const pixels=ctx.getImageData(0,0,raw.width,raw.height);
+    const ids=d.table.observations.map((m:any)=>m.id);
+    // Independently run ArUco on the exported PNG, not the live video.
+    const cv=await (window as any).cv,src=cv.matFromImageData(pixels),gray=new cv.Mat(),corners=new cv.MatVector(),found=new cv.Mat(),rejected=new cv.MatVector(),dictionary=cv.getPredefinedDictionary(cv.DICT_4X4_50),parameters=new cv.aruco_DetectorParameters(),refine=new cv.aruco_RefineParameters(10,3,true),detector=new cv.aruco_ArucoDetector(dictionary,parameters,refine);
+    parameters.cornerRefinementMethod=cv.CORNER_REFINE_SUBPIX;cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);detector.detectMarkers(gray,corners,found,rejected);const imageIds=Array.from(found.data32S) as number[];
+    let maxCornerError=0;for(let i=0;i<found.rows;i++){const c=corners.get(i),m=d.table.observations.find((m:any)=>m.id===found.data32S[i]);if(m)for(let j=0;j<4;j++)maxCornerError=Math.max(maxCornerError,Math.hypot(c.data32F[j*2]-m.pixels[j].x,c.data32F[j*2+1]-m.pixels[j].y));c.delete();}
+    for(const v of [detector,parameters,refine,dictionary,src,gray,corners,found,rejected])v.delete();
+    ctx.drawImage(composite,0,0);const blended=ctx.getImageData(0,0,raw.width,raw.height).data;let changed=0;for(let i=0;i<blended.length;i+=4)if(blended[i]!==pixels.data[i])changed++;
+    return {id:shot.id,capture:d.capture,processingCapture:d.processing.capture,estimates:d.estimates,ids,imageIds,maxCornerError,changed,raw:[raw.width,raw.height],composite:[composite.width,composite.height]};
+  });
+  assert(shotCheck.id===`frame-${shotCheck.capture.frameId}`&&JSON.stringify(shotCheck.processingCapture)===JSON.stringify({frameId:shotCheck.capture.frameId,capturedAt:shotCheck.capture.capturedAt,capturedAtEpochMs:shotCheck.capture.capturedAtEpochMs,mediaTimeSeconds:shotCheck.capture.mediaTimeSeconds}),'snapshot metadata uses the capture ID and capture time, not processing completion');
+  assert(shotCheck.ids.sort().join()===shotCheck.imageIds.sort().join()&&shotCheck.maxCornerError<2,'independent ArUco detection on saved camera PNG agrees with JSON observations');
+  console.log('Diagnostic PNG check',JSON.stringify(shotCheck));
+  const imageBytes=await page.evaluate(()=>{const shot=(window.canvasIrAR as any).shots.shots[0];return {raw:Array.from(shot.raw),composite:Array.from(shot.composite)};});await Bun.write(join(temporary,'camera.png'),new Uint8Array(imageBytes.raw as number[]));await Bun.write(join(temporary,'overlay.png'),new Uint8Array(imageBytes.composite as number[]));
+  assert(shotCheck.changed>100&&shotCheck.raw.join()===shotCheck.composite.join(),'composite PNG contains scene and diagnostic overlays at the raw image resolution');
+  await page.locator('#hands').click();await page.locator('#capture').click();await page.waitForFunction(()=>(window.canvasIrAR as any).shots.shots.length===2,null,{timeout:15000});
+  const olderHand=await page.evaluate(()=>{const d=(window.canvasIrAR as any).shots.shots[1].data;return {capture:d.capture,hand:d.estimates.hand};});assert(olderHand.hand.frameId<olderHand.capture.frameId&&olderHand.hand.ageAtCaptureMs>0,'snapshot explicitly retains an older hand source ID and its age when inference is disabled');
+  const zipDownload=page.waitForEvent('download');await page.locator('#export-zip').click();const downloaded=await zipDownload;await downloaded.saveAs(join(temporary,'ar-diagnostics.zip'));assert((await Bun.file(join(temporary,'ar-diagnostics.zip')).bytes())[0]===0x50,'ZIP downloads locally with manifest, JSON and both PNGs');
+  const jsonDownload=page.waitForEvent('download');await page.locator('#export').click();await (await jsonDownload).saveAs(join(temporary,'trace.json'));const json=await Bun.file(join(temporary,'trace.json')).json();assert(json.version===5&&!JSON.stringify(json).includes('data:image/'),'JSON-only export remains small and contains no encoded camera image');
+  // Reload preserves the coordinate system and field; full reset must discard both.
+  const stored=await page.evaluate(()=>(window.canvasIrAR as any).settings());await page.reload();await waitReady(page);
+  const restored=await page.evaluate(()=>(window.canvasIrAR as any).settings());assert(JSON.stringify(stored)===JSON.stringify(restored),'marker sizes, map identity, field and correction survive a page reload');
+  await page.locator('#start').click();await page.waitForFunction(()=>window.canvasIrAR.snapshot().tableReady,null,{timeout:15000});
+  assert(await page.evaluate(()=>Math.abs(window.canvasIrAR.scene.field.width-.85)<1e-6&&window.canvasIrAR.scene.field.angle===33),'saved field is restored against the same stored marker coordinates');
+  await page.locator('#menu').click();await page.locator('#recalibrate').click();const cleared=await page.evaluate(()=>(window.canvasIrAR as any).settings());assert(cleared.mapId!==stored.mapId&&cleared.field===null,'full map reset gives a new coordinate system and does not reuse old field offsets');
+
+  await page.locator('#menu').click();await page.locator('#settings details').first().locator('summary').click();await page.evaluate(()=>window.canvasIrAR.hand.metricScale=1);const previousId=await page.evaluate(()=>(window.canvasIrAR as any).settings().mapId);await page.locator('#marker-id').fill('1');await page.locator('#marker-size').fill('7');await page.locator('#save-marker-size').click();
+  assert(await page.evaluate(id=>(window.canvasIrAR as any).settings().mapId!==id&&window.canvasIrAR.hand.metricScale===null&&(window.canvasIrAR as any).settings().field===null,previousId),'changing an individual marker size invalidates map identity, field and hand calibration');await page.locator('#close-settings').click();
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(temporary,"mobile.png")});
   assert(await page.evaluate(()=>document.documentElement.scrollHeight===innerHeight&&document.documentElement.scrollWidth===innerWidth),"camera fills the viewport with no diagnostic panels or scrolling");
   await page.locator("#menu").click();await page.locator("#stop").click();assert(await page.evaluate(()=>document.querySelector<HTMLVideoElement>("#video")!.srcObject===null),"stop releases camera tracks");

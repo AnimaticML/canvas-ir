@@ -139,10 +139,11 @@ export class MarkerMap {
   readonly decisions=new Map<number,unknown>();
   private previous:Pose|null=null;
   learning = true;
-  constructor(public size: number) {}
+  constructor(public size: number, public sizesById: Record<string,number> = {}) {}
+  side(id:number):number { return this.sizesById[id] ?? this.size; }
   reset(size = this.size): void { this.size = size; this.markers.clear(); this.candidates.clear(); this.decisions.clear(); this.previous=null; this.learning = true; }
   update(found: Marker[], vision: Vision, k: Intrinsics): Fit | null {
-    if (!this.markers.size && found.length && this.learning) this.markers.set([...found].sort((a, b) => a.id - b.id)[0]!.id, markerCorners(this.size));
+    if (!this.markers.size && found.length && this.learning) this.markers.set([...found].sort((a, b) => a.id - b.id)[0]!.id, markerCorners(this.side([...found].sort((a,b)=>a.id-b.id)[0]!.id)));
     const known = found.filter(m => this.markers.has(m.id));
     if (!known.length) {for(const m of found)this.decisions.set(m.id,{reason:"no-known-marker-overlap"});return null; }
     const fit = vision.fit(known.flatMap(m => this.markers.get(m.id)!), known.flatMap(m => m.pixels), k, true, this.previous);
@@ -159,8 +160,9 @@ export class MarkerMap {
       // not depend on an approximate smartphone focal length.
       const p = vision.plane(agreement.flatMap(m=>this.markers.get(m.id)!),agreement.flatMap(m=>m.pixels),marker.pixels);
       if (!p || p.some(v=>!v.every(Number.isFinite))) continue;
+      const size=this.side(marker.id);
       const sides=p.map((v,i)=>length(sub(v,p[(i+1)%4]!)));
-      if(sides.some(side=>Math.abs(side-this.size)>this.size*.25)){this.decisions.set(marker.id,{reason:"inconsistent-marker-size",expectedM:this.size,sidesM:sides});continue;}
+      if(sides.some(side=>Math.abs(side-size)>size*.25)){this.decisions.set(marker.id,{reason:"inconsistent-marker-size",expectedM:size,sidesM:sides});continue;}
       const center: V3 = [p.reduce((s, v) => s + v[0], 0) / 4, 0, p.reduce((s, v) => s + v[2], 0) / 4];
       let c = this.candidates.get(marker.id);
       if (!c) {c={centers:[],corners:[]};this.candidates.set(marker.id,c);}
@@ -169,7 +171,7 @@ export class MarkerMap {
       if (c.centers.length >= 8) {
         const mx=median(c.centers.map(v=>v[0])),mz=median(c.centers.map(v=>v[2]));
         const spread=median(c.centers.map(v=>Math.hypot(v[0]-mx,v[2]-mz)));
-        if(spread>this.size*.15){this.decisions.set(marker.id,{reason:"layout-unstable",spreadM:spread,samples:c.centers.length});continue;}
+        if(spread>size*.15){this.decisions.set(marker.id,{reason:"layout-unstable",spreadM:spread,samples:c.centers.length});continue;}
         const stable: V3 = [median(c.centers.map(v => v[0])), 0, median(c.centers.map(v => v[2]))];
         // Preserve the measured quadrilateral, rather than replacing a slightly
         // imperfect drawing with a mathematically perfect rotated square.

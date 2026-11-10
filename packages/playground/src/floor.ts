@@ -271,6 +271,12 @@ export class Floor {
   /** The board's extent drawn as the base layer, with a margin. */
   private area: Box;
   private lastBase = 0;
+  private fixedArea: Box|null = null;
+  /** AR field dimensions, independent of the page content extent. Rebuilds the physical slab. */
+  setFieldSize(width:number,depth:number):void {
+    this.fixedArea={x:this.origin.x-width*UNITS/2,y:this.origin.y-depth*UNITS/2,width:width*UNITS,height:depth*UNITS};
+    this.area={...this.fixedArea};this.detail.hide();this.showBase();
+  }
   /** The table the board lies on: its top is the board's area, and what rolls past its edge falls to the room's floor. */
   readonly top: Mesh;
   private readonly legs: Mesh[] = [];
@@ -420,6 +426,7 @@ export class Floor {
 
   /** The board's extent with a margin, at least the room's size around its origin. */
   private extent(): Box {
+    if(this.fixedArea)return {...this.fixedArea};
     const b = this.page.bounds() ?? { x: this.origin.x, y: this.origin.y, width: 0, height: 0 };
     const pad = 2 * UNITS;
     const x0 = Math.min(b.x, this.origin.x - 6 * UNITS) - pad;

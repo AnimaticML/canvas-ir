@@ -10,7 +10,8 @@ const path=process.argv[2];if(!path)throw Error("Supply a local ar-interaction-t
 const data=await Bun.file(path).json();
 const cmArg=process.argv.find(s=>s.startsWith("--marker-cm="));
 const root=data.map?.[0]?.[1] as V3[]|undefined;
-const recordedCm=data.markerSideCm??(root?length(sub(root[1]!,root[0]!))*100:null);
+const rootId=data.map?.[0]?.[0];
+const recordedCm=(data.markerSizes?(data.markerSizes.byId?.[rootId]??data.markerSizes.defaultCm):data.markerSideCm)??(root?length(sub(root[1]!,root[0]!))*100:null);
 if(!recordedCm)throw Error("Trace has no marker size");
 const markerCm=cmArg?Number(cmArg.split("=")[1]):recordedCm;
 if(!Number.isFinite(markerCm)||markerCm<=0)throw Error("Invalid marker size");
@@ -18,7 +19,7 @@ const ratio=markerCm/recordedCm,vision=new Vision(await (cv as unknown)),hand=ne
 const reasons:Record<string,number>={},attempts:{start:number;frames:number;status:string;scale:number|null;completedAt:number|null}[]=[];
 let current:typeof attempts[number]|null=null,detected=0,accepted=0;
 const errors:number[]=[],ages:number[]=[];
-const rebuild=process.argv.includes("--rebuild-map"),replayedMap=new MarkerMap(markerCm/100);
+const rebuild=process.argv.includes("--rebuild-map"),replayedMap=new MarkerMap((data.markerSizes?.defaultCm??recordedCm)*ratio/100,Object.fromEntries(Object.entries(data.markerSizes?.byId??{}).map(([id,cm])=>[id,Number(cm)*ratio/100])));
 const poses:{time:number;pose:Pose|null}[]=[];
 if(rebuild){
   for(const [id,corners] of data.map as [number,V3[]][])replayedMap.markers.set(id,corners.map(p=>p.map(v=>v*ratio) as V3));

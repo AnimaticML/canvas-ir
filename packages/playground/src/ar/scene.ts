@@ -8,7 +8,9 @@ import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { PhysicsAggregate } from "@babylonjs/core/Physics/v2/physicsAggregate";
 import { PhysicsMotionType, PhysicsShapeType } from "@babylonjs/core/Physics/v2/IPhysicsEnginePlugin";
 import { startBabylon, type BabylonRuntime, type BabylonThing } from "../babylon";
-import { cross, length, sub, unit, type Intrinsics, type Pose, type V3 } from "./geometry";
+import { cross, length, sub, unit, rotate, transpose, toCamera, type Intrinsics, type Pose, type V3 } from "./geometry";
+
+import { yaw, type Field } from "./settings";
 
 const vector = (p: V3): Vector3 => new Vector3(...p);
 export interface InteractionResult { action: string; reason: string; target: string | null; distanceM?: number; pinch?: number }
@@ -31,6 +33,26 @@ export class ARScene {
   readonly original: BabylonRuntime;
   private scale = 0.025;
   private center: V3 = [0,0,0];
+  private angle=0;
+  editing=false;
+  get field():Field { const t=this.original.floor.table;return {x:this.center[0],z:this.center[2],width:t.width*this.scale,depth:t.depth*this.scale,angle:this.angle}; }
+  setField(f:Field):void {
+    this.loseHand(true);this.center=[f.x,0,f.z];this.angle=f.angle;
+    this.original.floor.setFieldSize(f.width/this.scale,f.depth/this.scale);
+    this.roomCenter.copyFrom(this.original.floor.table.center);
+    this.original.panel.scaling.setAll(Math.min(.14,f.width*.8,f.depth*.8)/(2.88*this.scale));
+    this.original.panel.position.set(this.roomCenter.x,.035,this.roomCenter.z-f.depth/this.scale*.25);
+    for(const thing of this.original.things.values()){
+      const p=thing.mesh.position;thing.mesh.computeWorldMatrix(true);
+      const half=thing.mesh.getBoundingInfo().boundingBox.extendSizeWorld;
+      const hx=Math.max(0,f.width/this.scale/2-half.x),hz=Math.max(0,f.depth/this.scale/2-half.z);
+      if(Math.abs(p.x-this.roomCenter.x)>hx||Math.abs(p.z-this.roomCenter.z)>hz){
+        thing.body.body.disablePreStep=false;p.x=this.roomCenter.x+Math.max(-hx,Math.min(hx,p.x-this.roomCenter.x));p.z=this.roomCenter.z+Math.max(-hz,Math.min(hz,p.z-this.roomCenter.z));p.y=Math.max(half.y+.05,p.y);
+        thing.body.body.setLinearVelocity(Vector3.Zero());thing.body.body.setAngularVelocity(Vector3.Zero());
+        this.scene.onAfterPhysicsObservable.addOnce(()=>{thing.body.body.disablePreStep=true;});
+      }
+    }
+  }
   private roomCenter: Vector3;
   private fingertip;
   private fingerProxy;
@@ -82,11 +104,13 @@ export class ARScene {
   }
   configure(markers: Map<number,V3[]>): void {
     const points = [...markers.values()].flat(); if (!points.length) return;
+    this.angle=0;
+    // Physical object scale is independent of marker coverage and survives map growth/reload.
+    this.scale=.02;this.original.floor.setFieldSize(.4/this.scale,.4/this.scale);
     const xs = points.map(p=>p[0]), zs = points.map(p=>p[2]);
     const x0=Math.min(...xs),x1=Math.max(...xs),z0=Math.min(...zs),z1=Math.max(...zs);
     this.center = [(x0+x1)/2,0,(z0+z1)/2];
-    const width = Math.max(.32,x1-x0+.04), depth = Math.max(.3,z1-z0+.04), room=this.original.floor.table;
-    this.scale = Math.min(width/room.width,depth/room.depth);
+    const room=this.original.floor.table;
     this.roomCenter.copyFrom(room.center);
     // Reuse the original components at a finger-sized physical scale.
     this.original.panel.scaling.setAll(.14/(2.88*this.scale));
@@ -109,16 +133,14 @@ export class ARScene {
       this.result={action:"touch",reason:"havok-contact",target:id};
     });
   }
-  room(p: V3): Vector3 { return new Vector3((p[0]-this.center[0])/this.scale+this.roomCenter.x, p[1]/this.scale, -(p[2]-this.center[2])/this.scale+this.roomCenter.z); }
-  table(p: Vector3): V3 { return [(p.x-this.roomCenter.x)*this.scale+this.center[0],p.y*this.scale,-(p.z-this.roomCenter.z)*this.scale+this.center[2]]; }
+  room(p: V3): Vector3 { const q=rotate(transpose(yaw(this.angle)),sub(p,this.center));return new Vector3(q[0]/this.scale+this.roomCenter.x,q[1]/this.scale,-q[2]/this.scale+this.roomCenter.z); }
+  table(p: Vector3): V3 { const q=rotate(yaw(this.angle),[(p.x-this.roomCenter.x)*this.scale,p.y*this.scale,-(p.z-this.roomCenter.z)*this.scale]);return [q[0]+this.center[0],q[1],q[2]+this.center[2]]; }
   resize(): void { this.original.resize(); }
   pose(p: Pose, k: Intrinsics): void {
-    const r=p.r, c=this.center, s=this.scale, o=this.roomCenter;
-    // Original Babylon scene is left-handed. Reflect room Z into the RH table,
-    // and flip OpenCV camera Y. Keep original geometry/physics in original units.
-    const offset: V3 = [c[0]-s*o.x,0,c[2]+s*o.z];
-    const t: V3 = p.t.map((v,i)=>(v+r[i*3]!*offset[0]+r[i*3+2]!*offset[2])/s) as V3;
-    const view=Matrix.FromValues(r[0]!,-r[3]!,r[6]!,0,r[1]!,-r[4]!,r[7]!,0,-r[2]!,r[5]!,-r[8]!,0,t[0],-t[1],t[2],1);
+    const s=this.scale;
+    const origin=toCamera(p,this.table(Vector3.Zero())).map(v=>v/s) as V3;
+    const basis=[Vector3.Right(),Vector3.Up(),Vector3.Forward()].map(v=>sub(toCamera(p,this.table(v)).map(n=>n/s) as V3,origin));
+    const view=Matrix.FromValues(basis[0]![0],-basis[0]![1],basis[0]![2],0,basis[1]![0],-basis[1]![1],basis[1]![2],0,basis[2]![0],-basis[2]![1],basis[2]![2],0,origin[0],-origin[1],origin[2],1);
     const world=view.clone().invert();
     this.camera.position.copyFrom(world.getTranslation()); this.camera.rotationQuaternion=Quaternion.FromRotationMatrix(world);
     const near=.005/s,far=20/s;
@@ -127,14 +149,18 @@ export class ARScene {
       2*k.cx/k.width-1,1-2*k.cy/k.height,(far+near)/(far-near),1,0,0,-2*far*near/(far-near),0));
     this.original.visible=true;
   }
+  diagnosticImage():HTMLCanvasElement { const enabled=this.scene.physicsEnabled;this.scene.physicsEnabled=false;try{this.scene.render(false,true);const c=document.createElement("canvas");c.width=this.engine.getRenderWidth();c.height=this.engine.getRenderHeight();c.getContext("2d")!.drawImage(this.engine.getRenderingCanvas()!,0,0);return c;}finally{this.scene.physicsEnabled=enabled;} }
   hide(): void { this.original.visible=false; this.loseHand(true); this.engine.clear(new Color4(0,0,0,0),true,true,true); }
   hand(points: V3[], allow3D: boolean, now: number, pinchRatio?: number): InteractionResult {
+    if(this.editing){this.loseHand(true);return this.result={action:"idle",reason:"field-editing",target:null};}
     const arrival=performance.now();
     if(this.lastHand)this.handInterval=this.handInterval*.8+Math.min(1500,arrival-this.lastHand)*.2;
     this.lastHand=arrival;
     const tip=points[8]!,thumb=points[4]!, at=this.room(tip);
     this.fingertip.position.copyFrom(at);this.fingertip.isVisible=true;
     if (!allow3D) { this.disableFinger();this.fingertip.position.copyFrom(at); this.endContact(true); this.release(); return this.result={action:"idle",reason:"calibrate-touch",target:null}; }
+    const area=this.original.floor.table;
+    if(Math.abs(at.x-area.center.x)>area.width/2||Math.abs(at.z-area.center.z)>area.depth/2){this.disableFinger();this.endContact(true);this.release();this.pinched=false;return this.result={action:"idle",reason:"outside-field",target:null};}
     const gap=length(sub(tip,thumb)), palm=Math.max(.035,length(sub(points[5]!,points[17]!)));
     const ratio=pinchRatio ?? gap/palm;
     const pinching=ratio<(this.pinched ? .48 : .30);
@@ -143,7 +169,7 @@ export class ARScene {
     const x=unit(sub(points[5]!,points[17]!)),forward=unit(sub(points[9]!,points[0]!));
     const z=unit(cross(x,forward)),y=unit(cross(z,x));
     // Reflect both palm coordinates and one basis axis to preserve a proper rotation.
-    const reflect=(p:V3):Vector3=>new Vector3(p[0],p[1],-p[2]);
+    const reflect=(p:V3):Vector3=>{const q=rotate(transpose(yaw(this.angle)),p);return new Vector3(q[0],q[1],-q[2]);};
     const orientation=Quaternion.RotationQuaternionFromAxis(reflect(x),reflect(y),reflect(z).negate());
     if (pinching && !this.held) {
       this.endContact(true);
