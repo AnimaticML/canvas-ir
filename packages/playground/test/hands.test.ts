@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { type HandHost, type HandSurface, Hands } from "../src/hands";
+import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { type HandHost, type HandSurface, Hands, handOrientation, meshHandSurface } from "../src/hands";
+import { NullEngine } from "@babylonjs/core/Engines/nullEngine";
+import { Scene } from "@babylonjs/core/scene";
+import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
 import { FLAT_HEIGHTS, flatHandScale } from "../src/ar/flat-hand";
 import { intrinsics, project, toCamera, type Pose, type V3 } from "../src/ar/geometry";
 
@@ -95,5 +98,39 @@ describe("a hand laid flat calibrates its size", () => {
     const lifted = truth.map((p, i) => [p[0], p[1] + (i % 3) * 0.03, p[2]] as V3);
     const fit = flatHandScale(lifted.map((p) => toCamera(camera, p)), lifted.map((p) => project(camera, k, p)), camera, k)!;
     expect(fit.spread).toBeGreaterThan(0.02);
+  });
+});
+
+
+describe("shared hand regressions from the AR adapter", () => {
+  test("an already closed pinch enters the grab zone, cancelling its prior drag", () => {
+    const {h,log}=host(),hands=new Hands(h,{solid:false});
+    hands.update([{id:"R",joints:hand(new Vector3(-.2,.04,.23),.004)}]);
+    expect(hands.states[0]!.action).toBe("pinch");
+    hands.update([{id:"R",joints:hand(new Vector3(.23,.04,.23),.004)}]);
+    expect(hands.states[0]).toMatchObject({action:"hold",target:"ball"});
+    expect(log.map(v=>v.split(" ")[0])).toEqual(["down","cancel","hold"]);
+  });
+  test("holding passes the palm rotation to the board and tolerates a degenerate palm", () => {
+    const {h}=host(),rotations:Quaternion[]=[],hands=new Hands({...h,hold:(_id,_thing,_at,q)=>{if(q)rotations.push(q.clone());}},{solid:false});
+    const center=new Vector3(.23,.04,.23),first=hand(center,.004),turn=Quaternion.RotationAxis(Vector3.Up(),.6);
+    hands.update([{id:"R",joints:first}]);
+    hands.update([{id:"R",joints:first.map(p=>p.subtract(center).applyRotationQuaternion(turn).add(center))}]);
+    expect(rotations.length).toBe(2);
+    expect(Math.abs(Quaternion.Dot(rotations[1]!,turn.multiply(rotations[0]!)))).toBeCloseTo(1,6);
+    expect(handOrientation(Array.from({length:21},()=>Vector3.Zero()))).toBeNull();
+    hands.update([{id:"R",joints:Array.from({length:21},()=>center.clone()),pinch:.05}]);
+    expect(Math.abs(Quaternion.Dot(rotations[2]!,rotations[1]!))).toBeCloseTo(1,6);
+  });
+  test("a scaled rotated panel uses its full visible extent and metric edge margin", () => {
+    const engine=new NullEngine(),scene=new Scene(engine),panel=CreatePlane("panel",{width:2.88,height:1.8},scene);
+    try{
+      panel.scaling.set(2.43,1.7,1);panel.rotation.set(Math.PI/2,.2,.3);panel.position.set(2,3,4);
+      const surface=meshHandSurface("panel",panel,2.88,1.8,"z"),world=(x:number,y:number)=>Vector3.TransformCoordinates(new Vector3(x,y,0),panel.computeWorldMatrix(true));
+      expect(surface.contains(world(1,.7),0)).toBe(true);
+      expect(surface.contains(world(1.45,0),0)).toBe(false);
+      expect(surface.contains(world(1.45,0),.03)).toBe(true);
+      expect(surface.contains(world(0,.92),.03)).toBe(false);
+    }finally{scene.dispose();engine.dispose();}
   });
 });

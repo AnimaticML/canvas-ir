@@ -21,7 +21,7 @@ The board uses `scene.activeCamera` for everything it projects and picks, so a t
 ## What a hand does
 
 - **Fingertip touch, by contact in 3D.** The index tip presses the nearest surface it touches (the table, a tablet's face, the panel) when it comes within `pressAt` (12 mm) of it, and lets go past `releaseAt` (25 mm), so noise around the surface doesn't flicker. A finger pushed into the table still counts. Over a surface and not touching, it hovers, and things light up as under a mouse. With `route: "contact"` it presses exactly where the fingertip touches; with `route: "ray"` (the default) it presses where the camera sees the fingertip on that surface, which hides the depth error along the camera's line of sight. With a calibrated hand, `"contact"` is the experiment: a press decided and placed by real 3D contact.
-- **Pinch to hold.** A pinch closing within `reach` (35 mm) of a crate or a ball takes hold of it; it follows the pinch, and is thrown with the hand's speed when the pinch opens.
+- **Pinch to hold.** A pinch closing within `reach` (35 mm) of a crate or a ball takes hold of it. A pinch closed outside the zone can enter it later; any prior pointer drag is cancelled before the hold starts. The object follows the pinch and the palm’s orientation, keeping the original grab offset and relative rotation. It is thrown with its current linear/angular velocity when the pinch opens.
 - **Pinch to point.** A pinch anywhere else presses where it is seen, like a finger on a touch screen: a click, a drag, and two quick pinches a double click (which lifts a window off the table as a tablet, and lays it down again). Two pinching hands are two fingers: on a tablet's title bar they carry it and twist to turn it, on its face they zoom it, and on the table they slide, zoom and turn the view.
 - **The open hand is solid.** The index tip, the thumb tip and the palm are kinematic bodies in Havok, so an open hand pushes crates and balls. A body that reappears jumps to the hand before it collides, so it never sweeps through things from where the hand was last seen.
 
@@ -29,7 +29,7 @@ The board uses `scene.activeCamera` for everything it projects and picks, so a t
 
 Tracking stays on the tracker's side: finding the table and the camera's pose from the markers, the hand's joints in 3D, and calibrating the hand's size for depth. For that last part, `src/ar/flat-hand.ts` has `flatHandScale(cameraPoints, pixels, tablePose, intrinsics)`: with the whole hand laid flat on the table, each joint's pixel ray meets the table (raised by how thick the hand is there) where the joint really is, so one frame gives the scale that makes the tracked hand its true size from all 21 joints, and `spread` says whether the hand really lay flat. It multiplies the camera points the same way as the fingertip calibration in `src/ar/hand.ts` (`metricScale`), and can feed it.
 
-For the AR page, moving onto this means: `hands.configure({ metersPerUnit: scale })` once the table is placed, then each frame `hands.update([{ id, joints: points.map(room), pinch }])`, and `hands.clear()` when the scene hides. Its own contact, pinch and hold code in `ar/scene.ts` then has nothing left to do.
+For the AR page, moving onto this means: `hands.configure({ metersPerUnit: scale })` once the table is placed, then each frame `hands.update([{ id, joints: points.map(room), pinch }])`, and `hands.clear()` when the scene hides. `ar/scene.ts` now does this: its own contact, pinch, hold and physics-hand implementation has been removed. It keeps coordinate conversion, the visual cursor, field bounds/edit gating, and a bounded tracking-loss grace period. An inference pass skipped by the tracker is not `update([])`; explicit stop, field edits and sustained tracking loss call `hands.clear()`. AR configures its physical scale and its existing 22/45 mm contact hysteresis. Buttons follow the same press/release semantics as a touch pointer.
 
 ## Looking with your head
 
@@ -38,3 +38,26 @@ For the AR page, moving onto this means: `hands.configure({ metersPerUnit: scale
 ## Tests
 
 `packages/playground/test/hands.test.ts` runs the gestures against a stand-in board (presses, hovers, the gap between pressing and letting go, holding and letting go, a lost hand) and the flat-hand calibration against a synthetic camera. `test/viewer.test.ts` checks that the window's corners stay at the screen's corners from any eye, that what's behind the window moves against the eye, the eye's distance from the iris, and the filter.
+
+
+## Board host and diagnostics
+
+`HandHost.hold(pointer, id, at?, orientation?)` receives a room-space palm quaternion
+when the joints form a nondegenerate palm. Existing three-argument hosts remain
+compatible. The Babylon host preserves the object's grab offset and relative
+rotation, and drives the same dynamic Havok body with bounded linear/angular
+velocity. Mouse holds retain their previous behavior. A degenerate palm retains
+the previous orientation instead of generating NaNs. An object cannot be grabbed
+by two hands at once.
+
+`meshHandSurface` takes mesh-local width/height and room-space edge margins, so
+scaled/rotated panel and tablet bounds match their visible geometry.
+`hands.contacts` retains up to 60 actual Havok contacts (hand ID, body part, target,
+impulse, room-space position/velocity and contact point). `runtime.events` also
+records presses routed through the common entry point. The AR trace converts
+contacts to table coordinates and retains its existing interaction result format.
+
+Regression tests cover entering a grab zone with an already closed pinch, palm
+rotation delivery and degenerate geometry, and scaled/rotated surface bounds.
+The AR Chromium scenario exercises the common API with the real Babylon/Havok
+scene; camera/hand accuracy on a physical phone still requires device testing.

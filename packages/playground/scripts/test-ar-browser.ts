@@ -156,6 +156,7 @@ try {
   };
   await gesture(false,0);await gesture(true,0);
   assert((await page.evaluate(()=>window.canvasIrAR.snapshot().interaction))?.action==="grab","production landmark pipeline grabs an original crate");
+  assert(await page.evaluate(()=>window.canvasIrAR.scene.original.hands.states.some(s=>s.action==="hold")),"AR delegates grabs to the common Hands input");
   const before=await page.evaluate(()=>{const t=[...window.canvasIrAR.scene.original.things.values()].find(t=>t.mesh.name.startsWith("crate"))!;return {height:window.canvasIrAR.scene.table(t.mesh.position)[1],rotation:t.mesh.rotationQuaternion!.asArray()};});
   for(let i=0;i<5;i++){await gesture(true,.015,.4);await page.waitForTimeout(75);}
   const after=await page.evaluate(()=>{const t=[...window.canvasIrAR.scene.original.things.values()].find(t=>t.mesh.name.startsWith("crate"))!;return {height:window.canvasIrAR.scene.table(t.mesh.position)[1],rotation:t.mesh.rotationQuaternion!.asArray()};});
@@ -169,7 +170,7 @@ try {
     const m=panel.computeWorldMatrix(true).m,local=[(76/480-.5)*2.88,(.5-111/300)*1.8,0];
     const point=s.table(new (s.camera.position.constructor as new(x:number,y:number,z:number)=>typeof s.camera.position)(local[0]!*m[0]!+local[1]!*m[4]!+m[12]!,local[0]!*m[1]!+local[1]!*m[5]!+m[13]!,local[0]!*m[2]!+local[1]!*m[6]!+m[14]!));
     const points:V3[]=Array.from({length:21},()=>[...point]);points[8]=point;points[4]=[point[0]+.06,point[1],point[2]];points[5]=[point[0]+.03,point[1],point[2]];points[17]=[point[0]-.03,point[1],point[2]];points[0]=[point[0],point[1],point[2]+.04];points[9]=[point[0],point[1],point[2]-.04];
-    const before=s.original.things.size;s.hand(points,true,performance.now(),1);s.hand(points,true,performance.now(),1);return{before,after:s.original.things.size,action:s.result,events:s.original.events,control:s.original.controlAt(s.room(point))};
+    const before=s.original.things.size;s.hand(points,true,performance.now(),1);s.hand(points,true,performance.now(),1);s.hand(points.map(p=>[p[0],p[1]+.08,p[2]] as V3),true,performance.now(),1);return{before,after:s.original.things.size,action:s.result,events:s.original.events,control:s.original.controlAt(s.room(point))};
   });
   assert(panelCounts.after===panelCounts.before+1,`touch executes original Drop crate component: ${JSON.stringify(panelCounts)}`);
   assert(await page.evaluate(()=>window.canvasIrAR.trace.some((e:any)=>e.kind==="hand"&&e.data.interaction?.action==="grab")),"trace records successful interaction and pose/rejection inputs");
@@ -254,7 +255,7 @@ try {
   await page.locator('#reset-tilt').click();assert(await page.evaluate(()=>JSON.stringify(window.canvasIrAR.snapshot().pose))===rawBefore,'reset restores the estimated plane without overwriting it');
   await page.locator('#finish-field').click();
   const rotatedTouch=await page.evaluate(()=>{
-    const s=window.canvasIrAR.scene,panel=s.original.panel,m=panel.computeWorldMatrix(true).m,u=(76/480-.5)*2.88,v=(.5-111/300)*1.8,p=s.camera.position.clone();p.set(u*m[0]!+v*m[4]!+m[12]!,u*m[1]!+v*m[5]!+m[13]!,u*m[2]!+v*m[6]!+m[14]!);const point=s.table(p),points:V3[]=Array.from({length:21},()=>[...point]);points[4]=[point[0]+.06,point[1],point[2]];points[5]=[point[0]+.03,point[1],point[2]];points[17]=[point[0]-.03,point[1],point[2]];const before=s.original.things.size;s.hand(points,true,performance.now(),1);s.hand(points,true,performance.now(),1);const after=s.original.things.size;const outside=s.hand(Array.from({length:21},()=>[s.field.x+2,0,s.field.z] as V3),true,performance.now(),1);return {before,after,outside};
+    const s=window.canvasIrAR.scene,panel=s.original.panel,m=panel.computeWorldMatrix(true).m,u=(76/480-.5)*2.88,v=(.5-111/300)*1.8,p=s.camera.position.clone();p.set(u*m[0]!+v*m[4]!+m[12]!,u*m[1]!+v*m[5]!+m[13]!,u*m[2]!+v*m[6]!+m[14]!);const point=s.table(p),points:V3[]=Array.from({length:21},()=>[...point]);points[4]=[point[0]+.06,point[1],point[2]];points[5]=[point[0]+.03,point[1],point[2]];points[17]=[point[0]-.03,point[1],point[2]];const before=s.original.things.size;s.hand(points,true,performance.now(),1);s.hand(points,true,performance.now(),1);s.hand(points.map(p=>[p[0],p[1]+.08,p[2]] as V3),true,performance.now(),1);const after=s.original.things.size;const outside=s.hand(Array.from({length:21},()=>[s.field.x+2,0,s.field.z] as V3),true,performance.now(),1);return {before,after,outside};
   });assert(rotatedTouch.after===rotatedTouch.before+1&&rotatedTouch.outside.reason==='outside-field','touching the original control works after rotation; outside-field hand interaction is rejected');
   await page.evaluate(()=>document.querySelector<HTMLVideoElement>('#video')!.play());
   await page.locator('#menu').click();

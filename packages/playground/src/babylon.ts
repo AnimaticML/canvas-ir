@@ -12,7 +12,7 @@ import { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator"
 import "@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
-import { Matrix, Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Matrix, Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
 import { CreateCylinder } from "@babylonjs/core/Meshes/Builders/cylinderBuilder";
@@ -32,7 +32,7 @@ import havokWasm from "@babylonjs/havok/lib/esm/HavokPhysics.wasm" with { type: 
 import { type ObjectHandle, Objects, Surface, World } from "@canvas-ir/babylon";
 import { type ComponentHandle, Components, EventRouter, type Point, type RouterEvent } from "canvas-ir";
 import { Floor, type FloorPage, type FloorThing, type FloorWindow, TABLE, UNITS } from "./floor";
-import { type HandOptions, type HandSurface, Hands } from "./hands";
+import { type HandOptions, type HandSurface, Hands, meshHandSurface } from "./hands";
 import { Tablet } from "./tablet";
 import { FaceTracker } from "./face";
 import { type Eye, screenMeters, throughWindow } from "./viewer";
@@ -170,7 +170,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   let count = 0;
   let held: { thing: BabylonThing; normal: Vector3; offset: Vector3; target: Vector3 } | null = null;
   /** Things held by hands, by the hand's pointer: pulled toward the hand each frame, as the mouse's held thing is. */
-  const handHolds = new Map<number, { thing: BabylonThing; offset: Vector3; target: Vector3 }>();
+  const handHolds = new Map<number, { thing: BabylonThing; offset: Vector3; target: Vector3; relative?: Quaternion; rotation?: Quaternion }>();
   const drop = (kind: "crate" | "ball"): void => {
     const n = ++count;
     const id = `${kind}-${n}`;
@@ -985,7 +985,15 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       velocity.scaleInPlace(12);
       if (velocity.length() > 18) velocity.normalize().scaleInPlace(18);
       h.thing.body.body.setLinearVelocity(velocity);
-      h.thing.body.body.setAngularVelocity(Vector3.Zero());
+      if ("rotation" in h && h.rotation) {
+        const current = h.thing.mesh.rotationQuaternion ?? Quaternion.FromEulerVector(h.thing.mesh.rotation);
+        const delta = h.rotation.multiply(current.conjugate()).normalize();
+        if (delta.w < 0) delta.scaleInPlace(-1);
+        const sine = Math.hypot(delta.x, delta.y, delta.z);
+        const angle = 2 * Math.atan2(sine, delta.w);
+        const angular = sine > 1e-6 ? new Vector3(delta.x, delta.y, delta.z).scale(Math.min(18, angle * 12) / sine) : Vector3.Zero();
+        h.thing.body.body.setAngularVelocity(angular);
+      } else h.thing.body.body.setAngularVelocity(Vector3.Zero());
     }
     // What rolled off the table lies on the room's floor a moment, then comes back, dropped onto the table from above.
     for (const [id, t] of things) {
@@ -1205,31 +1213,20 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, timeStamp: performance.now(),
       ...o, clientX: r.left + at.x, clientY: r.top + at.y,
     };
+    const before = things.size, path = router.pick(at).path;
     if (phase === "down") down(e);
     else if (phase === "move") move(e);
     else lift(e, phase === "cancel");
+    runtime.events.push({phase,surface: path.includes("panel") ? "panel" : "scene",path,before,after:things.size});
+    if (runtime.events.length > 80) runtime.events.shift();
   };
   const pressAt = (phase: "down" | "move" | "up" | "cancel", at: Vector3, o: Partial<Press> = {}): void => press(phase, onHost(at), o);
   // What a fingertip can touch: the table, each tablet's face, and the panel.
-  const flat = (id: string, mesh: Mesh, width: number, height: number, axis: "y" | "z"): HandSurface => {
-    const m = mesh.computeWorldMatrix(true);
-    const inverse = m.clone().invert();
-    const normal = Vector3.TransformNormal(axis === "y" ? Vector3.Up() : new Vector3(0, 0, -1), m).normalize();
-    return {
-      id, point: m.getTranslation(), normal,
-      contains: (at, margin) => {
-        const local = Vector3.TransformCoordinates(at, inverse);
-        const sx = Vector3.TransformNormal(Vector3.Right(), m).length();
-        const sv = Vector3.TransformNormal(axis === "y" ? Vector3.Forward() : Vector3.Up(), m).length();
-        return Math.abs(local.x) * sx <= width / 2 + margin && Math.abs(axis === "y" ? local.z : local.y) * sv <= height / 2 + margin;
-      },
-    };
-  };
   const surfaces = (): HandSurface[] => {
     const t = floor.table;
     const list: HandSurface[] = [];
-    for (const tablet of tablets.values()) list.push(flat(`tablet:${tablet.id}`, tablet.screen, tablet.rect.width / UNITS, tablet.rect.height / UNITS, "y"));
-    if (panel.isEnabled() && panel.isVisible) list.push(flat("panel", panel, 2.88, 1.8, "z"));
+    for (const tablet of tablets.values()) list.push(meshHandSurface(`tablet:${tablet.id}`, tablet.screen, tablet.rect.width / UNITS, tablet.rect.height / UNITS, "y"));
+    if (panel.isEnabled() && panel.isVisible) list.push(meshHandSurface("panel", panel, 2.88, 1.8, "z"));
     list.push({
       id: "table", point: new Vector3(t.center.x, 0, t.center.z), normal: Vector3.Up(),
       contains: (at, margin) => Math.abs(at.x - t.center.x) <= t.width / 2 + margin && Math.abs(at.z - t.center.z) <= t.depth / 2 + margin,
@@ -1242,15 +1239,27 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       things: () => [...things].map(([id, t]) => ({ id, mesh: t.mesh })),
       surfaces,
       press: (phase, at, pointer, time, buttons) => pressAt(phase, at, { pointerId: pointer, pointerType: "touch", timeStamp: time, buttons }),
-      hold: (pointer, id, at) => {
+      hold: (pointer, id, at, orientation) => {
         const thing = id ? things.get(id) : undefined;
         if (!thing || !at) {
           handHolds.delete(pointer);
           return;
         }
         const was = handHolds.get(pointer);
-        if (was?.thing === thing) was.target = at.clone();
-        else handHolds.set(pointer, { thing, offset: thing.mesh.getAbsolutePosition().subtract(at), target: at.clone() });
+        let hold = was;
+        if (hold?.thing !== thing) {
+          const offset = thing.mesh.getAbsolutePosition().subtract(at);
+          const rotation = thing.mesh.rotationQuaternion ?? Quaternion.FromEulerVector(thing.mesh.rotation);
+          hold = { thing, offset: orientation ? offset.applyRotationQuaternion(orientation.conjugate()) : offset, target: at.clone(),
+            ...(orientation ? { relative: orientation.conjugate().multiply(rotation), rotation: rotation.clone() } : {}) };
+          handHolds.set(pointer, hold);
+        }
+        hold.target = at.clone();
+        if (orientation && hold.relative) {
+          // The grab point stays attached to the object as the palm turns.
+          hold.target.addInPlace(hold.offset.applyRotationQuaternion(orientation).subtract(hold.offset));
+          hold.rotation = orientation.multiply(hold.relative);
+        }
       },
     },
     { metersPerUnit: 1, ...(options.hands ?? {}) },

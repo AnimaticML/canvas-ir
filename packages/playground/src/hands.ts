@@ -14,7 +14,7 @@
 //
 // The joints are MediaPipe's: 0 the wrist, 4 the thumb's tip, 5 and 17 the knuckles across the palm, 8 the index tip.
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
-import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { PhysicsMotionType, PhysicsShapeType } from "@babylonjs/core/Physics/v2/IPhysicsEnginePlugin";
@@ -44,6 +44,36 @@ export interface HandSurface {
   contains(at: Vector3, margin: number): boolean;
 }
 
+/** Surface dimensions are in mesh-local units; the edge tolerance is in room units. */
+export const meshHandSurface = (id: string, mesh: AbstractMesh, width: number, height: number, axis: "y" | "z"): HandSurface => {
+  const m = mesh.computeWorldMatrix(true).clone(), inverse = m.clone().invert();
+  const sx = Vector3.TransformNormal(Vector3.Right(), m).length();
+  const sv = Vector3.TransformNormal(axis === "y" ? Vector3.Forward() : Vector3.Up(), m).length();
+  return {
+    id, point: m.getTranslation(),
+    normal: Vector3.TransformNormal(axis === "y" ? Vector3.Up() : new Vector3(0, 0, -1), m).normalize(),
+    contains: (at, margin) => {
+      const local = Vector3.TransformCoordinates(at, inverse);
+      return Math.abs(local.x) <= width / 2 + margin / sx && Math.abs(axis === "y" ? local.z : local.y) <= height / 2 + margin / sv;
+    },
+  };
+};
+
+/** A proper room-space palm rotation. Degenerate/noisy palms retain the last orientation. */
+export const handOrientation = (j: readonly Vector3[]): Quaternion | null => {
+  const x = j[INDEX_KNUCKLE]!.subtract(j[PINKY_KNUCKLE]!);
+  const forward = j[MIDDLE_KNUCKLE]!.subtract(j[WRIST]!);
+  const z = Vector3.Cross(x, forward);
+  if (x.lengthSquared() < 1e-10 || z.lengthSquared() < 1e-12) return null;
+  x.normalize(); z.normalize();
+  return Quaternion.RotationQuaternionFromAxis(x, Vector3.Cross(z, x).normalize(), z);
+};
+
+export interface HandContact {
+  time: number; handId: string; part: string; target: string; impulse: number;
+  position: Vector3; velocity: Vector3; point: Vector3 | null;
+}
+
 /** What the board gives the hands. */
 export interface HandHost {
   readonly scene: BabylonScene;
@@ -54,7 +84,7 @@ export interface HandHost {
   /** Presses, moves, lifts or cancels a pointer at a room point: it goes where that point is seen from the camera. `buttons` 0 hovers. */
   press(phase: "down" | "move" | "up" | "cancel", at: Vector3, pointer: number, time: number, buttons: number): void;
   /** Holds a thing at a room point, pulled there each frame, or lets it go (`id` null), thrown with the speed it has. */
-  hold(pointer: number, id: string | null, at?: Vector3): void;
+  hold(pointer: number, id: string | null, at?: Vector3, orientation?: Quaternion): void;
 }
 
 export interface HandOptions {
@@ -115,6 +145,7 @@ class Hand {
   /** The pointer a pinch presses with, while it's down. */
   pinchDown = false;
   holding: string | null = null;
+  orientation: Quaternion | null = null;
   /** The surface the fingertip is pressing, and where. */
   touching: { surface: string; at: Vector3 } | null = null;
   hovering = false;
@@ -135,6 +166,8 @@ export class Hands {
   options: HandOptions;
   private readonly hands = new Map<string, Hand>();
   private nextPointer = 1000;
+  /** Bounded real Havok contacts, in room coordinates, for diagnostics. */
+  readonly contacts: HandContact[] = [];
 
   constructor(
     private readonly host: HandHost,
@@ -195,18 +228,23 @@ export class Hands {
     if (pinching) {
       this.solid(hand, null);
       if (hand.touching) this.lift(hand, time, true);
-      if (!hand.pinched) {
-        // Just closed: next to a thing, it takes hold of it; anywhere else it presses where it points.
-        const near = this.nearest(mid);
+      hand.orientation = handOrientation(j) ?? hand.orientation;
+      if (hand.holding && ![...this.host.things()].some(t => t.id === hand.holding)) {
+        this.host.hold(pinchPointer, null); hand.holding = null;
+      }
+      // A closed pinch may enter the grab zone later. Cancel any prior pointer
+      // drag before promoting it to a physical hold; never send a stray click.
+      if (!hand.holding) {
+        const near = this.nearest(mid, hand);
         if (near && near.gap <= this.units(o.reach)) {
-          hand.holding = near.id;
-          this.host.hold(pinchPointer, near.id, mid);
-        } else {
-          this.host.press("down", mid, pinchPointer, time, 1);
-          hand.pinchDown = true;
+          if (hand.pinchDown) this.host.press("cancel", mid, pinchPointer, time, 0);
+          hand.pinchDown = false; hand.holding = near.id;
         }
-      } else if (hand.holding) this.host.hold(pinchPointer, hand.holding, mid);
-      else if (hand.pinchDown) this.host.press("move", mid, pinchPointer, time, 1);
+      }
+      if (hand.holding) this.host.hold(pinchPointer, hand.holding, mid, hand.orientation ?? undefined);
+      else if (!hand.pinched) {
+        this.host.press("down", mid, pinchPointer, time, 1); hand.pinchDown = true;
+      } else if (hand.pinchDown) this.host.press("move", mid, pinchPointer, time, 1);
       hand.pinched = true;
       hand.state = { id: hand.id, action: hand.holding ? "hold" : "pinch", target: hand.holding, gap: null, pinch: ratio };
       return;
@@ -223,6 +261,14 @@ export class Hands {
     this.solid(hand, j);
     if (!o.touch) {
       hand.state = { id: hand.id, action: "idle", target: null, gap: null, pinch: ratio };
+      return;
+    }
+    // A solid fingertip touching an actor must not also click a panel behind it.
+    const actor = this.nearest(tip, hand);
+    if (o.solid && actor && actor.gap <= this.units(SOLID[0].radius)) {
+      this.lift(hand, time, true);
+      const contact = [...this.contacts].reverse().find(c => c.handId === hand.id && c.target === actor.id && performance.now() - c.time < 350);
+      hand.state = { id: hand.id, action: contact ? "touch" : "hover", target: actor.id, gap: actor.gap * o.metersPerUnit, pinch: ratio };
       return;
     }
     // The fingertip against the surfaces: pressing one it touches, hovering one it's over.
@@ -280,9 +326,10 @@ export class Hands {
   }
 
   /** The thing nearest a point, by the gap to its box. */
-  private nearest(at: Vector3): { id: string; gap: number } | null {
+  private nearest(at: Vector3, hand: Hand): { id: string; gap: number } | null {
     let best: { id: string; gap: number } | null = null;
     for (const t of this.host.things()) {
+      if ([...this.hands.values()].some(h => h !== hand && h.holding === t.id)) continue;
       t.mesh.computeWorldMatrix(true);
       const box = t.mesh.getBoundingInfo().boundingBox;
       const gap = dist(at, Vector3.Clamp(at, box.minimumWorld, box.maximumWorld));
@@ -306,6 +353,15 @@ export class Hands {
       body.body.setMotionType(PhysicsMotionType.ANIMATED);
       body.shape.filterCollideMask = 0;
       hand.bodies.push({ mesh, body, on: false });
+      body.body.setCollisionCallbackEnabled(true);
+      body.body.getCollisionObservable().add(event => {
+        const other = event.collider === body.body ? event.collidedAgainst : event.collider;
+        const actor = [...this.host.things()].find(t => t.mesh === other.transformNode);
+        if (!actor) return;
+        this.contacts.push({ time: performance.now(), handId: hand.id, part: s.name, target: actor.id, impulse: event.impulse,
+          position: actor.mesh.getAbsolutePosition().clone(), velocity: other.getLinearVelocity().clone(), point: event.point?.clone() ?? null });
+        if (this.contacts.length > 60) this.contacts.shift();
+      });
     }
   }
 
@@ -330,8 +386,9 @@ export class Hands {
         b.mesh.position.copyFrom(at);
         b.body.body.disablePreStep = false;
         this.host.scene.onAfterPhysicsObservable.addOnce(() => {
+          if (b.mesh.isDisposed()) return;
           b.body.body.disablePreStep = true;
-          if (b.on) b.body.shape.filterCollideMask = 0xffffffff;
+          if (!b.mesh.isDisposed() && b.on) b.body.shape.filterCollideMask = 0xffffffff;
         });
         b.on = true;
         return;
