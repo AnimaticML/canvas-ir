@@ -3,7 +3,7 @@
 import { type ComponentHandle, type ComponentSpec, type IRDocument, type Morph, RecordingContext, applyToPoint, invert, keyByMeta, morph } from "canvas-ir";
 
 export const MORPH_ID = "morph-demo";
-export const MORPH_AT = { x: 1500, y: 980 };
+export const MORPH_AT = { x: 2272, y: 76 };
 const at = MORPH_AT;
 
 const scene = (draw: (ctx: RecordingContext, part: (name: string, body: () => void) => void) => void): IRDocument => {

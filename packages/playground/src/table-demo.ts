@@ -7,7 +7,7 @@ import { type ComponentHandle, type ComponentSpec, type Components, type EventRo
 import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
 
 export const TABLE_ID = "million-rows";
-export const TABLE_AT = { x: 1200, y: 2500 };
+export const TABLE_AT = { x: 3783, y: 21 };
 const ROWS = 1_000_000;
 const ROW = 28;
 const TITLE = 44;

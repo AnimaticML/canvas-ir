@@ -5,7 +5,7 @@ import bookUrl from "./book/war-and-peace.txt" with { type: "file" };
 import type { Entry, ReaderSpec, SectionSource } from "./reader";
 
 export const BOOK_ID = "war-and-peace";
-export const BOOK_AT = { x: 1300, y: 4350 };
+export const BOOK_AT = { x: 100, y: 1790 };
 
 const roman = (s: string): string => s.replace(/^CHAPTER /, "Chapter ");
 const titleCase = (s: string): string => s.toLowerCase().replace(/(^|[\s:])([a-z])/g, (_, a: string, b: string) => a + b.toUpperCase());

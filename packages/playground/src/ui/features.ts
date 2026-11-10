@@ -1,14 +1,15 @@
-// The playground's demos as icons scattered over the board, as on a desktop:
-// each is a tile with a small drawing of its demo, and pressing it opens the
-// demo's window next to it, or closes it when it's open.
+// The playground's demos as icons on the board, as on a desktop: each is a
+// tile with a small drawing of its demo, and pressing it opens the demo's
+// window, or closes it when it's open.
 // They are components on the cards' layer, so they zoom with the board but
 // are never part of the drawing.
 import type { ComponentSpec, RecordingContext } from "canvas-ir";
 import { FONT, type Palette } from "./kit";
 
-/** A tile's side in world units; what it adds goes this far right of its left edge, and a gap more. */
+/** A tile's side in world units. */
 export const ICON = 150;
-export const ICON_REACH = ICON + 50;
+/** How wide an icon's name may be before it wraps. */
+const LABEL = 220;
 
 export type Glyph =
   | "pelican"
@@ -43,7 +44,7 @@ export interface Feature {
   /** The tile's top left corner on the board. */
   readonly x: number;
   readonly y: number;
-  /** A slight turn, in degrees, so the tiles look scattered rather than laid out. */
+  /** A slight turn, in degrees, for tiles that should look scattered rather than laid out; 0 stands them straight. */
   readonly tilt: number;
   /** Whether its window is open now; an icon without one is an action, such as picking a file. */
   readonly open?: () => boolean;
@@ -118,11 +119,18 @@ export const featureIcon = (f: Feature, colors: () => Palette): ComponentSpec<nu
       c.textBaseline = "top";
       c.fillStyle = INK;
       // The board stays light in dark mode, so the label keeps dark ink.
-      c.fillText(f.name, ICON / 2, ICON + 12);
+      // The name wraps to lines no wider than the space between icons.
+      const lines: string[] = [];
+      for (const word of f.name.split(" ")) {
+        const line = lines.length ? `${lines[lines.length - 1]} ${word}` : word;
+        if (lines.length && c.measureText(line).width <= LABEL) lines[lines.length - 1] = line;
+        else lines.push(word);
+      }
+      lines.forEach((line, i) => c.fillText(line, ICON / 2, ICON + 12 + i * 26));
       // An open window shows as a dot under its icon's name, as a dock does.
       if (f.open?.()) {
         c.beginPath();
-        c.arc(ICON / 2, ICON + 52, 5, 0, Math.PI * 2);
+        c.arc(ICON / 2, ICON + 30 + lines.length * 26, 5, 0, Math.PI * 2);
         c.fillStyle = k.accent;
         c.fill();
       }

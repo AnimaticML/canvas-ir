@@ -438,7 +438,7 @@ const shapes: Sample = {
   },
 };
 
-/** A stress test: 10,000 small shapes to the right of the board, each its own object. Zoom out to see them all. */
+/** A stress test: 10,000 small shapes, each its own object. Zoom out to see them all. */
 const field: Sample = {
   name: "10,000 shapes",
   draw: (ctx) => {
@@ -449,7 +449,7 @@ const field: Sample = {
     };
     for (let i = 0; i < 10_000; i++) {
       ctx.save();
-      ctx.translate(1000 + random() * 3000, random() * 2000);
+      ctx.translate(random() * 2000, random() * 1300);
       ctx.rotate(random() * Math.PI * 2);
       ctx.fillStyle = `hsl(${i % 360} 60% 60%)`;
       ctx.strokeStyle = `hsl(${(i * 7) % 360} 50% 35%)`;

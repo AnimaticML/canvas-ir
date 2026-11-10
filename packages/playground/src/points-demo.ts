@@ -10,7 +10,7 @@ import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
 import { WheelGesture } from "./wheel";
 
 export const POINTS_ID = "ten-million";
-export const POINTS_AT = { x: -560, y: 3150 };
+export const POINTS_AT = { x: 100, y: 720 };
 const N = 10_000_000;
 const YEAR = Date.UTC(2025, 0, 1);
 const STEP = (365 * 86_400_000) / N;

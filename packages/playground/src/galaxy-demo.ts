@@ -14,7 +14,7 @@ import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
 import { WheelGesture } from "./wheel";
 
 export const GALAXY_ID = "galaxy";
-export const GALAXY_AT = { x: 1300, y: 3250 };
+export const GALAXY_AT = { x: 1680, y: 720 };
 const W = 1400;
 const TITLE = 46;
 const H = 840;

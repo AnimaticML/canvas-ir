@@ -47,7 +47,7 @@ import { Reader } from "./reader";
 import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, samples } from "./samples";
 import { Chrome, type Settings } from "./ui/chrome";
-import { type Feature, ICON_REACH, featureIcon } from "./ui/features";
+import { type Feature, featureIcon } from "./ui/features";
 import { windowFrame } from "./ui/window";
 import { CardLayer } from "./ui/cards";
 import { textSink } from "./ui/kit";
@@ -873,15 +873,13 @@ const hooks: ControlHooks = {
   get: (id) => components?.get(id),
 };
 
-/** How many times each sample was added from its icon, so copies step aside from each other. */
-const copies = new Map<string, number>();
-
 /**
  * Draws more onto the board: the current document is replayed into a new
- * recorder, then the sample is drawn after it. Added from an icon, it is
- * moved to the right of `near`, as a drag would move it.
+ * recorder, then the sample is drawn after it. Given a place, it is moved
+ * there, as a drag would move it: its top left at `at`, or its middle at
+ * `at.y` with `middle`.
  */
-const add = async (sample: Sample, near?: { x: number; y: number }): Promise<string[]> => {
+const add = async (sample: Sample, at?: { x: number; y: number; middle?: boolean }): Promise<string[]> => {
   const recorder = new RecordingContext(recorderOptions);
   const before = scene.document.ops;
   replayDocument(recorder, scene.document, { images: (src) => images.get(src) });
@@ -924,11 +922,9 @@ const add = async (sample: Sample, near?: { x: number; y: number }): Promise<str
   const added = scene.document.ops.slice(before.length).map((op) => op.id);
   const outer = [...new Set(added.map((op) => scene.groupChain(op).at(-1) ?? op))];
   let box = boxOf(added);
-  if (near && box) {
-    const n = copies.get(sample.name) ?? 0;
-    copies.set(sample.name, n + 1);
-    const dx = near.x + ICON_REACH + n * 36 - box.x;
-    const dy = near.y + n * 36 - box.y;
+  if (at && box) {
+    const dx = at.x - box.x;
+    const dy = at.y - (at.middle ? box.height / 2 : 0) - box.y;
     // Each new outermost group moves as one, with what is laid out against it.
     for (const id of outer) {
       components!.move(id, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
@@ -1099,7 +1095,7 @@ const morphDemo = (): void => {
 };
 
 // The pelican on its bicycle: poses drawn an eighth of a pedal turn apart, morphed into every frame between.
-const PELICAN_AT = { x: 1850, y: -40 };
+const PELICAN_AT = { x: 116, y: 76 };
 const ride = new Ride(PELICAN_AT);
 let position = 0;
 let riding = 0;
@@ -1388,8 +1384,9 @@ const closePaint = (): void => {
   components!.unmount(PAINT_ID);
 };
 
-// Every demo is an icon on the board, as on a desktop: pressing it opens the demo's window to its right, and pressing it again closes it.
-const DEMO = (at: { x: number; y: number }) => ({ x: at.x - ICON_REACH, y: at.y });
+// Every demo is an icon on the board, as on a desktop: the icons stand in a grid under the cards, and pressing one opens
+// its demo's window in its own place to their right and flies there; pressing it again closes it.
+const iconAt = (i: number): { x: number; y: number; tilt: number } => ({ x: -740 + (i % 3) * 240, y: 760 + Math.floor(i / 3) * 250, tilt: 0 });
 const toggle = (open: () => boolean, show: () => void, hide: () => void) => ({
   open,
   onClick: () => {
@@ -1402,28 +1399,26 @@ const toggle = (open: () => boolean, show: () => void, hide: () => void) => ({
   },
 });
 const features: Feature[] = [
-  { id: "pelican", name: "Pelican", glyph: "pelican", ...DEMO(PELICAN_AT), tilt: -6, ...toggle(() => scene.getGroup(PELICAN_ID) !== undefined, pelicanDemo, closePelican) },
-  { id: "physics", name: "Physics", glyph: "physics", ...DEMO(PHYSICS_AT), tilt: 5, ...toggle(() => scene.getGroup(PHYSICS_ID) !== undefined, physicsDemo, closePhysics) },
-  { id: "graph", name: "Graph", glyph: "graph", ...DEMO(GRAPH_AT), tilt: -4, ...toggle(() => scene.getGroup(GRAPH_ID) !== undefined, graphDemo, closeGraph) },
-  { id: "morph", name: "Morph", glyph: "morph", ...DEMO(MORPH_AT), tilt: 7, ...toggle(() => scene.getGroup(MORPH_ID) !== undefined, morphDemo, closeMorph) },
-  { id: "paint", name: "Paint by numbers", glyph: "paint", ...DEMO(PAINT_AT), tilt: -5, ...toggle(() => components?.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), closePaint) },
-  { id: "table", name: "A million rows", glyph: "table", ...DEMO(TABLE_AT), tilt: -3, ...toggle(() => table?.alive === true, tableDemo, () => table?.close()) },
-  { id: "points", name: "Ten million points", glyph: "points", ...DEMO(POINTS_AT), tilt: 5, ...toggle(() => points?.alive === true, pointsDemo, () => points?.close()) },
-  { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...DEMO(GALAXY_AT), tilt: -4, ...toggle(() => galaxy?.alive === true, galaxyDemo, () => galaxy?.close()) },
-  { id: "map", name: "World map", glyph: "map", ...DEMO(MAP_AT), tilt: 3, ...toggle(() => worldMap?.alive === true, mapDemo, () => worldMap?.close()) },
-  { id: "book", name: "War and Peace", glyph: "book", ...DEMO(BOOK_AT), tilt: -5, ...toggle(() => book?.alive === true, bookDemo, () => book?.close()) },
-  { id: "declaration", name: "Human rights in 529 languages", glyph: "languages", ...DEMO(DECLARATION_AT), tilt: 4, ...toggle(() => rights?.alive === true, declarationDemo, () => rights?.close()) },
-  { id: "picture", name: "Paint my image…", glyph: "picture", x: PAINT_AT.x - ICON_REACH, y: PAINT_AT.y + 240, tilt: 4, onClick: () => pictureInput.click() },
+  { id: "pelican", name: "Pelican", glyph: "pelican", ...iconAt(0), ...toggle(() => scene.getGroup(PELICAN_ID) !== undefined, pelicanDemo, closePelican) },
+  { id: "physics", name: "Physics", glyph: "physics", ...iconAt(1), ...toggle(() => scene.getGroup(PHYSICS_ID) !== undefined, physicsDemo, closePhysics) },
+  { id: "graph", name: "Graph", glyph: "graph", ...iconAt(2), ...toggle(() => scene.getGroup(GRAPH_ID) !== undefined, graphDemo, closeGraph) },
+  { id: "morph", name: "Morph", glyph: "morph", ...iconAt(3), ...toggle(() => scene.getGroup(MORPH_ID) !== undefined, morphDemo, closeMorph) },
+  { id: "paint", name: "Paint by numbers", glyph: "paint", ...iconAt(4), ...toggle(() => components?.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), closePaint) },
+  { id: "table", name: "A million rows", glyph: "table", ...iconAt(6), ...toggle(() => table?.alive === true, tableDemo, () => table?.close()) },
+  { id: "points", name: "Ten million points", glyph: "points", ...iconAt(7), ...toggle(() => points?.alive === true, pointsDemo, () => points?.close()) },
+  { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...iconAt(8), ...toggle(() => galaxy?.alive === true, galaxyDemo, () => galaxy?.close()) },
+  { id: "map", name: "World map", glyph: "map", ...iconAt(9), ...toggle(() => worldMap?.alive === true, mapDemo, () => worldMap?.close()) },
+  { id: "book", name: "War and Peace", glyph: "book", ...iconAt(10), ...toggle(() => book?.alive === true, bookDemo, () => book?.close()) },
+  { id: "declaration", name: "Human rights in 529 languages", glyph: "languages", ...iconAt(11), ...toggle(() => rights?.alive === true, declarationDemo, () => rights?.close()) },
+  { id: "picture", name: "Paint my image…", glyph: "picture", ...iconAt(5), onClick: () => pictureInput.click() },
   {
     id: "many",
     name: "10,000 shapes",
     glyph: "many",
-    x: 2000,
-    y: 1850,
-    tilt: -4,
+    ...iconAt(12),
     ...toggle(
       fieldOpen,
-      () => void add(sampleNamed("10,000 shapes"), { x: 2000, y: 1850 }).then((ids) => {
+      () => void add(sampleNamed("10,000 shapes"), FIELD_AT).then((ids) => {
         field = ids;
         refreshIcons();
       }),
@@ -1442,19 +1437,21 @@ function refreshIcons(): void {
 
 // Drawings, text and graphics need no icon: they are on the board from the start and explain themselves.
 const sampleNamed = (name: string): Sample => samples.find((sample) => sample.name === name)!;
-const CONTENT: readonly (readonly [string, number, number])[] = [
-  ["Badge", -650, -720],
-  ["Chart", 0, -780],
-  ["Star", 800, -700],
-  ["Text block", 1300, -760],
-  ["Text around shapes", 2050, -720],
-  ["Text in a circle", 2800, -760],
-  ["Canvas shapes", 2650, 40],
-  ["Controls", 1700, 560],
-  ["Chart.js chart", 2650, 620],
-  ["D3 chart", 2300, 1080],
-  ["HTML and 3D", 1000, 1900],
+const CONTENT: readonly string[] = [
+  "Text block",
+  "Text around shapes",
+  "Text in a circle",
+  "Badge",
+  "Star",
+  "Chart",
+  "Canvas shapes",
+  "Controls",
+  "Chart.js chart",
+  "D3 chart",
+  "HTML and 3D",
 ];
+/** Where the ten thousand shapes go when their icon is pressed: beside the books, in the last row of windows. */
+const FIELD_AT = { x: 2620, y: 1790 };
 
 /** Opens the board in 3D, starting above what this view shows. */
 function viewIn3d(): void {
@@ -1503,7 +1500,14 @@ chrome.setText("log", logLines.join("\n"));
 chrome.setText("a11y", a11yText);
 showSelection();
 
-for (const [name, x, y] of CONTENT) await add(sampleNamed(name), { x, y });
+// The content lies in a row across the top of the board, above the cards, the icons and the windows.
+{
+  let x = -740;
+  for (const name of CONTENT) {
+    const box = boxOf(await add(sampleNamed(name), { x, y: -300, middle: true }));
+    x = (box ? box.x + box.width : x) + 190;
+  }
+}
 initial = false;
 // The board in 3D shows this page in a frame: opened from here, it starts where this view is and tilts down into the room.
 const KEPT = "canvasIrView";

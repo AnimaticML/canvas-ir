@@ -19,7 +19,7 @@ import { type Pin, article, articlesIn, titleNear, titleOf } from "./wiki";
 import { LAND, PLACE_ZOOM, type Paint, type TileFeature, paint, placeOf, tile, tileZoom } from "./osm";
 
 export const MAP_ID = "world-map";
-export const MAP_AT = { x: -560, y: 3850 };
+export const MAP_AT = { x: 3160, y: 776 };
 const W = 1400;
 const TITLE = 46;
 const H = 840;

@@ -7,7 +7,7 @@ import { type ComponentSpec, RecordingContext, type RegionMap, type RegionOutlin
 import { type PaletteColor, type VectorizeResult, vectorize } from "@canvas-ir/vectorize";
 
 export const PAINT_ID = "paint-by-numbers";
-export const PAINT_AT = { x: -540, y: 1880 };
+export const PAINT_AT = { x: 2920, y: 92 };
 const W = 240;
 const H = 160;
 /** The previews' width and the template's largest size on the board. */

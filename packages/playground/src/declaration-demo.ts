@@ -9,7 +9,7 @@ import declarationUrl from "./declaration/udhr.txt" with { type: "file" };
 import type { Entry, ReaderSpec, SectionSource } from "./reader";
 
 export const DECLARATION_ID = "human-rights";
-export const DECLARATION_AT = { x: 1300, y: 5400 };
+export const DECLARATION_AT = { x: 1360, y: 1790 };
 
 export const declaration: ReaderSpec = {
   id: DECLARATION_ID,
