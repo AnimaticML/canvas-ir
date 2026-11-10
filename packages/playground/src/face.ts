@@ -69,7 +69,6 @@ export class FaceTracker {
     this.stream = null;
     this.video.srcObject = null;
     this.last = null;
-    this.onEye(null);
   }
 
   private detect(): void {

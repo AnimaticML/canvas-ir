@@ -1011,30 +1011,54 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   // Looking through the screen as through a window, from where the viewer's eye is. The navigation camera still decides
   // what the window looks onto; a camera of its own stands at the eye and looks through the window's edges.
   const viewerCamera = new FreeCamera("viewer", camera.position.clone(), scene);
-  let eyeWanted: Eye | null = null;
+  // The view follows the head from where it is when it starts, as any control moves the view from where it is: the eye seen
+  // first stands for where the navigation's own view is seen from, and the head's moves from there move the view, scaled by
+  // how far away it was (so leaning in by a tenth of the way comes a tenth of the way closer, however far you sit). A face
+  // that leaves the camera leaves the view where it was, and one that comes back carries on from there.
   let eyeShown: Eye | null = null;
-  let eyeSince = 0;
+  let eyeGoal: Eye | null = null;
+  let anchor: { raw: Eye; shown: Eye } | null = null;
+  let eyeScale = 1;
+  let releasing = false;
   const screenSize = (): { width: number; height: number } => screenMeters(canvas.clientWidth || 1, canvas.clientHeight || 1, matchMedia("(pointer: coarse)").matches);
   /** Where the eye has to be for the navigation camera's own view: on the axis, as far as its field of view says for this screen. */
   const nominalEye = (): Eye => ({ x: 0, y: 0, z: screenSize().height / 2 / Math.tan(camera.fov / 2) });
   const viewer = {
+    /** How far the view moves for a move of the head: 1 as a window would. */
+    strength: 1,
     get screen() {
       return screenSize();
     },
     update(eye: Eye | null): void {
-      eyeWanted = eye;
-      if (eye) eyeSince = performance.now();
-      if (eye && !eyeShown) eyeShown = nominalEye();
+      if (!eye) {
+        anchor = null;
+        return;
+      }
+      releasing = false;
+      if (!eyeShown) {
+        eyeShown = nominalEye();
+        eyeScale = eyeShown.z / Math.max(0.05, eye.z);
+      }
+      anchor ??= { raw: eye, shown: eyeGoal ?? eyeShown };
+      const k = eyeScale * viewer.strength;
+      const a = anchor;
+      eyeGoal = { x: a.shown.x + (eye.x - a.raw.x) * k, y: a.shown.y + (eye.y - a.raw.y) * k, z: Math.max(0.02, a.shown.z + (eye.z - a.raw.z) * k) };
+    },
+    /** Goes back to the navigation's own view, smoothly. */
+    release(): void {
+      anchor = null;
+      if (eyeShown) {
+        eyeGoal = nominalEye();
+        releasing = true;
+      }
     },
   };
   const placeViewer = (dt: number): void => {
-    // A face lost for a moment keeps its place; lost for longer, the view eases back to the navigation's own.
-    const lost = !eyeWanted && performance.now() - eyeSince > 600;
     if (!eyeShown || options.ar || mode !== "3d") {
       if (scene.activeCamera === viewerCamera) scene.activeCamera = camera;
       return;
     }
-    const goal = eyeWanted ?? (lost ? nominalEye() : eyeShown);
+    const goal = eyeGoal ?? eyeShown;
     const k = 1 - Math.exp(-dt * 14);
     eyeShown = { x: eyeShown.x + (goal.x - eyeShown.x) * k, y: eyeShown.y + (goal.y - eyeShown.y) * k, z: eyeShown.z + (goal.z - eyeShown.z) * k };
     const target = camera.target;
@@ -1051,13 +1075,23 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     viewerCamera.maxZ = far;
     viewerCamera.freezeProjectionMatrix(projection);
     scene.activeCamera = viewerCamera;
-    if (lost && Math.abs(eyeShown.x) + Math.abs(eyeShown.y) + Math.abs(eyeShown.z - goal.z) < 1e-3) {
+    if (releasing && Math.abs(eyeShown.x - goal.x) + Math.abs(eyeShown.y - goal.y) + Math.abs(eyeShown.z - goal.z) < 1e-4) {
       eyeShown = null;
+      eyeGoal = null;
+      releasing = false;
       scene.activeCamera = camera;
     }
   };
-  // The front camera, for "Look with your head".
+  // The front camera, for "Look with your head", with its settings: the webcam's field of view and how strong the effect is.
   const headButton = options.head;
+  const kept = (() => {
+    try {
+      return JSON.parse(localStorage.getItem("canvasIrHead") ?? "{}") as { fov?: number; strength?: number };
+    } catch {
+      return {};
+    }
+  })();
+  viewer.strength = kept.strength ?? 1;
   const head = headButton
     ? new FaceTracker((eye) => {
         viewer.update(eye);
@@ -1065,14 +1099,46 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
         if (eye && now - headLogged > 700) {
           headLogged = now;
           log(`eye ${Math.round(eye.z * 100)} cm from the screen, ${Math.round(Math.abs(eye.x) * 100)} cm ${eye.x < 0 ? "left" : "right"}, ${Math.round(Math.abs(eye.y) * 100)} cm ${eye.y < 0 ? "down" : "up"}`);
+        } else if (!eye && now - headLogged > 700) {
+          headLogged = now;
+          log("no face in view: the view stays where it is");
         }
-      }, { fov: 63, camera: { x: 0, y: screenSize().height / 2 + 0.008 } })
+      }, { fov: kept.fov ?? 63, camera: { x: 0, y: screenSize().height / 2 + 0.008 } })
     : null;
   let headLogged = 0;
+  const settings = document.createElement("div");
+  settings.className = "head-settings";
+  settings.hidden = true;
+  const slider = (label: string, min: number, max: number, step: number, value: number, show: (v: number) => string, set: (v: number) => void): void => {
+    const row = document.createElement("label");
+    const name = document.createElement("span");
+    const input = document.createElement("input");
+    const out = document.createElement("output");
+    name.textContent = label;
+    Object.assign(input, { type: "range", min: String(min), max: String(max), step: String(step), value: String(value) });
+    out.textContent = show(value);
+    input.addEventListener("input", () => {
+      const v = Number(input.value);
+      out.textContent = show(v);
+      set(v);
+      try {
+        localStorage.setItem("canvasIrHead", JSON.stringify({ fov: head?.options.fov, strength: viewer.strength }));
+      } catch {}
+    });
+    row.append(name, input, out);
+    settings.append(row);
+  };
+  if (head) {
+    slider("Webcam angle", 40, 100, 1, head.options.fov, (v) => `${v}°`, (v) => (head.options = { ...head.options, fov: v }));
+    slider("Strength", 0.25, 2, 0.05, viewer.strength, (v) => `${v.toFixed(2)}×`, (v) => (viewer.strength = v));
+    headButton?.parentElement?.before(settings);
+  }
   const headOn = async (on: boolean): Promise<void> => {
     if (!head || !headButton) return;
     if (!on) {
       head.stop();
+      viewer.release();
+      settings.hidden = true;
       headButton.setAttribute("aria-pressed", "false");
       headButton.textContent = "Look with your head";
       return;
@@ -1083,6 +1149,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       await head.start();
       headButton.setAttribute("aria-pressed", "true");
       headButton.textContent = "Stop looking with your head";
+      settings.hidden = false;
       log("move your head: the screen is a window onto the table");
     } catch (error) {
       headButton.textContent = "Look with your head";

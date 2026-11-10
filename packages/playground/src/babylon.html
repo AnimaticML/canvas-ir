@@ -23,6 +23,12 @@
       .controls #fly[aria-pressed="true"] { background: #2563eb; color: #fff; }
       .controls #head { background: rgba(255, 255, 255, 0.9); color: #0f172a; }
       .controls #head[aria-pressed="true"] { background: #2563eb; color: #fff; }
+      .head-settings { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 3; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; padding: 8px 14px; border-radius: 14px; background: rgba(255, 255, 255, 0.9); color: #0f172a; font: 13px/1.2 system-ui, sans-serif; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.15); max-width: calc(100vw - 32px); }
+      .head-settings[hidden] { display: none; }
+      .head-settings label { display: flex; align-items: center; gap: 8px; }
+      .head-settings input { width: 120px; }
+      .head-settings output { min-width: 3.2em; font-variant-numeric: tabular-nums; }
+      .flying .head-settings { bottom: 212px; }
     </style>
   </head>
   <body>
