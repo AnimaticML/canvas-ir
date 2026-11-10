@@ -8,6 +8,7 @@ import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { startBabylon, type BabylonRuntime } from "../babylon";
 import { length, sub, rotate, transpose, toCamera, type Intrinsics, type Pose, type V3 } from "./geometry";
 
+import { VolumeDiagnostics } from "./volume";
 import { yaw, type Field } from "./settings";
 
 export interface InteractionResult { action: string; reason: string; target: string | null; distanceM?: number; pinch?: number }
@@ -28,6 +29,7 @@ export class ARScene {
   readonly engine;
   readonly scene;
   readonly original: BabylonRuntime;
+  readonly volume:VolumeDiagnostics;
   private scale = 0.025;
   private center: V3 = [0,0,0];
   private angle=0;
@@ -39,6 +41,7 @@ export class ARScene {
     this.roomCenter.copyFrom(this.original.floor.table.center);
     this.original.panel.scaling.setAll(Math.min(.14,f.width*.8,f.depth*.8)/(2.88*this.scale));
     this.original.panel.position.set(this.roomCenter.x,.035,this.roomCenter.z-f.depth/this.scale*.25);
+    this.volume.rebuild();
     for(const thing of this.original.things.values()){
       const p=thing.mesh.position;thing.mesh.computeWorldMatrix(true);
       const half=thing.mesh.getBoundingInfo().boundingBox.extendSizeWorld;
@@ -70,6 +73,7 @@ export class ARScene {
     this.fingertip.isPickable = false; this.fingertip.isVisible = false;
     this.cursorMaterial = new StandardMaterial("ar-finger", this.scene);
     this.cursorMaterial.emissiveColor = Color3.FromHexString("#91ffe0"); this.fingertip.material = this.cursorMaterial;
+    this.volume=new VolumeDiagnostics(this);
     this.scene.onBeforeRenderObservable.add(() => { if (performance.now() - this.lastHand > this.handTimeout) this.loseHand(); });
   }
   static async create(canvas: HTMLCanvasElement): Promise<ARScene> {
@@ -97,6 +101,7 @@ export class ARScene {
     this.fingertip.scaling.setAll(.006/this.scale);
     this.original.hands.clear();this.original.hands.contacts.length=0;
     this.original.hands.configure({metersPerUnit:this.scale,route:"ray",pressAt:.022,releaseAt:.045});
+    this.volume.rebuild();
   }
 
   room(p: V3): Vector3 { const q=rotate(transpose(yaw(this.angle)),sub(p,this.center));return new Vector3(q[0]/this.scale+this.roomCenter.x,q[1]/this.scale,-q[2]/this.scale+this.roomCenter.z); }
@@ -141,7 +146,7 @@ export class ARScene {
     // An omitted inference pass is not an empty tracked frame. Keep the common
     // hand untouched for brief misses; explicit loss/edit/stop clears it at once.
     if(!immediate&&performance.now()-this.lastHand<=this.handTimeout)return;
-    this.fingertip.isVisible=false;this.original.hands.clear();
+    this.volume.hide();this.fingertip.isVisible=false;this.original.hands.clear();
     this.result={action:"idle",reason:"hand-lost",target:null};
   }
   resetObjects(): void {

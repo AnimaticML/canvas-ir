@@ -225,6 +225,34 @@ try {
   const bounce=await page.evaluate(()=>[...window.canvasIrAR.scene.original.things.values()][0]!.body.shape.material.restitution);
   assert(Math.abs(bounce-(370-24)/432)<.025,`slider remains captured across slow/noisy frames: restitution ${bounce}`);
   }else{await page.evaluate(()=>{document.querySelector<HTMLVideoElement>("#video")!.pause();window.canvasIrAR.hand.metricScale=1;});}
+  // New diagnostics live inside the original scene; references never get Havok bodies.
+  await page.locator('#menu').click();await page.locator('#reference-settings').click();await page.locator('#reference-add').click();
+  for(const [key,value] of [['width','42'],['depth','37'],['height','23'],['x','-100'],['z','80'],['base','0'],['angle','17']])await page.locator(`#reference-${key}`).fill(value!);
+  await page.locator('#reference-kind').selectOption('box');await page.locator('#reference-locked').check();await page.locator('#reference-apply').click();
+  const reference=await page.evaluate(()=>window.canvasIrAR.scene.volume.references[0]!);
+  console.log('Reference UI',JSON.stringify(reference),'errors',errors);
+  const fixedGeometry=await page.evaluate(()=>{const s=window.canvasIrAR.scene,m=s.scene.meshes.find(m=>m.name===`reference/${s.volume.references[0]!.id}`)!,before=Array.from(m.getVerticesData('position')!),p=window.canvasIrAR.snapshot().pose;s.pose({...p,t:[p.t[0]+.03,p.t[1]+.02,p.t[2]+.05]},window.canvasIrAR.snapshot().intrinsics);const after=Array.from(m.getVerticesData('position')!);s.pose(p,window.canvasIrAR.snapshot().intrinsics);return JSON.stringify(before)===JSON.stringify(after);});assert(fixedGeometry,'reference geometry remains fixed while camera pose changes');
+  assert(reference.width===.042&&reference.height===.023&&reference.locked,'physical reference uses entered mm dimensions and explicit fixed pose');
+  await page.locator('#reference-x').fill('200');await page.locator('#reference-apply').click();assert(await page.evaluate(()=>window.canvasIrAR.scene.volume.references[0]!.x===-.1),'locked reference refuses movement');
+  await page.locator('#close-reference').click();
+  const volumeChecks=await page.evaluate(()=>{
+    const s=window.canvasIrAR.scene,v=s.volume,p=window.canvasIrAR.snapshot().pose,center:V3=[-.10,.10,.08],eye:V3=[0,0,0];
+    for(let i=0;i<3;i++)eye[i]=-p.r[i]!*p.t[0]-p.r[3+i]!*p.t[1]-p.r[6+i]!*p.t[2];
+    const d=center.map((n,i)=>n-eye[i]!) as V3,len=Math.hypot(...d);d.forEach((n,i)=>d[i]=n/len);
+    const saved=v.references.map(r=>({...r}));v.setReferences([{...saved[0]!,width:.08,depth:.08,height:.08,x:center[0],z:center[2],base:.06,angle:0,mode:'occluder'}]);v.selected=v.references[0]!.id;v.options={enabled:true,mode:'solid',fingerMm:14,palmMm:24,hidden:false,boardHidden:false};
+    v.selected='';const render=(offset:number,mode:'occluder'|'outline')=>{v.setReferences(v.references.map(r=>({...r,mode})));const tip=center.map((n,i)=>n+d[i]!*offset) as V3,points:V3[]=Array.from({length:21},(_,i)=>[.4+i*.001,.25,.2]);points[0]=[.4,.2,.2];points[5]=[.38,.25,.2];points[17]=[.42,.25,.2];points[6]=[tip[0]-.005,tip[1],tip[2]];points[7]=tip;points[8]=[tip[0]+.005,tip[1],tip[2]];
+      s.hand(points,false,performance.now(),1);v.update(points,true,{frameId:-1,capturedAt:performance.now()},'synthetic-browser-test');const image=s.diagnosticImage(),at=s.original.toCanvas(s.room(tip)),canvas=s.engine.getRenderingCanvas()!,r=canvas.getBoundingClientRect(),pixel=image.getContext('2d')!.getImageData(Math.round(at.x*image.width/r.width),Math.round(at.y*image.height/r.height),1,1).data;return [...pixel];};
+    const front=render(-.07,'occluder'),behind=render(.07,'occluder'),unmasked=render(.07,'outline');
+    const bodies=s.scene.meshes.filter(m=>m.name.startsWith('reference/')||m.name.startsWith('volume-')).some(m=>!!m.physicsBody);
+    v.selected=v.references[0]!.id;v.measure();v.options.boardHidden=true;s.diagnosticImage();const boardHidden=!s.original.floor.top.isVisible&&!!s.original.floor.top.physicsBody;v.options.boardHidden=false;s.diagnosticImage();const boardRestored=s.original.floor.top.isVisible;v.options.mode='transparent';v.options.hidden=true;v.update(v.joints!,true,v.source,'synthetic-browser-test');s.diagnosticImage();const transparent=s.scene.meshes.some(m=>m.name==='volume-hand-skeleton'&&m.isEnabled());const data=v.snapshot();v.setReferences(saved);v.options.enabled=false;v.hide();return{front,behind,unmasked,bodies,boardHidden,boardRestored,transparent,data};
+  });
+  console.log('Volume depth pixels',JSON.stringify(volumeChecks));
+  assert(volumeChecks.boardHidden&&volumeChecks.boardRestored&&volumeChecks.transparent,'board can be hidden without removing physics; transparent volume and depth-tested skeleton render');
+  assert(!volumeChecks.bodies,'diagnostic reference and hand geometry add no Havok bodies');
+  const green=(p:number[])=>p[1]!>p[0]!+20&&p[1]!>p[2]!;
+  assert(green(volumeChecks.front)&&!green(volumeChecks.behind)&&green(volumeChecks.unmasked),'actual depth buffer hides hand behind invisible reference and shows it in front');
+  await page.evaluate(()=>window.canvasIrAR.scene.volume.options.enabled=false);
+
   // Field edits go through the real UI; the scene, picking and Havok slab must agree.
   await page.evaluate(()=>{const s=window.canvasIrAR.scene,t=[...s.original.things.values()][0]!;s.loseHand(true);t.body.body.disablePreStep=false;t.mesh.position.x=100;t.mesh.position.z=100;t.body.body.setLinearVelocity(t.mesh.position.scale(.01));});
   await page.locator('#menu').click();await page.locator('#edit-field').click();
@@ -261,6 +289,8 @@ try {
   await page.evaluate(()=>document.querySelector<HTMLVideoElement>('#video')!.play());
   await page.locator('#menu').click();
   await page.waitForFunction(()=>window.canvasIrAR.scene.enabled&&window.canvasIrAR.snapshot().usedIds.length===3,null,{timeout:30000});
+  if((await page.locator('#hands').textContent())?.includes('Выключить'))await page.locator('#hands').click();
+  await page.evaluate(()=>{const s=window.canvasIrAR.scene,source=(window.canvasIrAR.trace as any[]).filter(e=>e.kind==='frame').at(-1).data.capture;const points:V3[]=Array.from({length:21},(_,i)=>[-.10+(i%5)*.008,.06+(i%3)*.003,.08+Math.floor(i/5)*.01]);const original=s.diagnosticImage.bind(s);s.diagnosticImage=()=>{s.diagnosticImage=original;s.hand(points,false,performance.now(),1);s.volume.options.enabled=true;s.volume.options.mode='solid';s.volume.selected=s.volume.references[0]!.id;s.volume.update(points,false,{frameId:source.frameId,capturedAt:source.capturedAt,method:'synthetic-export-test'},'synthetic-export-test');return original();};});
   await page.locator('#capture').click();
   await page.waitForFunction(()=>(window.canvasIrAR as any).shots.shots.length===1,null,{timeout:15000});
   const shotCheck=await page.evaluate(async()=>{
@@ -277,20 +307,23 @@ try {
   });
   assert(shotCheck.id===`frame-${shotCheck.capture.frameId}`&&JSON.stringify(shotCheck.processingCapture)===JSON.stringify({frameId:shotCheck.capture.frameId,capturedAt:shotCheck.capture.capturedAt,capturedAtEpochMs:shotCheck.capture.capturedAtEpochMs,mediaTimeSeconds:shotCheck.capture.mediaTimeSeconds}),'snapshot metadata uses the capture ID and capture time, not processing completion');
   assert(shotCheck.ids.sort().join()===shotCheck.imageIds.sort().join()&&shotCheck.maxCornerError<2,'independent ArUco detection on saved camera PNG agrees with JSON observations');
+  const exportedVolume=await page.evaluate(()=>(window.canvasIrAR as any).shots.shots[0].data.volumeDiagnostics);assert(exportedVolume.visible&&exportedVolume.joints.length===21&&exportedVolume.references.length===1&&exportedVolume.source.frameId<=shotCheck.capture.frameId&&exportedVolume.sourceAgeMs>=0,'diagnostic snapshot includes volume joints, reference pose, source ID and age');
   console.log('Diagnostic PNG check',JSON.stringify(shotCheck));
   const imageBytes=await page.evaluate(()=>{const shot=(window.canvasIrAR as any).shots.shots[0];return {raw:Array.from(shot.raw),composite:Array.from(shot.composite)};});await Bun.write(join(temporary,'camera.png'),new Uint8Array(imageBytes.raw as number[]));await Bun.write(join(temporary,'overlay.png'),new Uint8Array(imageBytes.composite as number[]));
   assert(shotCheck.changed>100&&shotCheck.raw.join()===shotCheck.composite.join(),'composite PNG contains scene and diagnostic overlays at the raw image resolution');
-  await page.locator('#hands').click();await page.locator('#capture').click();await page.waitForFunction(()=>(window.canvasIrAR as any).shots.shots.length===2,null,{timeout:15000});
+  if((await page.locator('#hands').textContent())?.includes('Выключить'))await page.locator('#hands').click();await page.locator('#capture').click();await page.waitForFunction(()=>(window.canvasIrAR as any).shots.shots.length===2,null,{timeout:15000});
   const olderHand=await page.evaluate(()=>{const d=(window.canvasIrAR as any).shots.shots[1].data;return {capture:d.capture,hand:d.estimates.hand};});assert(olderHand.hand.frameId<olderHand.capture.frameId&&olderHand.hand.ageAtCaptureMs>0,'snapshot explicitly retains an older hand source ID and its age when inference is disabled');
   const zipDownload=page.waitForEvent('download');await page.locator('#export-zip').click();const downloaded=await zipDownload;await downloaded.saveAs(join(temporary,'ar-diagnostics.zip'));assert((await Bun.file(join(temporary,'ar-diagnostics.zip')).bytes())[0]===0x50,'ZIP downloads locally with manifest, JSON and both PNGs');
   const jsonDownload=page.waitForEvent('download');await page.locator('#export').click();await (await jsonDownload).saveAs(join(temporary,'trace.json'));const json=await Bun.file(join(temporary,'trace.json')).json();assert(json.version===5&&!JSON.stringify(json).includes('data:image/'),'JSON-only export remains small and contains no encoded camera image');
   // Reload preserves the coordinate system and field; full reset must discard both.
   const stored=await page.evaluate(()=>(window.canvasIrAR as any).settings());await page.reload();await waitReady(page);
+  assert(await page.evaluate(()=>window.canvasIrAR.scene.volume.references.length===1),'reference pose restores with the same map identity');
   const restored=await page.evaluate(()=>(window.canvasIrAR as any).settings());assert(JSON.stringify(stored)===JSON.stringify(restored),'marker sizes, map identity, field and correction survive a page reload');
   await page.locator('#start').click();await page.waitForFunction(()=>window.canvasIrAR.snapshot().tableReady,null,{timeout:15000});
   assert(await page.evaluate(()=>Math.abs(window.canvasIrAR.scene.field.width-.85)<1e-6&&window.canvasIrAR.scene.field.angle===33),'saved field is restored against the same stored marker coordinates');
   await page.locator('#menu').click();await page.locator('#recalibrate').click();const cleared=await page.evaluate(()=>(window.canvasIrAR as any).settings());assert(cleared.mapId!==stored.mapId&&cleared.field===null,'full map reset gives a new coordinate system and does not reuse old field offsets');
 
+  assert(await page.evaluate(()=>window.canvasIrAR.scene.volume.references.length===0),'map reset discards reference positions');
   await page.locator('#menu').click();await page.locator('#settings details').first().locator('summary').click();await page.evaluate(()=>window.canvasIrAR.hand.metricScale=1);const previousId=await page.evaluate(()=>(window.canvasIrAR as any).settings().mapId);await page.locator('#marker-id').fill('1');await page.locator('#marker-size').fill('7');await page.locator('#save-marker-size').click();
   assert(await page.evaluate(id=>(window.canvasIrAR as any).settings().mapId!==id&&window.canvasIrAR.hand.metricScale===null&&(window.canvasIrAR as any).settings().field===null,previousId),'changing an individual marker size invalidates map identity, field and hand calibration');await page.locator('#close-settings').click();
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(temporary,"mobile.png")});
