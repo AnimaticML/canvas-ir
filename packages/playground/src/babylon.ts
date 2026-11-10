@@ -31,6 +31,7 @@ import havokWasm from "@babylonjs/havok/lib/esm/HavokPhysics.wasm" with { type: 
 import { type ObjectHandle, Objects, Surface, World } from "@canvas-ir/babylon";
 import { type ComponentHandle, Components, EventRouter, type Point, type RouterEvent } from "canvas-ir";
 import { Floor, type FloorPage, type FloorThing, type FloorWindow, TABLE, UNITS } from "./floor";
+import { type HandOptions, type HandSurface, Hands } from "./hands";
 import { Tablet } from "./tablet";
 import { thumbsticks } from "./thumbsticks";
 
@@ -57,6 +58,9 @@ const loadPage = (frame: HTMLIFrameElement): Promise<FloorPage> =>
     wait();
   });
 
+/** A pointer's press, move or lift: what a mouse, a finger or a hand gives the board, a PointerEvent or made up like one. */
+export type Press = Pick<PointerEvent, "pointerId" | "pointerType" | "button" | "buttons" | "clientX" | "clientY" | "shiftKey" | "altKey" | "ctrlKey" | "metaKey" | "timeStamp">;
+
 export interface BabylonRuntime {
   engine: Engine; scene: BabylonScene; world: World; floor: Floor; panel: Mesh;
   things: Map<string, BabylonThing>; drop: (kind: "crate" | "ball") => void;
@@ -64,9 +68,20 @@ export interface BabylonRuntime {
   controlAt: (point: Vector3) => string | null;
   events: {phase:string;surface:string;path:string[];before:number;after:number}[];
   pointer: (phase: "down" | "move" | "up" | "cancel", point: Vector3, target: "panel" | "board") => void;
+  /**
+   * The one way in for every pointer: a press, move, lift or cancel at a pixel of the canvas, taken exactly as a mouse's or a
+   * finger's. Touch pointers pair up as two fingers. Whatever it lands on (the board, a tablet, the panel, a crate) handles it.
+   */
+  press: (phase: "down" | "move" | "up" | "cancel", at: Point, pointer?: Partial<Press>) => void;
+  /** The same, at a room point, as seen from the camera. */
+  pressAt: (phase: "down" | "move" | "up" | "cancel", at: Vector3, pointer?: Partial<Press>) => void;
+  /** Hands: give them each frame's tracked joints, in room coordinates; see hands.ts. */
+  hands: Hands;
+  /** Room point to canvas pixel, through the active camera. */
+  toCanvas: (at: Vector3) => Point;
 }
 
-export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; fly: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d"; tilt?: boolean; ar?: boolean }): Promise<BabylonRuntime> => {
+export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; fly: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d"; tilt?: boolean; ar?: boolean; hands?: Partial<HandOptions> }): Promise<BabylonRuntime> => {
   const { canvas, frame, toggle } = options;
   const engine = new Engine(canvas, true, { alpha: !!options.ar, stencil: true, preserveDrawingBuffer: false }, true);
   engine.setHardwareScalingLevel(1 / Math.min(2, window.devicePixelRatio || 1));
@@ -146,6 +161,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   const things = new Map<string, BabylonThing>();
   let count = 0;
   let held: { thing: BabylonThing; normal: Vector3; offset: Vector3; target: Vector3 } | null = null;
+  /** Things held by hands, by the hand's pointer: pulled toward the hand each frame, as the mouse's held thing is. */
+  const handHolds = new Map<number, { thing: BabylonThing; offset: Vector3; target: Vector3 }>();
   const drop = (kind: "crate" | "ball"): void => {
     const n = ++count;
     const id = `${kind}-${n}`;
@@ -230,6 +247,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   };
   const clear = (): void => {
     held = null;
+    handHolds.clear();
     for (const [id, t] of things) {
       objects.unmount(id);
       if (t.label) world.remove(t.label.surface);
@@ -467,7 +485,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   const pageWindow = frame.contentWindow as Window & typeof globalThis;
   const pageCanvas = (): HTMLCanvasElement | null => frame.contentDocument?.getElementById("board") as HTMLCanvasElement | null;
   const stageRect = (): DOMRect => (frame.contentDocument?.getElementById("stage") ?? pageCanvas())!.getBoundingClientRect();
-  const sendToPage = (e: PointerEvent, type: string, at: Point): void => {
+  const sendToPage = (e: Press, type: string, at: Point): void => {
     const board = pageCanvas();
     if (!board) return;
     const v = page.view();
@@ -538,7 +556,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   };
 
   // Pointer input: one pointer goes to the router, or to the page for what is drawn on the table; two fingers move the camera.
-  const pointer = (e: PointerEvent | WheelEvent) => {
+  const pointer = (e: Press | WheelEvent) => {
     const r = canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top, button: e.button, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
   };
@@ -557,7 +575,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     return { mid: { x: (a!.x + b!.x) / 2, y: (a!.y + b!.y) / 2 }, spread: Math.hypot(a!.x - b!.x, a!.y - b!.y), angle: Math.atan2(b!.y - a!.y, b!.x - a!.x) };
   };
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  canvas.addEventListener("pointerdown", (e) => {
+  const down = (e: Press): void => {
     if (e.pointerType === "touch") fingers.set(e.pointerId, pointer(e));
     if (fingers.size === 2) {
       const on = carrying?.tablet ?? forwardingTablet;
@@ -619,8 +637,9 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     }
     pointerId = e.pointerId;
     router.pointerDown(p);
-  });
-  canvas.addEventListener("pointermove", (e) => {
+  };
+  canvas.addEventListener("pointerdown", down);
+  const move = (e: Press): void => {
     if (fingers.has(e.pointerId)) fingers.set(e.pointerId, pointer(e));
     if (tabletPinch !== null) {
       if (fingers.size !== 2) return;
@@ -686,8 +705,9 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       else if (overPage) pageCanvas()?.dispatchEvent(new pageWindow.PointerEvent("pointerleave", { pointerId: e.pointerId, pointerType: e.pointerType }));
       overPage = at !== null;
     }
-  });
-  const lift = (e: PointerEvent, cancel: boolean): void => {
+  };
+  canvas.addEventListener("pointermove", move);
+  const lift = (e: Press, cancel: boolean): void => {
     fingers.delete(e.pointerId);
     if (tabletPinch !== null) {
       if (fingers.size === 0) tabletPinch = null;
@@ -950,13 +970,13 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       if (t >= 1) flight = null;
     }
     // The held body is pulled toward the pointer each frame, so it's thrown with the speed it had when let go.
-    if (held) {
-      const center = held.thing.mesh.getAbsolutePosition();
-      held.target.add(held.offset).subtractToRef(center, velocity);
+    for (const h of held ? [held, ...handHolds.values()] : handHolds.values()) {
+      const center = h.thing.mesh.getAbsolutePosition();
+      h.target.add(h.offset).subtractToRef(center, velocity);
       velocity.scaleInPlace(12);
       if (velocity.length() > 18) velocity.normalize().scaleInPlace(18);
-      held.thing.body.body.setLinearVelocity(velocity);
-      held.thing.body.body.setAngularVelocity(Vector3.Zero());
+      h.thing.body.body.setLinearVelocity(velocity);
+      h.thing.body.body.setAngularVelocity(Vector3.Zero());
     }
     // What rolled off the table lies on the room's floor a moment, then comes back, dropped onto the table from above.
     for (const [id, t] of things) {
@@ -965,6 +985,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
         continue;
       }
       if (held?.thing === t) held = null;
+      for (const [k, h] of handHolds) if (h.thing === t) handHolds.delete(k);
       const since = fallen.get(id) ?? now;
       fallen.set(id, since);
       if (now - since < 1500 && t.mesh.position.y > -30) continue;
@@ -1014,7 +1035,66 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   }
   // Opened from the page's own View in 3D: the page shows where it was, then tilts down into the room.
   if (options.tilt && mode === "2d") setTimeout(() => void to3d(), 600);
+  // Pointers that aren't the mouse's or a finger's on this canvas: a hand's, a test's. They go through the same handlers.
+  const press = (phase: "down" | "move" | "up" | "cancel", at: Point, o: Partial<Press> = {}): void => {
+    const r = canvas.getBoundingClientRect();
+    const e: Press = {
+      pointerId: 1, pointerType: "touch", button: 0, buttons: phase === "down" || phase === "move" ? 1 : 0,
+      shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, timeStamp: performance.now(),
+      ...o, clientX: r.left + at.x, clientY: r.top + at.y,
+    };
+    if (phase === "down") down(e);
+    else if (phase === "move") move(e);
+    else lift(e, phase === "cancel");
+  };
+  const pressAt = (phase: "down" | "move" | "up" | "cancel", at: Vector3, o: Partial<Press> = {}): void => press(phase, onHost(at), o);
+  // What a fingertip can touch: the table, each tablet's face, and the panel.
+  const flat = (id: string, mesh: Mesh, width: number, height: number, axis: "y" | "z"): HandSurface => {
+    const m = mesh.computeWorldMatrix(true);
+    const inverse = m.clone().invert();
+    const normal = Vector3.TransformNormal(axis === "y" ? Vector3.Up() : new Vector3(0, 0, -1), m).normalize();
+    return {
+      id, point: m.getTranslation(), normal,
+      contains: (at, margin) => {
+        const local = Vector3.TransformCoordinates(at, inverse);
+        const sx = Vector3.TransformNormal(Vector3.Right(), m).length();
+        const sv = Vector3.TransformNormal(axis === "y" ? Vector3.Forward() : Vector3.Up(), m).length();
+        return Math.abs(local.x) * sx <= width / 2 + margin && Math.abs(axis === "y" ? local.z : local.y) * sv <= height / 2 + margin;
+      },
+    };
+  };
+  const surfaces = (): HandSurface[] => {
+    const t = floor.table;
+    const list: HandSurface[] = [];
+    for (const tablet of tablets.values()) list.push(flat(`tablet:${tablet.id}`, tablet.screen, tablet.rect.width / UNITS, tablet.rect.height / UNITS, "y"));
+    if (panel.isEnabled() && panel.isVisible) list.push(flat("panel", panel, 2.88, 1.8, "z"));
+    list.push({
+      id: "table", point: new Vector3(t.center.x, 0, t.center.z), normal: Vector3.Up(),
+      contains: (at, margin) => Math.abs(at.x - t.center.x) <= t.width / 2 + margin && Math.abs(at.z - t.center.z) <= t.depth / 2 + margin,
+    });
+    return list;
+  };
+  const hands = new Hands(
+    {
+      scene,
+      things: () => [...things].map(([id, t]) => ({ id, mesh: t.mesh })),
+      surfaces,
+      press: (phase, at, pointer, time, buttons) => pressAt(phase, at, { pointerId: pointer, pointerType: "touch", timeStamp: time, buttons }),
+      hold: (pointer, id, at) => {
+        const thing = id ? things.get(id) : undefined;
+        if (!thing || !at) {
+          handHolds.delete(pointer);
+          return;
+        }
+        const was = handHolds.get(pointer);
+        if (was?.thing === thing) was.target = at.clone();
+        else handHolds.set(pointer, { thing, offset: thing.mesh.getAbsolutePosition().subtract(at), target: at.clone() });
+      },
+    },
+    { metersPerUnit: 1, ...(options.hands ?? {}) },
+  );
   const runtime: BabylonRuntime = {
+    press, pressAt, hands, toCanvas: (at) => onHost(at),
     engine, scene, world, floor, panel, things, drop, resize, visible: !options.ar, events: [],
     controlAt: point => router.pick(onHost(point)).path.find(id=>handles.has(id))??null,
     pointer: (phase, point, target) => {
@@ -1053,7 +1133,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     return { x: Math.round(q.x), y: Math.round(q.y) };
   };
   (window as unknown as { canvasIrBabylon?: unknown }).canvasIrBabylon = {
-    scene, camera, world, things, drop,
+    scene, camera, world, things, drop, hands, press, pressAt, handHolds,
     at: (id: string) => onHost(things.get(id)!.mesh.getAbsolutePosition()),
     onBoard: (x: number, y: number) => onHost(floor.toRoom({ x, y })),
     floor,
