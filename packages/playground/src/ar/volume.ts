@@ -15,7 +15,7 @@ import {capsulePrism,FINGER_BONES,referencePolygon,volumeDefaults,type Reference
 import {type V3} from './geometry';
 export class VolumeDiagnostics {
  references:Reference[]=[];options:VolumeOptions=volumeDefaults();selected='';
- private boardVisibility=new Map<Mesh,boolean>();private refs:Mesh[]=[];private bones:Mesh[]=[];private ends:Mesh[]=[];private palm:Mesh;private skeleton:LinesMesh|null=null;private witnesses:Mesh[]=[];
+ private refs:Mesh[]=[];private bones:Mesh[]=[];private ends:Mesh[]=[];private palm:Mesh;private skeleton:LinesMesh|null=null;private witnesses:Mesh[]=[];
  private witnessMaterial:StandardMaterial;private hitMaterial:StandardMaterial;private handMaterial:StandardMaterial;private ghost:StandardMaterial;private referenceMaterials:StandardMaterial[]=[];
  joints:V3[]|null=null;source:unknown=null;reliable=false;lastUpdate=0;reason='no-hand';measurement:(DistanceWitness&{target:string;bone:number[];state:string;reliable:boolean;gapIntervalM:number[];objectGeometry:Reference;computedAt:number})|null=null;
  constructor(private ar:ARScene){const scene=ar.scene;scene.setRenderingAutoClearDepthStencil(1,false);scene.setRenderingAutoClearDepthStencil(2,false);
@@ -26,7 +26,7 @@ export class VolumeDiagnostics {
   const make=(mesh:Mesh):Mesh=>{mesh.material=this.handMaterial;mesh.isPickable=false;mesh.renderingGroupId=1;mesh.setEnabled(false);const hidden=mesh.clone(mesh.name+'/hidden',mesh)!;hidden.position.setAll(0);hidden.scaling.setAll(1);hidden.rotationQuaternion=Quaternion.Identity();hidden.material=this.ghost;hidden.renderingGroupId=2;hidden.isPickable=false;return mesh;};
   for(let i=0;i<FINGER_BONES.length;i++){this.bones.push(make(CreateCylinder(`volume-finger-${i}`,{height:1,diameter:1,tessellation:10},scene)));this.ends.push(make(CreateSphere(`volume-joint-${i}-a`,{diameter:1,segments:8},scene)),make(CreateSphere(`volume-joint-${i}-b`,{diameter:1,segments:8},scene)));}
   this.palm=make(CreateBox('volume-palm',{size:1},scene));
-  scene.onBeforeRenderObservable.add(()=>{if(this.options.boardHidden){for(const mesh of scene.meshes)if(mesh instanceof Mesh&&(mesh===ar.original.floor.top||ar.original.floor.holds(mesh))){if(!this.boardVisibility.has(mesh))this.boardVisibility.set(mesh,mesh.isVisible);mesh.isVisible=false;}}else{for(const [mesh,visible] of this.boardVisibility)if(!mesh.isDisposed())mesh.isVisible=visible;this.boardVisibility.clear();}if(this.joints&&performance.now()-this.lastUpdate>700)this.setQuality(false,'stale-hand');});
+  scene.onBeforeRenderObservable.add(()=>{if(this.joints&&performance.now()-this.lastUpdate>700)this.setQuality(false,'stale-hand');});
  }
  setReferences(refs:Reference[]):void{this.references=refs;this.rebuild();}
  rebuild():void{for(const m of this.refs)m.dispose();for(const m of this.referenceMaterials)m.dispose();this.refs=[];this.referenceMaterials=[];

@@ -1,7 +1,7 @@
 import {add,sub,scale,length,rotate,transpose,type V3} from './geometry';
 import {yaw} from './settings';
 export interface Reference {id:string;kind:'rectangle'|'box'|'hex';width:number;depth:number;height:number;x:number;z:number;base:number;angle:number;locked:boolean;mode:'outline'|'solid'|'occluder'}
-export interface VolumeOptions {enabled:boolean;mode:'solid'|'transparent';fingerMm:number;palmMm:number;hidden:boolean;boardHidden:boolean}
+export interface VolumeOptions {enabled:boolean;mode:'solid'|'transparent';fingerMm:number;palmMm:number;hidden:boolean;boardHidden:boolean;gridHidden?:boolean}
 export const volumeDefaults=():VolumeOptions=>({enabled:false,mode:'transparent',fingerMm:14,palmMm:24,hidden:false,boardHidden:false});
 export const validReference=(r:Reference):boolean=>!!r&&typeof r.id==='string'&&['rectangle','box','hex'].includes(r.kind)&&['outline','solid','occluder'].includes(r.mode)&&typeof r.locked==='boolean'&&[r.width,r.depth,r.height,r.x,r.z,r.base,r.angle].every(Number.isFinite)&&r.width>=.001&&r.width<=3&&r.depth>=.001&&r.depth<=3&&r.height>=.0001&&r.height<=1&&Math.abs(r.x)<=5&&Math.abs(r.z)<=5&&Math.abs(r.base)<=1&&Math.abs(r.angle)<=360;
 export const referencePolygon=(r:Reference):[number,number][]=>r.kind==='hex'?Array.from({length:6},(_,i)=>{const a=i*Math.PI/3,rad=r.width/Math.sqrt(3);return [Math.cos(a)*rad,Math.sin(a)*rad];}):[[-r.width/2,-r.depth/2],[r.width/2,-r.depth/2],[r.width/2,r.depth/2],[-r.width/2,r.depth/2]];

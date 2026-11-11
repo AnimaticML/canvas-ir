@@ -8,6 +8,9 @@ import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { startBabylon, type BabylonRuntime } from "../babylon";
 import { length, sub, rotate, transpose, toCamera, type Intrinsics, type Pose, type V3 } from "./geometry";
 
+import { CreateLineSystem } from "@babylonjs/core/Meshes/Builders/linesBuilder";
+import type { LinesMesh } from "@babylonjs/core/Meshes/linesMesh";
+import { centimeterGrid } from "./grid";
 import { VolumeDiagnostics } from "./volume";
 import { yaw, type Field } from "./settings";
 
@@ -30,6 +33,8 @@ export class ARScene {
   readonly scene;
   readonly original: BabylonRuntime;
   readonly volume:VolumeDiagnostics;
+  private grid:LinesMesh[]=[];
+  private updateGrid():void{for(const m of this.grid)m.dispose();this.grid=[];const f=this.field,lines=centimeterGrid(f.width,f.depth),room=this.original.floor.table;for(const [key,color] of [["minor","#48b9d2"],["major","#167caa"]] as const){const mesh=CreateLineSystem(`ar-centimeter-grid-${key}`,{lines:lines[key].map(line=>line.map(p=>new Vector3(room.center.x+p[0]/this.scale,.003,room.center.z-p[2]/this.scale)))},this.scene);mesh.color=Color3.FromHexString(color);mesh.alpha=key==="major"?.8:.45;mesh.isPickable=false;this.grid.push(mesh);}}
   private scale = 0.025;
   private center: V3 = [0,0,0];
   private angle=0;
@@ -41,7 +46,7 @@ export class ARScene {
     this.roomCenter.copyFrom(this.original.floor.table.center);
     this.original.panel.scaling.setAll(Math.min(.14,f.width*.8,f.depth*.8)/(2.88*this.scale));
     this.original.panel.position.set(this.roomCenter.x,.035,this.roomCenter.z-f.depth/this.scale*.25);
-    this.volume.rebuild();
+    this.updateGrid();this.volume.rebuild();
     for(const thing of this.original.things.values()){
       const p=thing.mesh.position;thing.mesh.computeWorldMatrix(true);
       const half=thing.mesh.getBoundingInfo().boundingBox.extendSizeWorld;
@@ -74,7 +79,7 @@ export class ARScene {
     this.cursorMaterial = new StandardMaterial("ar-finger", this.scene);
     this.cursorMaterial.emissiveColor = Color3.FromHexString("#91ffe0"); this.fingertip.material = this.cursorMaterial;
     this.volume=new VolumeDiagnostics(this);
-    this.scene.onBeforeRenderObservable.add(() => { if (performance.now() - this.lastHand > this.handTimeout) this.loseHand(); });
+    this.scene.onBeforeRenderObservable.add(() => { for(const mesh of this.scene.meshes)if(mesh===this.original.floor.top||this.original.floor.holds(mesh))mesh.visibility=0;for(const mesh of this.grid)mesh.isVisible=!this.volume.options.gridHidden; if (performance.now() - this.lastHand > this.handTimeout) this.loseHand(); });
   }
   static async create(canvas: HTMLCanvasElement): Promise<ARScene> {
     const original = await startBabylon({ canvas, frame: document.getElementById("original-board") as HTMLIFrameElement,
@@ -101,7 +106,7 @@ export class ARScene {
     this.fingertip.scaling.setAll(.006/this.scale);
     this.original.hands.clear();this.original.hands.contacts.length=0;
     this.original.hands.configure({metersPerUnit:this.scale,route:"ray",pressAt:.022,releaseAt:.045});
-    this.volume.rebuild();
+    this.updateGrid();this.volume.rebuild();
   }
 
   room(p: V3): Vector3 { const q=rotate(transpose(yaw(this.angle)),sub(p,this.center));return new Vector3(q[0]/this.scale+this.roomCenter.x,q[1]/this.scale,-q[2]/this.scale+this.roomCenter.z); }
