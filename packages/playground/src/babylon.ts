@@ -174,10 +174,36 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   // The crates and balls.
   const things = new Map<string, BabylonThing>();
   let count = 0;
-  let held: { thing: BabylonThing; normal: Vector3; offset: Vector3; target: Vector3 } | null = null;
+  /** What can be held and thrown: a crate, a ball, or a moving part of the machine. */
+  type Holdable = Pick<BabylonThing, "mesh" | "body">;
+  let held: { thing: Holdable; normal: Vector3; offset: Vector3; target: Vector3 } | null = null;
   /** Things held by hands, by the hand's pointer: pulled toward the hand each frame, as the mouse's held thing is. */
-  const handHolds = new Map<number, { thing: BabylonThing; offset: Vector3; target: Vector3; relative?: Quaternion; rotation?: Quaternion }>();
-  const drop = (kind: "crate" | "ball"): void => {
+  const handHolds = new Map<number, { thing: Holdable; offset: Vector3; target: Vector3; relative?: Quaternion; rotation?: Quaternion }>();
+  /** Handlers that pick a thing up where it was grabbed and carry it in the plane facing the camera, to throw it. */
+  const grab = (id: string, mesh: Mesh, thingOf: () => Holdable | undefined) => ({
+    dragstart: (e: RouterEvent) => {
+      const thing = thingOf();
+      if (!thing) return;
+      // A drag starts a few pixels from where it was pressed, which can be just off a thin thing such as a domino: then
+      // it is held by its middle.
+      const point = world.hit(e.input as { x: number; y: number }, [mesh])?.point ?? mesh.getAbsolutePosition();
+      const normal = camera.getForwardRay().direction.clone();
+      held = { thing, normal, offset: mesh.getAbsolutePosition().subtract(point), target: point.clone() };
+      log(`dragstart: ${e.path.join(" → ")}`);
+      e.stopPropagation();
+    },
+    drag: (e: RouterEvent) => {
+      if (!held) return;
+      const at = world.onPlane(e.input as { x: number; y: number }, held.target, held.normal);
+      if (at) held.target = at;
+      e.stopPropagation();
+    },
+    dragend: () => {
+      if (held) log(`threw ${id}`);
+      held = null;
+    },
+  });
+  const drop = (kind: "crate" | "ball", place?: { x: number; z: number }): void => {
     const n = ++count;
     const id = `${kind}-${n}`;
     const color = PALETTE[n % PALETTE.length]!;
@@ -185,8 +211,11 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     if (options.ar) {
       const area = floor.table;
       mesh.position.set(area.center.x + ((n - 1) % 3 - 1) * area.width * 0.22, 2 + n * 0.2, area.center.z + (n <= 3 ? -0.08 : 0.12) * area.depth);
-    } else mesh.position.set((Math.random() - 0.5) * 3, 4 + Math.random() * 2, (Math.random() - 0.5) * 2 - 0.5);
-    mesh.rotation.set(Math.random() * 3, Math.random() * 3, 0);
+    } else if (place) mesh.position.set(place.x, 1.2, place.z);
+    else mesh.position.set((Math.random() - 0.5) * 3, 4 + Math.random() * 2, (Math.random() - 0.5) * 2 - 0.5);
+    // The first few fall the same way every time, so they don't change how the machine's runs go.
+    if (place) mesh.rotation.set(0.4 * n, 0.7 * n, 0);
+    else mesh.rotation.set(Math.random() * 3, Math.random() * 3, 0);
     const material = new StandardMaterial(id, scene);
     material.diffuseColor = Color3.FromHexString(color);
     material.specularColor = new Color3(0.2, 0.2, 0.2);
@@ -226,29 +255,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
         material.emissiveColor = ui.pressed ? new Color3(0.2, 0.28, 0.5) : ui.hovered ? new Color3(0.12, 0.17, 0.3) : Color3.Black();
         label?.ui.get(`${id}/label`)?.redraw();
       },
-      on: {
-        dragstart: (e) => {
-          const pick = world.hit(e.input as { x: number; y: number }, [mesh]);
-          const thing = things.get(id);
-          if (!pick || !thing) return;
-          // Held at the point grabbed, in the plane that faces the camera through it.
-          const normal = camera.getForwardRay().direction.clone();
-          held = { thing, normal, offset: mesh.getAbsolutePosition().subtract(pick.point), target: pick.point.clone() };
-          log(`dragstart: ${e.path.join(" → ")}`);
-          e.stopPropagation();
-        },
-        drag: (e) => {
-          if (!held) return;
-          const grab = held.target;
-          const at = world.onPlane(e.input as { x: number; y: number }, grab, held.normal);
-          if (at) held.target = at;
-          e.stopPropagation();
-        },
-        dragend: () => {
-          if (held) log(`threw ${id}`);
-          held = null;
-        },
-      },
+      on: grab(id, mesh, () => things.get(id)),
     });
     const thing: BabylonThing = { mesh, body, handle, label };
     things.set(id, thing);
@@ -1285,14 +1292,33 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     canvas.style.cursor = pageCursor ?? panelUi.cursor ?? objects.cursor ?? "";
   });
 
-  // In AR a few crates and balls to start with; on the 3D page the machine instead, ending at the Physics icon.
-  if (options.ar) for (let i = 0; i < 5; i++) drop(i % 2 === 0 ? "crate" : "ball");
-  else {
+  // A few crates and balls to start with, and on the 3D page the machine too, ending at the Physics icon.
+  // On the 3D page they land in front of the machine, clear of it.
+  const START = [{ x: -1.4, z: -2.6 }, { x: 0, z: -1.6 }, { x: 1.4, z: -2.8 }, { x: -2.6, z: -1.2 }, { x: 2.6, z: -1.4 }];
+  for (let i = 0; i < 5; i++) drop(i % 2 === 0 ? "crate" : "ball", options.ar ? undefined : START[i]);
+  if (!options.ar) {
     const icon = page.cards().bounds("feature-physics");
     const aimAt = icon ? { x: icon.x + icon.width / 2, y: icon.y + icon.width / 2 } : { x: 3155, y: 2175 };
     machine = buildMachine(scene, shadows, {
       target: floor.toRoom(aimAt),
       along: new Vector3(1, 0, 0),
+      // Its balls and dominoes are picked up and thrown like the crates, before a run, during it or after.
+      onPart: (mesh, body) => {
+        objects.mount({
+          object: mesh,
+          state: {},
+          cursor: () => (held ? "grabbing" : "grab"),
+          draw: (_o, _s, ui) => {
+            const material = mesh.material as StandardMaterial | null;
+            if (material) material.emissiveColor = ui.pressed ? new Color3(0.2, 0.28, 0.5) : ui.hovered ? new Color3(0.12, 0.17, 0.3) : Color3.Black();
+          },
+          on: grab(mesh.name, mesh, () => ({ mesh, body })),
+        });
+      },
+      onPartGone: (mesh) => {
+        if (held?.thing.mesh === mesh) held = null;
+        objects.unmount(mesh.name);
+      },
       onEvent: (text) => {
         log(text);
         redraw("machine");

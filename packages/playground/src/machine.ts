@@ -30,6 +30,9 @@ export interface MachineOptions {
   readonly onArrive: () => void;
   /** Called with a line for the status, as the run goes. */
   readonly onEvent?: (text: string) => void;
+  /** Called with each moving part as it is made, to be picked up and thrown like anything else, and again as it goes. */
+  readonly onPart?: (mesh: Mesh, body: PhysicsAggregate) => void;
+  readonly onPartGone?: (mesh: Mesh) => void;
 }
 
 /** Where every moving part is: to tell whether two runs ended the same way. */
@@ -163,7 +166,8 @@ export const buildMachine = (scene: Scene, shadows: ShadowGenerator, o: MachineO
   let gateMesh: Mesh | null = null;
   let ball2: Part | null = null;
   const palette = ["#2563eb", "#7c3aed", "#db2777", "#ea580c", "#16a34a", "#0891b2"];
-  const dominoMaterials = palette.map((hex, i) => color(scene, `domino${i}`, hex));
+  const dominoMaterials = dominoes.map((_, i) => color(scene, `domino${i}`, palette[i % palette.length]!));
+  const ballOneMaterial = color(scene, "ball1", "#e11d48");
   const ballMaterial = color(scene, "ball", "#f59e0b");
   const make = (): void => {
     // Taken apart in the reverse of the order they were made: the engine hands freed bodies back last first, so the
@@ -172,22 +176,26 @@ export const buildMachine = (scene: Scene, shadows: ShadowGenerator, o: MachineO
     gate?.dispose();
     gateMesh?.dispose();
     for (const p of [...parts].reverse()) {
+      o.onPartGone?.(p.mesh);
       p.body.dispose();
       p.mesh.dispose();
     }
     parts = [];
     const dynamic = (mesh: Mesh, shape: PhysicsShapeType, mass: number, friction: number): Part => {
+      // The moving parts can be picked up; the rest lets clicks through to the table under it.
+      mesh.isPickable = true;
       const body = new PhysicsAggregate(mesh, shape, { mass, friction, restitution: 0.15 }, scene);
       const part = { mesh, body, start: { p: mesh.position.clone(), q: mesh.rotationQuaternion?.clone() ?? Quaternion.Identity() } };
       parts.push(part);
+      o.onPart?.(mesh, body);
       return part;
     };
-    const ball = add(CreateSphere("machine/ball", { diameter: 0.36, segments: 20 }, scene), red);
+    const ball = add(CreateSphere("machine/ball", { diameter: 0.36, segments: 20 }, scene), ballOneMaterial);
     ball.position.copyFrom(at(TOP.u + 0.05, TOP.y + 0.24));
     ball.rotationQuaternion = Quaternion.Identity();
     dynamic(ball, PhysicsShapeType.SPHERE, 1.2, 0.5);
     dominoes.forEach((d, i) => {
-      const m = add(CreateBox(`machine/domino${i}`, { width: DOMINO.thick, height: DOMINO.height, depth: DOMINO.width }, scene), dominoMaterials[i % dominoMaterials.length]!);
+      const m = add(CreateBox(`machine/domino${i}`, { width: DOMINO.thick, height: DOMINO.height, depth: DOMINO.width }, scene), dominoMaterials[i]!);
       m.position.copyFrom(at(d.u, DOMINO.height / 2 + 0.002, d.w));
       m.rotationQuaternion = turn(0, d.yaw);
       dynamic(m, PhysicsShapeType.BOX, 0.25, 0.6);
