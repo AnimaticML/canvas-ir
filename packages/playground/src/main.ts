@@ -26,6 +26,8 @@ import {
   type ImageOp,
   type Op,
   type Point,
+  type IRDocument,
+  parseDocument,
 } from "canvas-ir";
 import { vectorize } from "@canvas-ir/vectorize";
 import { LiveText } from "@canvas-ir/text";
@@ -49,6 +51,7 @@ import { type ControlHooks, type LiveSpec, type Sample, samples } from "./sample
 import { Chrome, type Settings } from "./ui/chrome";
 import { type Feature, featureIcon } from "./ui/features";
 import { windowFrame } from "./ui/window";
+import { CONTENT as CONTENT_AT, DRAWINGS, ICONS, WINDOWS, origin } from "./collage";
 import { CardLayer } from "./ui/cards";
 import { textSink } from "./ui/kit";
 
@@ -313,12 +316,10 @@ floorHost.canvasIrFloor = {
   hits: (point) => scene.hitTest(point).length > 0 || cards.scene.hitTest(point).length > 0,
   windows: () => openWindows(),
   moveWindow: (id, dx, dy) => {
-    for (const x of withWindows([id])) {
-      components!.move(x, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
-      followMove(x, dx, dy);
-    }
+    moveWindowBy(id, dx, dy);
     showSelection();
     render();
+    remember();
   },
   // A wheel at a board point, for what keeps one there (the map, the stars, the million rows); false when nothing does.
   wheel: (at, deltaX, deltaY) => {
@@ -663,6 +664,7 @@ const wire = (): void => {
       select([...picked]);
       log(`lasso picked ${picked.size}`);
     }
+    if (drag && (drag.moved.x !== 0 || drag.moved.y !== 0)) remember();
     drag = null;
     renderer.drop();
     lasso = null;
@@ -680,6 +682,7 @@ const wire = (): void => {
       for (const live of liveTexts) live.update();
       hovered = null;
       select([]);
+      remember();
     }
   });
 };
@@ -829,17 +832,9 @@ const tools = new Tools({
     return found ? { point: found.point, kind: found.kind } : null;
   },
   commit: (id, draw) => {
-    const recorder = new RecordingContext(recorderOptions);
-    recorder.beginGroup({ id, meta: { source: "drawn" } });
-    draw(recorder);
-    recorder.endGroup();
-    const drawn = recorder.getSources();
-    const doc = recorder.getDocument();
-    scene.replaceGroup(id, doc).forEach((opId, i) => {
-      const source = drawn.get(doc.ops[i]!.id);
-      if (source !== undefined) sources.set(opId, source);
-    });
+    drawOnBoard(id, draw);
     select([id]);
+    remember();
   },
   recorder: recorderOptions,
   stage,
@@ -1095,7 +1090,7 @@ const morphDemo = (): void => {
 };
 
 // The pelican on its bicycle: poses drawn an eighth of a pedal turn apart, morphed into every frame between.
-const PELICAN_AT = { x: 116, y: 76 };
+const PELICAN_AT = origin("pelican");
 const ride = new Ride(PELICAN_AT);
 let position = 0;
 let riding = 0;
@@ -1286,6 +1281,117 @@ const declarationDemo = (): void => {
   reveal(rights.bounds);
 };
 
+/**
+ * What was moved, drawn or deleted on the board, kept in this browser so the board opens as it was left: where the
+ * content, the windows and the icons are, which content was deleted, and every drawing (the collage's notes and arrows
+ * and what was drawn with the tools), as documents. Export layout saves it as a file, Reset layout forgets it.
+ */
+interface Layout {
+  version: 1;
+  content: Record<string, Point>;
+  windows: Record<string, Point>;
+  icons: Record<string, Point>;
+  removed: string[];
+  /** Null until something is drawn, moved or deleted: the collage's drawings then. */
+  drawings: IRDocument[] | null;
+}
+const LAYOUT = "canvasIrLayout";
+const layout: Layout = ((): Layout => {
+  const empty: Layout = { version: 1, content: {}, windows: {}, icons: {}, removed: [], drawings: null };
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAYOUT) ?? "null") as Partial<Layout> | null;
+    return saved?.version === 1 ? { ...empty, ...saved } : empty;
+  } catch {
+    return empty;
+  }
+})();
+/** The content on the board, by its sample's name: its outermost groups. */
+const contentIds = new Map<string, string[]>();
+/** Off while the board is first laid out, so laying it out isn't taken for a change. */
+let remembering = false;
+const exists = (id: string): boolean => scene.getGroup(id) !== undefined || scene.get(id) !== undefined;
+/** Each demo window's group on the board, by its icon's id. */
+const WINDOW_OF: Record<string, string> = {
+  pelican: `${PELICAN_ID}:window`,
+  physics: `${PHYSICS_ID}:window`,
+  graph: `${GRAPH_ID}:window`,
+  morph: `${MORPH_ID}:window`,
+  paint: `${PAINT_ID}:window`,
+  table: TABLE_ID,
+  points: POINTS_ID,
+  galaxy: GALAXY_ID,
+  map: MAP_ID,
+  book: BOOK_ID,
+  declaration: DECLARATION_ID,
+};
+/** A drawing on the board as a document of its own: its group, the groups inside it and their ops. */
+const documentOf = (id: string): IRDocument => {
+  const all = scene.document.groups ?? [];
+  const inside = new Set([id]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const g of all) if (g.parent !== undefined && inside.has(g.parent) && !inside.has(g.id)) {
+      inside.add(g.id);
+      grew = true;
+    }
+  }
+  return { version: 1, groups: all.filter((g) => inside.has(g.id)), ops: scene.document.ops.filter((op) => op.group !== undefined && inside.has(op.group)) } as IRDocument;
+};
+/** Notes the board as it is now, and keeps it. */
+function remember(): void {
+  if (!remembering) return;
+  for (const [name, ids] of contentIds) {
+    const there = ids.filter(exists);
+    const box = there.length > 0 ? boxOf(there) : null;
+    if (box) layout.content[name] = { x: box.x, y: box.y };
+    else if (!layout.removed.includes(name)) layout.removed.push(name);
+  }
+  if (fieldOpen()) {
+    const box = boxOf(field.filter(exists));
+    if (box) layout.content[FIELD] = { x: box.x, y: box.y };
+  }
+  for (const [key, id] of Object.entries(WINDOW_OF)) {
+    const box = scene.getGroup(id) ? scene.bounds(id, "geometry") : null;
+    if (box) layout.windows[key] = { x: box.x, y: box.y };
+  }
+  layout.drawings = (scene.document.groups ?? []).filter((g) => g.parent === undefined && g.meta?.source === "drawn").map((g) => documentOf(g.id));
+  try {
+    localStorage.setItem(LAYOUT, JSON.stringify(layout));
+  } catch {
+    // Without storage the board is laid out afresh next time.
+  }
+}
+/** Moves a window by (dx, dy): its frame, its drawing and its controls. */
+function moveWindowBy(id: string, dx: number, dy: number): void {
+  for (const x of withWindows([id])) {
+    components!.move(x, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
+    followMove(x, dx, dy);
+  }
+}
+/** A window just opened goes where it was last put, if it was moved, and the view follows it there. */
+function placeWindow(key: string): void {
+  const id = WINDOW_OF[key];
+  const to = layout.windows[key];
+  if (!id || !to || !scene.getGroup(id)) return;
+  const box = scene.bounds(id, "geometry");
+  if (!box || (box.x === to.x && box.y === to.y)) return;
+  moveWindowBy(id, to.x - box.x, to.y - box.y);
+  reveal({ ...box, x: to.x, y: to.y });
+}
+/** Records a drawing into a group of its own on the board, as the drawing tools do. */
+function drawOnBoard(id: string, draw: (c: RecordingContext) => void): void {
+  const recorder = new RecordingContext(recorderOptions);
+  recorder.beginGroup({ id, meta: { source: "drawn" } });
+  draw(recorder);
+  recorder.endGroup();
+  const drawn = recorder.getSources();
+  const doc = recorder.getDocument();
+  scene.replaceGroup(id, doc).forEach((opId, i) => {
+    const source = drawn.get(doc.ops[i]!.id);
+    if (source !== undefined) sources.set(opId, source);
+  });
+}
+
 /** Frames around demos drawn straight on the board, by frame id, with what each holds. */
 const frames = new Map<string, readonly string[]>();
 /** The ids, with every window any of them belongs to: its frame and all it holds. */
@@ -1384,41 +1490,68 @@ const closePaint = (): void => {
   components!.unmount(PAINT_ID);
 };
 
-// Every demo is an icon on the board, as on a desktop: the icons stand in a grid under the cards, and pressing one opens
-// its demo's window in its own place to their right and flies there; pressing it again closes it.
-const iconAt = (i: number): { x: number; y: number; tilt: number } => ({ x: -740 + (i % 3) * 240, y: 760 + Math.floor(i / 3) * 250, tilt: 0 });
-const toggle = (open: () => boolean, show: () => void, hide: () => void) => ({
+// Every demo is an icon on the board, as on a desktop: pressing one opens its demo's window where the window lives and
+// flies there, and pressing it again closes it. Dragged, an icon moves, and stays where it was put.
+const toggle = (key: string, open: () => boolean, show: () => void, hide: () => void) => ({
   open,
   onClick: () => {
     if (open()) {
       hide();
       log("closed it");
-    } else show();
+    } else {
+      show();
+      placeWindow(key);
+    }
     refreshIcons();
     render();
   },
 });
+/** Where an icon is, and how it is turned: where it was last put, or its place in the collage. */
+const iconAt = (id: string): { x: number; y: number; tilt: number } => {
+  const at = ICONS[id] ?? { x: 0, y: 0, tilt: 0 };
+  const moved = layout.icons[id];
+  return { tilt: at.tilt, x: moved?.x ?? at.x, y: moved?.y ?? at.y };
+};
+/** How far each icon has been dragged since it was drawn where it is. */
+const iconDrag = new Map<string, { x: number; y: number }>();
+const movable = (id: string) => ({
+  onDrag: (total: { x: number; y: number }) => {
+    const was = iconDrag.get(id) ?? { x: 0, y: 0 };
+    cards.components.move(`feature-${id}`, { a: 1, b: 0, c: 0, d: 1, e: total.x - was.x, f: total.y - was.y });
+    iconDrag.set(id, total);
+    cards.render();
+  },
+  onDrop: () => {
+    const total = iconDrag.get(id);
+    iconDrag.delete(id);
+    if (!total) return;
+    const at = iconAt(id);
+    layout.icons[id] = { x: at.x + total.x, y: at.y + total.y };
+    remember();
+  },
+});
 const features: Feature[] = [
-  { id: "pelican", name: "Pelican", glyph: "pelican", ...iconAt(0), ...toggle(() => scene.getGroup(PELICAN_ID) !== undefined, pelicanDemo, closePelican) },
-  { id: "physics", name: "Physics", glyph: "physics", ...iconAt(1), ...toggle(() => scene.getGroup(PHYSICS_ID) !== undefined, physicsDemo, closePhysics) },
-  { id: "graph", name: "Graph", glyph: "graph", ...iconAt(2), ...toggle(() => scene.getGroup(GRAPH_ID) !== undefined, graphDemo, closeGraph) },
-  { id: "morph", name: "Morph", glyph: "morph", ...iconAt(3), ...toggle(() => scene.getGroup(MORPH_ID) !== undefined, morphDemo, closeMorph) },
-  { id: "paint", name: "Paint by numbers", glyph: "paint", ...iconAt(4), ...toggle(() => components?.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), closePaint) },
-  { id: "table", name: "A million rows", glyph: "table", ...iconAt(6), ...toggle(() => table?.alive === true, tableDemo, () => table?.close()) },
-  { id: "points", name: "Ten million points", glyph: "points", ...iconAt(7), ...toggle(() => points?.alive === true, pointsDemo, () => points?.close()) },
-  { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...iconAt(8), ...toggle(() => galaxy?.alive === true, galaxyDemo, () => galaxy?.close()) },
-  { id: "map", name: "World map", glyph: "map", ...iconAt(9), ...toggle(() => worldMap?.alive === true, mapDemo, () => worldMap?.close()) },
-  { id: "book", name: "War and Peace", glyph: "book", ...iconAt(10), ...toggle(() => book?.alive === true, bookDemo, () => book?.close()) },
-  { id: "declaration", name: "Human rights in 529 languages", glyph: "languages", ...iconAt(11), ...toggle(() => rights?.alive === true, declarationDemo, () => rights?.close()) },
-  { id: "picture", name: "Paint my image…", glyph: "picture", ...iconAt(5), onClick: () => pictureInput.click() },
+  { id: "pelican", name: "Pelican", glyph: "pelican", ...iconAt("pelican"), ...movable("pelican"), ...toggle("pelican", () => scene.getGroup(PELICAN_ID) !== undefined, pelicanDemo, closePelican) },
+  { id: "physics", name: "Physics", glyph: "physics", ...iconAt("physics"), ...movable("physics"), ...toggle("physics", () => scene.getGroup(PHYSICS_ID) !== undefined, physicsDemo, closePhysics) },
+  { id: "graph", name: "Graph", glyph: "graph", ...iconAt("graph"), ...movable("graph"), ...toggle("graph", () => scene.getGroup(GRAPH_ID) !== undefined, graphDemo, closeGraph) },
+  { id: "morph", name: "Morph", glyph: "morph", ...iconAt("morph"), ...movable("morph"), ...toggle("morph", () => scene.getGroup(MORPH_ID) !== undefined, morphDemo, closeMorph) },
+  { id: "paint", name: "Paint by numbers", glyph: "paint", ...iconAt("paint"), ...movable("paint"), ...toggle("paint", () => components?.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), closePaint) },
+  { id: "table", name: "A million rows", glyph: "table", ...iconAt("table"), ...movable("table"), ...toggle("table", () => table?.alive === true, tableDemo, () => table?.close()) },
+  { id: "points", name: "Ten million points", glyph: "points", ...iconAt("points"), ...movable("points"), ...toggle("points", () => points?.alive === true, pointsDemo, () => points?.close()) },
+  { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...iconAt("galaxy"), ...movable("galaxy"), ...toggle("galaxy", () => galaxy?.alive === true, galaxyDemo, () => galaxy?.close()) },
+  { id: "map", name: "World map", glyph: "map", ...iconAt("map"), ...movable("map"), ...toggle("map", () => worldMap?.alive === true, mapDemo, () => worldMap?.close()) },
+  { id: "book", name: "War and Peace", glyph: "book", ...iconAt("book"), ...movable("book"), ...toggle("book", () => book?.alive === true, bookDemo, () => book?.close()) },
+  { id: "declaration", name: "Human rights in 529 languages", glyph: "languages", ...iconAt("declaration"), ...movable("declaration"), ...toggle("declaration", () => rights?.alive === true, declarationDemo, () => rights?.close()) },
+  { id: "picture", name: "Paint my image…", glyph: "picture", ...iconAt("picture"), ...movable("picture"), onClick: () => pictureInput.click() },
   {
     id: "many",
     name: "10,000 shapes",
     glyph: "many",
-    ...iconAt(12),
+    ...iconAt("many"), ...movable("many"),
     ...toggle(
+      "many",
       fieldOpen,
-      () => void add(sampleNamed("10,000 shapes"), FIELD_AT).then((ids) => {
+      () => void add(sampleNamed(FIELD), layout.content[FIELD] ?? WINDOWS.many).then((ids) => {
         field = ids;
         refreshIcons();
       }),
@@ -1437,21 +1570,8 @@ function refreshIcons(): void {
 
 // Drawings, text and graphics need no icon: they are on the board from the start and explain themselves.
 const sampleNamed = (name: string): Sample => samples.find((sample) => sample.name === name)!;
-const CONTENT: readonly string[] = [
-  "Text block",
-  "Text around shapes",
-  "Text in a circle",
-  "Badge",
-  "Star",
-  "Chart",
-  "Canvas shapes",
-  "Controls",
-  "Chart.js chart",
-  "D3 chart",
-  "HTML and 3D",
-];
-/** Where the ten thousand shapes go when their icon is pressed: beside the books, in the last row of windows. */
-const FIELD_AT = { x: 2620, y: 1790 };
+/** The ten thousand shapes: content too, but behind an icon, since it is heavy. */
+const FIELD = "10,000 shapes";
 
 /** Opens the board in 3D, starting above what this view shows. */
 function viewIn3d(): void {
@@ -1486,6 +1606,17 @@ chrome = new Chrome(cards, {
     { text: "Export SVG", onClick: exportSvg },
     { text: "Export JSON", onClick: () => download("board.json", "application/json", serializeDocument(scene.document)) },
     { text: "Fit the board", onClick: () => setView(home()) },
+    { text: "Export layout", onClick: () => download("layout.json", "application/json", JSON.stringify(layout, null, 1)), title: "where things are and what is drawn, as a file" },
+    {
+      text: "Reset layout",
+      onClick: () => {
+        try {
+          localStorage.removeItem(LAYOUT);
+        } catch {}
+        location.reload();
+      },
+      title: "forget what was moved, drawn or deleted",
+    },
   ],
   style: tools.style,
   settings,
@@ -1500,14 +1631,25 @@ chrome.setText("log", logLines.join("\n"));
 chrome.setText("a11y", a11yText);
 showSelection();
 
-// The content lies in a row across the top of the board, above the cards, the icons and the windows.
-{
-  let x = -740;
-  for (const name of CONTENT) {
-    const box = boxOf(await add(sampleNamed(name), { x, y: -300, middle: true }));
-    x = (box ? box.x + box.width : x) + 190;
-  }
+// The content goes where it was last put, or to its place in the collage; then the drawings on it, the ones made here
+// last time or the collage's own notes and arrows.
+for (const [name, at] of Object.entries(CONTENT_AT)) {
+  if (layout.removed.includes(name)) continue;
+  contentIds.set(name, await add(sampleNamed(name), layout.content[name] ?? at));
 }
+if (layout.drawings) {
+  for (const doc of layout.drawings) {
+    try {
+      const d = parseDocument(doc);
+      const root = d.groups?.find((g) => g.parent === undefined);
+      if (root && !scene.getGroup(root.id)) scene.replaceGroup(root.id, d);
+    } catch (error) {
+      log(`could not draw a saved drawing: ${error}`);
+    }
+  }
+} else for (const d of DRAWINGS) drawOnBoard(d.id, d.draw);
+remembering = true;
+render();
 initial = false;
 // The board in 3D shows this page in a frame: opened from here, it starts where this view is and tilts down into the room.
 const KEPT = "canvasIrView";

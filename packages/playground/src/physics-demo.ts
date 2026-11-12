@@ -3,9 +3,10 @@
 // live transform, so nothing is recorded again while it falls.
 import { type ComponentSpec, type IRDocument, RecordingContext, type Scene } from "canvas-ir";
 import { Physics } from "@canvas-ir/physics";
+import { origin } from "./collage";
 
 export const PHYSICS_ID = "physics";
-export const PHYSICS_AT = { x: 868, y: 76 };
+export const PHYSICS_AT = origin("physics");
 const W = 620;
 const H = 420;
 

@@ -49,6 +49,9 @@ export interface Feature {
   /** Whether its window is open now; an icon without one is an action, such as picking a file. */
   readonly open?: () => boolean;
   readonly onClick: () => void;
+  /** Dragging the icon: how far it has been dragged since the press, in board units, and then where it was let go. */
+  readonly onDrag?: (total: { x: number; y: number }) => void;
+  readonly onDrop?: () => void;
 }
 
 const TINTS: Record<Glyph, string> = {
@@ -140,6 +143,16 @@ export const featureIcon = (f: Feature, colors: () => Palette): ComponentSpec<nu
       click: (e) => {
         e.stopPropagation();
         f.onClick();
+      },
+      // Dragged, an icon moves, as on a desktop; it doesn't open its window.
+      dragstart: (e) => e.stopPropagation(),
+      drag: (e) => {
+        e.stopPropagation();
+        if (e.total) f.onDrag?.(e.total);
+      },
+      dragend: (e) => {
+        e.stopPropagation();
+        f.onDrop?.();
       },
       keydown: (e) => {
         const key = (e.input as { key: string }).key;

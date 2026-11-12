@@ -12,9 +12,10 @@
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
 import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
 import { WheelGesture } from "./wheel";
+import { origin } from "./collage";
 
 export const GALAXY_ID = "galaxy";
-export const GALAXY_AT = { x: 1680, y: 720 };
+export const GALAXY_AT = origin("galaxy");
 const W = 1400;
 const TITLE = 46;
 const H = 840;

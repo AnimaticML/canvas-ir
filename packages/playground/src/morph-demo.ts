@@ -1,9 +1,10 @@
 // Two drawings recorded separately, day and night, and the morph between them.
 // Parts pair up by the names on their groups; what has no partner fades.
 import { type ComponentHandle, type ComponentSpec, type IRDocument, type Morph, RecordingContext, applyToPoint, invert, keyByMeta, morph } from "canvas-ir";
+import { origin } from "./collage";
 
 export const MORPH_ID = "morph-demo";
-export const MORPH_AT = { x: 2272, y: 76 };
+export const MORPH_AT = origin("morph");
 const at = MORPH_AT;
 
 const scene = (draw: (ctx: RecordingContext, part: (name: string, body: () => void) => void) => void): IRDocument => {

@@ -5,9 +5,10 @@
 // are selected as a spreadsheet's are, and copied as tab-separated text.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RouterEvent, type Scene, VirtualGroup } from "canvas-ir";
 import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
+import { origin } from "./collage";
 
 export const TABLE_ID = "million-rows";
-export const TABLE_AT = { x: 3783, y: 21 };
+export const TABLE_AT = origin("table");
 const ROWS = 1_000_000;
 const ROW = 28;
 const TITLE = 44;

@@ -17,9 +17,10 @@ import { WheelGesture } from "./wheel";
 import { Reader, type ReaderHost, type ReaderSpec } from "./reader";
 import { type Pin, article, articlesIn, titleNear, titleOf } from "./wiki";
 import { LAND, PLACE_ZOOM, type Paint, type TileFeature, paint, placeOf, tile, tileZoom } from "./osm";
+import { origin } from "./collage";
 
 export const MAP_ID = "world-map";
-export const MAP_AT = { x: 3160, y: 776 };
+export const MAP_AT = origin("map");
 const W = 1400;
 const TITLE = 46;
 const H = 840;

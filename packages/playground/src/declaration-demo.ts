@@ -7,9 +7,10 @@
 // same layout as War and Peace.
 import declarationUrl from "./declaration/udhr.txt" with { type: "file" };
 import type { Entry, ReaderSpec, SectionSource } from "./reader";
+import { origin } from "./collage";
 
 export const DECLARATION_ID = "human-rights";
-export const DECLARATION_AT = { x: 1360, y: 1790 };
+export const DECLARATION_AT = origin("declaration");
 
 export const declaration: ReaderSpec = {
   id: DECLARATION_ID,

@@ -3,9 +3,10 @@
 // each tick; the nodes are drawn once.
 import { type ComponentSpec, type Point, RecordingContext, type Scene } from "canvas-ir";
 import { type Simulation, type SimulationLinkDatum, type SimulationNodeDatum, forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from "d3-force";
+import { origin } from "./collage";
 
 export const GRAPH_ID = "graph";
-export const GRAPH_AT = { x: 1600, y: 76 };
+export const GRAPH_AT = origin("graph");
 const W = 560;
 const H = 420;
 const COLORS = ["#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c", "#0891b2"];

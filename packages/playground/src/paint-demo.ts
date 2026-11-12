@@ -5,9 +5,10 @@
 // from those borders; clicking a region paints it, read off the index map.
 import { type ComponentSpec, RecordingContext, type RegionMap, type RegionOutlines, traceBorders, traceRegionPath } from "canvas-ir";
 import { type PaletteColor, type VectorizeResult, vectorize } from "@canvas-ir/vectorize";
+import { origin } from "./collage";
 
 export const PAINT_ID = "paint-by-numbers";
-export const PAINT_AT = { x: 2920, y: 92 };
+export const PAINT_AT = origin("paint");
 const W = 240;
 const H = 160;
 /** The previews' width and the template's largest size on the board. */
