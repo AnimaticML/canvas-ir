@@ -1,12 +1,13 @@
-// Drawing tools: pen, rectangle, ellipse and text. Each records a new group
+// Drawing tools: pen, rectangle, ellipse, text and arrow. Each records a new group
 // through a RecordingContext and hands it to the board, which swaps it into the
 // scene; while drawing, a preview goes on the overlay. Corners snap to the
 // board like a drag does. Text is typed into the hidden textarea every text
-// field shares and drawn on the overlay as it is typed.
+// field shares and drawn on the overlay as it is typed. An arrow is drawn from one
+// thing to another and holds on to both (the board draws it; see connectors.ts).
 import { textSink } from "./ui/kit";
 import { RecordingContext, type Matrix2D, type Point, type RecordingContextOptions, type Scene, applyToPoint, fitCurve, simplifyPolyline, traceCurve } from "canvas-ir";
 
-export type ToolName = "select" | "pen" | "rect" | "ellipse" | "text";
+export type ToolName = "select" | "pen" | "rect" | "ellipse" | "text" | "arrow";
 
 export interface ToolHost {
   readonly scene: () => Scene;
@@ -15,6 +16,12 @@ export interface ToolHost {
   readonly pixel: () => number;
   /** A snapped point near `world`, or null; `kind` is shown on the board. */
   readonly snap: (world: Point) => { point: Point; kind: string } | null;
+  /** What an arrow's end would hold at a point on the screen, by the key the board knows it by; null over empty board. */
+  readonly keyAt: (screen: Point) => string | null;
+  /** The box of what a key names, to show what an arrow's end will hold. */
+  readonly boxOf: (key: string) => { x: number; y: number; width: number; height: number } | null;
+  /** Puts an arrow on the board, its ends held on to what they were drawn from and to, or loose. */
+  readonly connect: (from: { key: string | null; point: Point }, to: { key: string | null; point: Point }) => void;
   /** Puts a newly recorded group on the board. */
   readonly commit: (id: string, draw: (ctx: RecordingContext) => void) => void;
   readonly recorder: RecordingContextOptions;
@@ -30,6 +37,8 @@ export interface Style {
 }
 
 let count = 0;
+/** Drawings get ids no earlier visit's drawings, kept on the board, already have. */
+const nextId = (kind: string): string => `drawn-${kind}-${Date.now().toString(36)}-${count++}`;
 
 export class Tools {
   current: ToolName = "select";
@@ -40,6 +49,8 @@ export class Tools {
   private square = false;
   /** The snap shown while drawing. */
   mark: { point: Point; kind: string } | null = null;
+  /** An arrow being drawn: what its tail holds, and what the pointer is over now. */
+  private link: { from: string | null; over: string | null } | null = null;
   /** Text being typed: where, what so far, and the caret. */
   private editor: { world: Point; value: string; caret: number } | null = null;
 
@@ -58,6 +69,16 @@ export class Tools {
       this.openEditor(screen, p);
       return true;
     }
+    if (this.current === "arrow") {
+      const key = this.host.keyAt(screen);
+      this.link = { from: key, over: key };
+      this.mark = null;
+      const world = this.host.toWorld(screen);
+      this.from = world;
+      this.to = world;
+      this.host.redraw();
+      return true;
+    }
     this.from = p;
     this.to = p;
     this.points = [p];
@@ -72,6 +93,9 @@ export class Tools {
     if (this.current === "pen") {
       this.points.push(this.host.toWorld(screen));
       this.mark = null;
+    } else if (this.link) {
+      this.to = this.host.toWorld(screen);
+      this.link.over = this.host.keyAt(screen);
     } else {
       this.to = this.place(screen);
     }
@@ -80,6 +104,18 @@ export class Tools {
 
   up(): void {
     if (!this.from) return;
+    if (this.link) {
+      const link = this.link;
+      const a = this.from;
+      const b = this.to ?? a;
+      this.link = null;
+      this.from = null;
+      this.to = null;
+      // A press without a drag, or one that ends on what it began on, draws nothing.
+      if ((link.from !== null && link.from === link.over) || Math.hypot(b.x - a.x, b.y - a.y) < 8 * this.host.pixel()) return this.host.redraw();
+      this.host.connect({ key: link.from, point: a }, { key: link.over, point: b });
+      return;
+    }
     const from = this.from;
     const to = this.box(from, this.to ?? from);
     const points = this.points;
@@ -87,7 +123,7 @@ export class Tools {
     this.to = null;
     this.points = [];
     this.mark = null;
-    const id = `drawn-${this.current}-${count++}`;
+    const id = nextId(this.current);
     const { fill, stroke, lineWidth } = this.style;
     if (this.current === "pen") {
       if (points.length < 2) return this.host.redraw();
@@ -127,6 +163,29 @@ export class Tools {
 
   /** The preview, in device pixels on the overlay. */
   preview(ctx: CanvasRenderingContext2D, device: Matrix2D, dpr: number): void {
+    if (this.link && this.from && this.to) {
+      // What each end will hold, outlined, and a dashed line between the ends.
+      for (const key of [this.link.from, this.link.over]) {
+        const b = key ? this.host.boxOf(key) : null;
+        if (!b) continue;
+        const p = applyToPoint(device, b.x, b.y);
+        const q = applyToPoint(device, b.x + b.width, b.y + b.height);
+        ctx.strokeStyle = "#2563eb";
+        ctx.lineWidth = 2 * dpr;
+        ctx.setLineDash([]);
+        ctx.strokeRect(p.x, p.y, q.x - p.x, q.y - p.y);
+      }
+      const a = applyToPoint(device, this.from.x, this.from.y);
+      const b = applyToPoint(device, this.to.x, this.to.y);
+      ctx.strokeStyle = this.style.stroke;
+      ctx.lineWidth = 3 * dpr;
+      ctx.setLineDash([8 * dpr, 6 * dpr]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     if (this.current === "pen" && this.points.length > 1) {
       ctx.strokeStyle = this.style.stroke;
       ctx.lineWidth = this.style.lineWidth * Math.hypot(device.a, device.b);
@@ -186,6 +245,7 @@ export class Tools {
   }
 
   cancel(): void {
+    this.link = null;
     this.from = null;
     this.to = null;
     this.points = [];
@@ -217,7 +277,7 @@ export class Tools {
       const text = editor.value.trimEnd();
       if (!keep || text === "") return;
       const lines = text.split("\n");
-      const id = `drawn-text-${count++}`;
+      const id = nextId("text");
       this.host.commit(id, (ctx) => {
         ctx.font = "18px system-ui, sans-serif";
         ctx.fillStyle = this.style.stroke;

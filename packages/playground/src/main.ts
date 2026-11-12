@@ -27,6 +27,7 @@ import {
   type Op,
   type Point,
   type IRDocument,
+  type JsonValue,
   parseDocument,
 } from "canvas-ir";
 import { vectorize } from "@canvas-ir/vectorize";
@@ -51,7 +52,8 @@ import { type ControlHooks, type LiveSpec, type Sample, samples } from "./sample
 import { Chrome, type Settings } from "./ui/chrome";
 import { type Feature, featureIcon } from "./ui/features";
 import { windowFrame } from "./ui/window";
-import { CONTENT as CONTENT_AT, DRAWINGS, ICONS, WINDOWS, origin } from "./collage";
+import { CONNECTORS, CONTENT as CONTENT_AT, DRAWINGS, ICONS, WINDOWS, origin } from "./collage";
+import { type Box as ConnectorBox, type Connector, drawArrow, drawRing, fromMeta, route, toMeta } from "./connectors";
 import { CardLayer } from "./ui/cards";
 import { textSink } from "./ui/kit";
 
@@ -386,6 +388,8 @@ floorHost.canvasIrFloor = {
 };
 
 const draw = (): void => {
+  // Arrows follow what they hold before the frame is drawn.
+  reconnect();
   // What the map records now is drawn in this frame, not the next.
   worldMap?.flush();
   frame = 0;
@@ -664,7 +668,10 @@ const wire = (): void => {
       select([...picked]);
       log(`lasso picked ${picked.size}`);
     }
-    if (drag && (drag.moved.x !== 0 || drag.moved.y !== 0)) remember();
+    if (drag && (drag.moved.x !== 0 || drag.moved.y !== 0)) {
+      for (const id of drag.ids) if (connectors.has(id)) movedConnector(id, drag.moved.x, drag.moved.y);
+      remember();
+    }
     drag = null;
     renderer.drop();
     lasso = null;
@@ -711,7 +718,8 @@ canvas.addEventListener("pointerdown", (e) => {
   // Keeps focus where it is, so the text tool's hidden textarea keeps the keyboard.
   e.preventDefault();
   textSink().release();
-  if (cards.hits(point(e))) {
+  // The arrow tool starts on icons too, to hold on to them.
+  if (cards.hits(point(e)) && tools.current !== "arrow") {
     cardPress = true;
     keysToCards = true;
     cards.router.pointerDown(pointer(e));
@@ -791,7 +799,7 @@ canvas.addEventListener(
   },
   { passive: false },
 );
-const TOOL_KEYS: Record<string, ToolName> = { v: "select", p: "pen", r: "rect", o: "ellipse", t: "text" };
+const TOOL_KEYS: Record<string, ToolName> = { v: "select", p: "pen", r: "rect", o: "ellipse", t: "text", a: "arrow" };
 const useTool = (name: ToolName): void => {
   tools.cancel();
   tools.current = name;
@@ -831,6 +839,9 @@ const tools = new Tools({
     const found = scene.snap(world, { radius: settings.snapRadius / Math.hypot(view.a, view.b), kinds });
     return found ? { point: found.point, kind: found.kind } : null;
   },
+  keyAt: (screen) => keyAt(screen),
+  boxOf: (key) => boxOfKey(key),
+  connect: (from, to) => connect(from, to),
   commit: (id, draw) => {
     drawOnBoard(id, draw);
     select([id]);
@@ -1379,9 +1390,9 @@ function placeWindow(key: string): void {
   reveal({ ...box, x: to.x, y: to.y });
 }
 /** Records a drawing into a group of its own on the board, as the drawing tools do. */
-function drawOnBoard(id: string, draw: (c: RecordingContext) => void): void {
+function drawOnBoard(id: string, draw: (c: RecordingContext) => void, meta: Record<string, JsonValue> = {}): void {
   const recorder = new RecordingContext(recorderOptions);
-  recorder.beginGroup({ id, meta: { source: "drawn" } });
+  recorder.beginGroup({ id, meta: { source: "drawn", ...meta } });
   draw(recorder);
   recorder.endGroup();
   const drawn = recorder.getSources();
@@ -1391,6 +1402,93 @@ function drawOnBoard(id: string, draw: (c: RecordingContext) => void): void {
     if (source !== undefined) sources.set(opId, source);
   });
 }
+
+// Connectors: arrows that hold on to the things they join and are drawn again when those move (see connectors.ts).
+/** The connectors on the board, by group id, with where each was last drawn from and to, to tell when to draw it again. */
+const connectors = new Map<string, string>();
+/** The box of what a connector's end holds: an icon, content, a demo window or anything else on the board; null when it isn't there. */
+const boxOfKey = (key: string): ConnectorBox | null => {
+  const at = key.indexOf(":");
+  const kind = key.slice(0, at);
+  const id = key.slice(at + 1);
+  if (kind === "icon") return cards.scene.getGroup(`feature-${id}`) ? (cards.scene.bounds(`feature-${id}`) ?? null) : null;
+  if (kind === "content") {
+    const ids = (id === FIELD ? field : (contentIds.get(id) ?? [])).filter(exists);
+    return ids.length > 0 ? boxOf(ids) : null;
+  }
+  if (kind === "window") {
+    const group = WINDOW_OF[id];
+    return group && scene.getGroup(group) ? (scene.bounds(group, "geometry") ?? null) : null;
+  }
+  return exists(id) ? (scene.bounds(id) ?? null) : null;
+};
+/** What a connector's end would hold at a point on the screen: an icon, content, a window or a drawing; null over empty board. */
+const keyAt = (screen: Point): string | null => {
+  if (cards.hits(screen)) {
+    const icon = cards.scene.hitTest(router.toWorld(screen)).flatMap((h) => h.groups).find((g) => g.startsWith("feature-"));
+    return icon ? `icon:${icon.slice("feature-".length)}` : null;
+  }
+  const hit = scene.hitTest(router.toWorld(screen), { tolerance: 4 / Math.hypot(view.a, view.b) })[0];
+  if (!hit) return null;
+  const outer = hit.groups.at(-1) ?? hit.id;
+  if (connectors.has(outer)) return null;
+  for (const [name, ids] of contentIds) if (ids.includes(outer)) return `content:${name}`;
+  if (field.includes(outer)) return `content:${FIELD}`;
+  const windows = withWindows([outer]);
+  for (const [key, group] of Object.entries(WINDOW_OF)) if (windows.includes(group)) return `window:${key}`;
+  return `board:${outer}`;
+};
+/** Draws a connector, from where its ends are now, into its group. */
+const drawConnector = (id: string, c: Connector): void => {
+  if (c.kind === "ring") {
+    const box = c.from.key ? boxOfKey(c.from.key) : null;
+    const b = box ?? { x: c.from.x - 75, y: c.from.y - 75, width: 150, height: 150 };
+    const kept: Connector = { ...c, from: { ...c.from, x: b.x + b.width / 2, y: b.y + b.height / 2 } };
+    drawOnBoard(id, (ctx) => drawRing(ctx, b, c), { connector: toMeta(kept) });
+    connectors.set(id, JSON.stringify(b));
+    return;
+  }
+  const { from, to } = route(c, boxOfKey);
+  const kept: Connector = { ...c, from: { ...c.from, x: from.x, y: from.y }, to: { ...(c.to ?? c.from), x: to.x, y: to.y } };
+  drawOnBoard(id, (ctx) => drawArrow(ctx, from, to, c), { connector: toMeta(kept) });
+  connectors.set(id, JSON.stringify([from, to]));
+};
+const connectorOf = (id: string): Connector | null => fromMeta(scene.getGroup(id)?.meta);
+/** Draws again every connector whose ends moved; forgets the ones deleted. */
+const reconnect = (): void => {
+  for (const [id, last] of connectors) {
+    const c = connectorOf(id);
+    if (!c) {
+      connectors.delete(id);
+      continue;
+    }
+    if (c.kind === "ring") {
+      const box = c.from.key ? boxOfKey(c.from.key) : null;
+      if (box && JSON.stringify(box) !== last) drawConnector(id, c);
+      continue;
+    }
+    const { from, to } = route(c, boxOfKey);
+    if (JSON.stringify([from, to]) !== last) drawConnector(id, c);
+  }
+};
+/** A connector dragged as a whole: its loose ends go with it, and the held ones stay on what they hold. */
+const movedConnector = (id: string, dx: number, dy: number): void => {
+  const c = connectorOf(id);
+  if (!c) return;
+  const shift = (e: Connector["from"]): Connector["from"] => (e.key ? e : { x: e.x + dx, y: e.y + dy });
+  drawConnector(id, { ...c, from: shift(c.from), ...(c.to ? { to: shift(c.to) } : {}) });
+};
+let connectorCount = 0;
+/** Puts a new arrow on the board from one end to the other. */
+const connect = (from: { key: string | null; point: Point }, to: { key: string | null; point: Point }): void => {
+  const id = `drawn-arrow-${Date.now().toString(36)}-${connectorCount++}`;
+  const end = (e: typeof from) => (e.key ? { key: e.key, x: e.point.x, y: e.point.y } : { x: e.point.x, y: e.point.y });
+  const c: Connector = { kind: "arrow", from: end(from), to: end(to), bend: 0.12, color: tools.style.stroke, seed: 1 + Math.floor(Math.random() * 1e6) };
+  drawConnector(id, c);
+  select([id]);
+  log(`arrow from ${from.key ?? "a point"} to ${to.key ?? "a point"}`);
+  remember();
+};
 
 /** Frames around demos drawn straight on the board, by frame id, with what each holds. */
 const frames = new Map<string, readonly string[]>();
@@ -1520,6 +1618,7 @@ const movable = (id: string) => ({
     cards.components.move(`feature-${id}`, { a: 1, b: 0, c: 0, d: 1, e: total.x - was.x, f: total.y - was.y });
     iconDrag.set(id, total);
     cards.render();
+    render();
   },
   onDrop: () => {
     const total = iconDrag.get(id);
@@ -1596,6 +1695,7 @@ chrome = new Chrome(cards, {
     { name: "rect", text: "Rectangle", key: "R" },
     { name: "ellipse", text: "Ellipse", key: "O" },
     { name: "text", text: "Text", key: "T" },
+    { name: "arrow", text: "Arrow", key: "A" },
   ],
   onTool: (name) => useTool(name),
   actions: [
@@ -1647,7 +1747,12 @@ if (layout.drawings) {
       log(`could not draw a saved drawing: ${error}`);
     }
   }
-} else for (const d of DRAWINGS) drawOnBoard(d.id, d.draw);
+} else {
+  for (const d of DRAWINGS) drawOnBoard(d.id, d.draw);
+  for (const { id, connector } of CONNECTORS) drawConnector(id, connector);
+}
+for (const g of scene.document.groups ?? []) if (g.parent === undefined && fromMeta(g.meta)) connectors.set(g.id, "");
+reconnect();
 remembering = true;
 render();
 initial = false;

@@ -1,11 +1,13 @@
 // The board as a collage: on a surface with no edge, things are put down once, where they belong, and stay there,
 // gathered by what they have to do with each other rather than lined up on a grid. Reading in one corner, drawing and
 // animation in another, data in a lab, the map and the stars out there, the toys in a box; and in the middle, drawn
-// with the board's own pen and text, a day at this desk: what to open when, with arrows to the icons.
+// with the board's own pen and text, a day at this desk: what to open when, with arrows to the icons that hold on to
+// what they join (see connectors.ts).
 //
 // These are the places things start in. Whatever is moved, drawn or deleted on the board is remembered over them
 // (see `Layout` in main.ts), so this is only the first arrangement.
 import type { RecordingContext } from "canvas-ir";
+import type { Connector } from "./connectors";
 
 export interface Place {
   readonly x: number;
@@ -84,15 +86,6 @@ export interface Drawing {
   readonly draw: (c: RecordingContext) => void;
 }
 
-/** A small random but repeatable wobble, so lines look drawn by hand. */
-const wobble = (seed: number) => {
-  let s = seed;
-  return (): number => {
-    s = (s * 16807) % 2147483647;
-    return s / 2147483647 - 0.5;
-  };
-};
-
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 /** A heading written with a marker, turned a little. */
@@ -135,72 +128,6 @@ const note = (id: string, lines: readonly string[], x: number, y: number, o: { c
   },
 });
 
-/** A hand-drawn arrow from one point to another, bowed to one side by `bend` (a share of its length), with a word on it. */
-const arrow = (id: string, from: Place, to: Place, o: { bend?: number; color?: string; word?: string; seed?: number } = {}): Drawing => ({
-  id,
-  draw: (c) => {
-    const r = wobble(o.seed ?? 7);
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const length = Math.hypot(dx, dy);
-    const bend = (o.bend ?? 0.15) * length;
-    // The bow's control point, off the middle of the line, and the curve's tangent where it ends.
-    const cx = from.x + dx / 2 - (dy / length) * bend;
-    const cy = from.y + dy / 2 + (dx / length) * bend;
-    const color = o.color ?? INK;
-    c.strokeStyle = color;
-    c.lineWidth = 7;
-    c.lineCap = "round";
-    c.lineJoin = "round";
-    c.beginPath();
-    c.moveTo(from.x + r() * 6, from.y + r() * 6);
-    c.quadraticCurveTo(cx + r() * 20, cy + r() * 20, to.x, to.y);
-    c.stroke();
-    const angle = Math.atan2(to.y - cy, to.x - cx);
-    const head = 34;
-    c.beginPath();
-    c.moveTo(to.x - head * Math.cos(angle - 0.45), to.y - head * Math.sin(angle - 0.45));
-    c.lineTo(to.x, to.y);
-    c.lineTo(to.x - head * Math.cos(angle + 0.45), to.y - head * Math.sin(angle + 0.45));
-    c.stroke();
-    if (o.word) {
-      // The word sits on the bow, beside the line.
-      const mx = (from.x + 2 * cx + to.x) / 4;
-      const my = (from.y + 2 * cy + to.y) / 4;
-      c.font = `700 italic 34px ${FONT}`;
-      c.fillStyle = color;
-      c.textAlign = "center";
-      c.textBaseline = "middle";
-      c.fillText(o.word, mx - (dy / length) * 34, my + (dx / length) * 34);
-      c.textAlign = "start";
-    }
-  },
-});
-
-/** A loose loop drawn around something, to point it out. */
-const circle = (id: string, x: number, y: number, rx: number, ry: number, color: string, seed: number): Drawing => ({
-  id,
-  draw: (c) => {
-    const r = wobble(seed);
-    c.strokeStyle = color;
-    c.lineWidth = 6;
-    c.lineCap = "round";
-    c.beginPath();
-    const turns = 1.12;
-    for (let i = 0; i <= 48; i++) {
-      const t = (i / 48) * turns * Math.PI * 2 - 2.2;
-      const k = 1 + r() * 0.03 + i * 0.0015;
-      c.lineTo(x + Math.cos(t) * rx * k, y + Math.sin(t) * ry * k);
-    }
-    c.stroke();
-  },
-});
-
-/** The middle of an icon, for an arrow to point at: just above its tile's top edge, from wherever the arrow comes. */
-const iconTop = (name: string): Place => ({ x: ICONS[name]!.x + 75, y: ICONS[name]!.y - 16 });
-const iconSide = (name: string, side: "left" | "right" | "bottom"): Place =>
-  side === "left" ? { x: ICONS[name]!.x - 18, y: ICONS[name]!.y + 75 } : side === "right" ? { x: ICONS[name]!.x + 168, y: ICONS[name]!.y + 75 } : { x: ICONS[name]!.x + 75, y: ICONS[name]!.y + 240 };
-
 /** What is drawn on the board at first: each corner's name, and the day at this desk as a flowchart in the middle. */
 export const DRAWINGS: readonly Drawing[] = [
   label("note/reading", "Reading room", -600, -2110, { color: MARKERS.blue, turn: -2 }),
@@ -218,16 +145,26 @@ export const DRAWINGS: readonly Drawing[] = [
   note("note/deadline", ["Deadline close?", "Crunch numbers"], 2800, 300, { color: NOTES.green, turn: 2, width: 300 }),
   note("note/tired", ["Tired?", "Read a chapter"], 1100, 860, { color: NOTES.orange, turn: -2, width: 270 }),
   note("note/small", ["Feeling small?", "Look at the stars"], 2100, 1060, { color: NOTES.blue, turn: 4, width: 310 }),
-  arrow("note/woke-news", { x: 1250, y: 380 }, { x: 640, y: 630 }, { bend: -0.2, word: "morning", seed: 3 }),
-  arrow("note/woke-bored", { x: 1480, y: 400 }, { x: 1850, y: 550 }, { bend: 0.2, word: "weekend", seed: 5 }),
-  arrow("note/woke-deadline", { x: 1500, y: 330 }, { x: 2780, y: 360 }, { bend: -0.12, word: "workday", seed: 9 }),
-  arrow("note/news-tired", { x: 640, y: 790 }, { x: 1090, y: 930 }, { bend: -0.25, word: "evening", seed: 11 }),
-  arrow("note/bored-small", { x: 1990, y: 730 }, { x: 2200, y: 1050 }, { bend: -0.2, word: "at night", seed: 13 }),
-  arrow("note/to-map", { x: 470, y: 790 }, iconTop("map"), { bend: 0.15, color: MARKERS.blue, seed: 17 }),
-  arrow("note/to-book", { x: 1180, y: 850 }, iconSide("book", "bottom"), { bend: -0.12, color: MARKERS.orange, seed: 19 }),
-  arrow("note/to-pelican", { x: 2000, y: 550 }, iconSide("pelican", "bottom"), { bend: 0.15, color: MARKERS.violet, seed: 23 }),
-  arrow("note/to-physics", { x: 2060, y: 690 }, iconSide("physics", "left"), { bend: -0.22, color: MARKERS.orange, word: "or throw things", seed: 29 }),
-  arrow("note/to-table", { x: 3100, y: 340 }, iconSide("table", "bottom"), { bend: 0.15, color: MARKERS.green, seed: 31 }),
-  arrow("note/to-galaxy", { x: 2380, y: 1220 }, iconTop("galaxy"), { bend: -0.2, color: MARKERS.blue, seed: 37 }),
-  circle("note/ring-table", ICONS.table!.x + 75, ICONS.table!.y + 100, 150, 150, MARKERS.green, 41),
+];
+
+/** An arrow from one thing to another, by the keys the board knows them by. */
+const arrow = (id: string, from: string, to: string, o: { bend?: number; color?: string; word?: string; seed: number }): { id: string; connector: Connector } => ({
+  id,
+  connector: { kind: "arrow", from: { key: from, x: 0, y: 0 }, to: { key: to, x: 0, y: 0 }, bend: o.bend ?? 0.15, color: o.color ?? INK, seed: o.seed, ...(o.word ? { word: o.word } : {}) },
+});
+
+/** The flowchart's arrows, from note to note and from the notes to the icons they mean, held on at both ends. */
+export const CONNECTORS: readonly { id: string; connector: Connector }[] = [
+  arrow("note/woke-news", "board:note/woke", "board:note/news", { bend: -0.2, word: "morning", seed: 3 }),
+  arrow("note/woke-bored", "board:note/woke", "board:note/bored", { bend: 0.2, word: "weekend", seed: 5 }),
+  arrow("note/woke-deadline", "board:note/woke", "board:note/deadline", { bend: -0.12, word: "workday", seed: 9 }),
+  arrow("note/news-tired", "board:note/news", "board:note/tired", { bend: 0.25, word: "evening", seed: 11 }),
+  arrow("note/bored-small", "board:note/bored", "board:note/small", { bend: -0.2, word: "at night", seed: 13 }),
+  arrow("note/to-map", "board:note/news", "icon:map", { bend: 0.15, color: MARKERS.blue, seed: 17 }),
+  arrow("note/to-book", "board:note/tired", "icon:book", { bend: -0.12, color: MARKERS.orange, seed: 19 }),
+  arrow("note/to-pelican", "board:note/bored", "icon:pelican", { bend: 0.15, color: MARKERS.violet, seed: 23 }),
+  arrow("note/to-physics", "board:note/bored", "icon:physics", { bend: -0.22, color: MARKERS.orange, word: "or throw things", seed: 29 }),
+  arrow("note/to-table", "board:note/deadline", "icon:table", { bend: 0.15, color: MARKERS.green, seed: 31 }),
+  arrow("note/to-galaxy", "board:note/small", "icon:galaxy", { bend: -0.2, color: MARKERS.blue, seed: 37 }),
+  { id: "note/ring-table", connector: { kind: "ring", from: { key: "icon:table", x: 0, y: 0 }, bend: 0, color: MARKERS.green, seed: 41 } },
 ];
