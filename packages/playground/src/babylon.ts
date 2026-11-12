@@ -38,6 +38,7 @@ import { FaceTracker } from "./face";
 import { LAPTOP_DEFAULTS, setUpLaptop } from "./laptop-setup";
 import { type Eye, screenGeometry, screenMeters, throughWindow } from "./viewer";
 import { thumbsticks } from "./thumbsticks";
+import { type Machine, buildMachine, fixedSteps } from "./machine";
 
 const FONT = "system-ui, -apple-system, Segoe UI, sans-serif";
 const PALETTE = ["#f97316", "#0ea5e9", "#8b5cf6", "#10b981", "#ef4444", "#eab308", "#ec4899", "#14b8a6"];
@@ -88,6 +89,8 @@ export interface BabylonRuntime {
   viewer: { update(eye: Eye | null): void; readonly screen: { width: number; height: number } };
   /** Room point to canvas pixel, through the active camera. */
   toCanvas: (at: Vector3) => Point;
+  /** The Goldberg machine on the table, on the 3D page (not in AR). */
+  machine: Machine | null;
 }
 
 export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: HTMLIFrameElement; toggle: HTMLButtonElement; fly: HTMLButtonElement; onEvent?: (text: string) => void; onMode?: (mode: "2d" | "3d") => void; start?: "2d" | "3d"; tilt?: boolean; ar?: boolean; hands?: Partial<HandOptions>; head?: HTMLButtonElement }): Promise<BabylonRuntime> => {
@@ -99,6 +102,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   const hk = await HavokPhysics({ locateFile: () => havokWasm });
   const gravity = new Vector3(0, -9.81, 0);
   scene.enablePhysics(gravity, new HavokPlugin(true, hk));
+  // Physics goes in fixed steps, whatever the frame rate, so the machine's runs can repeat.
+  if (!options.ar) fixedSteps(scene);
 
   const camera = new ArcRotateCamera("camera", -Math.PI / 2 - 0.35, 1.12, 8, new Vector3(0, 1.1, 0), scene);
   camera.lowerRadiusLimit = 2;
@@ -268,12 +273,12 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   };
 
   // The panel's controls.
-  const button = (id: string, x: number, width: number, label: () => string, onClick: () => void): void => {
+  const button = (id: string, x: number, width: number, label: () => string, onClick: () => void, y = 92): void => {
     keep(panelUi.mount({
       id,
       state: {},
       cursor: "pointer",
-      transform: { a: 1, b: 0, c: 0, d: 1, e: x, f: 92 },
+      transform: { a: 1, b: 0, c: 0, d: 1, e: x, f: y },
       meta: { role: "button", label: label() },
       draw: (ctx, _s, ui) => {
         ctx.fillStyle = ui.pressed ? "#1d4ed8" : ui.hovered ? "#3b82f6" : "#2563eb";
@@ -314,6 +319,14 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     redraw("gravity");
   });
   button("clear", 374, 82, () => "Clear", clear);
+  // The machine on the table, once it's built.
+  let machine: Machine | null = null;
+  button("machine", 296, 160, () => (machine?.running ? "Run it again" : "Run the machine"), () => {
+    if (!machine) return;
+    flight = { from: camera.target.clone(), to: machine.center.clone(), r0: camera.radius, r1: 9, t0: performance.now() };
+    machine.run();
+    redraw("machine");
+  }, 204);
 
   const SLIDER = { x: 24, y: 166, width: 432 };
   const setBounce = (e: RouterEvent, c: ComponentHandle<object>): void => {
@@ -1272,7 +1285,26 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     canvas.style.cursor = pageCursor ?? panelUi.cursor ?? objects.cursor ?? "";
   });
 
-  for (let i = 0; i < 5; i++) drop(i % 2 === 0 ? "crate" : "ball");
+  // In AR a few crates and balls to start with; on the 3D page the machine instead, ending at the Physics icon.
+  if (options.ar) for (let i = 0; i < 5; i++) drop(i % 2 === 0 ? "crate" : "ball");
+  else {
+    const icon = page.cards().bounds("feature-physics");
+    const aimAt = icon ? { x: icon.x + icon.width / 2, y: icon.y + icon.width / 2 } : { x: 3155, y: 2175 };
+    machine = buildMachine(scene, shadows, {
+      target: floor.toRoom(aimAt),
+      along: new Vector3(1, 0, 0),
+      onEvent: (text) => {
+        log(text);
+        redraw("machine");
+      },
+      // The last ball presses the icon, as a click on the board there would.
+      onArrive: () => {
+        const e: Press = { pointerId: 93, pointerType: "mouse", button: 0, buttons: 1, clientX: 0, clientY: 0, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, timeStamp: performance.now() };
+        sendToPage(e, "pointerdown", aimAt);
+        sendToPage({ ...e, buttons: 0 }, "pointerup", aimAt);
+      },
+    });
+  }
   show(mode);
   if (mode === "3d") {
     aim(new Vector3(0, 1.1, 0));
@@ -1341,7 +1373,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     { metersPerUnit: 1, ...(options.hands ?? {}) },
   );
   const runtime: BabylonRuntime = {
-    press, pressAt, hands, viewer, toCanvas: (at) => onHost(at),
+    press, pressAt, hands, viewer, toCanvas: (at) => onHost(at), machine,
     engine, scene, world, floor, panel, things, drop, resize, visible: !options.ar, events: [],
     controlAt: point => router.pick(onHost(point)).path.find(id=>handles.has(id))??null,
     pointer: (phase, point, target) => {
@@ -1380,7 +1412,7 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     return { x: Math.round(q.x), y: Math.round(q.y) };
   };
   (window as unknown as { canvasIrBabylon?: unknown }).canvasIrBabylon = {
-    scene, camera, world, things, drop, hands, press, pressAt, handHolds, viewer, viewerCamera,
+    scene, camera, world, things, drop, hands, press, pressAt, handHolds, viewer, viewerCamera, machine,
     at: (id: string) => onHost(things.get(id)!.mesh.getAbsolutePosition()),
     onBoard: (x: number, y: number) => onHost(floor.toRoom({ x, y })),
     floor,
