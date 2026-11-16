@@ -29,6 +29,7 @@ await page("game-main.ts", "game.html", "game.html", '<script type="module" src=
 await page("space-main.ts", "space.html", "space.html", '<script type="module" src="./space-main.ts"></script>');
 await page("babylon-main.ts", "babylon.html", "babylon.html", '<script type="module" src="./babylon-main.ts"></script>');
 await page("ar-main.ts", "ar.html", "ar.html", '<script type="module" src="./ar-main.ts"></script>');
+await page("motion-main.ts", "motion.html", "motion.html", '<script type="module" src="./motion-main.ts"></script>');
 // Keep large vision runtimes outside the inline application bundle, at stable
 // relative URLs so GitHub Pages works under any repository base path.
 await Bun.write(new URL("./dist/ar-vendor/opencv.js", import.meta.url), Bun.file(import.meta.resolve("@techstark/opencv-js/dist/opencv.js").replace("file://", "")));
@@ -64,3 +65,16 @@ const faceModel = await faceModelFile.exists()
 if (new Bun.CryptoHasher("sha256").update(faceModel).digest("hex") !== "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff") throw new Error("Face model SHA-256 mismatch");
 await Bun.write(faceModelCache, faceModel);
 await Bun.write(new URL("./dist/ar-vendor/face_landmarker.task", import.meta.url), faceModel);
+// The body model, for the motion lab: fetched and checked the same way.
+const poseModelCache = new URL("./.ar-cache/pose_landmarker_full.task", import.meta.url);
+const poseModelFile = Bun.file(process.env.POSE_MODEL_PATH || poseModelCache);
+const poseModel = await poseModelFile.exists()
+  ? new Uint8Array(await poseModelFile.arrayBuffer())
+  : await (async () => {
+      const response = await fetch("https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task");
+      if (!response.ok) throw new Error(`Pose model download failed: ${response.status}`);
+      return new Uint8Array(await response.arrayBuffer());
+    })();
+if (new Bun.CryptoHasher("sha256").update(poseModel).digest("hex") !== "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1") throw new Error("Pose model SHA-256 mismatch");
+await Bun.write(poseModelCache, poseModel);
+await Bun.write(new URL("./dist/ar-vendor/pose_landmarker_full.task", import.meta.url), poseModel);

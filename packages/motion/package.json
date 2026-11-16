@@ -1,0 +1,10 @@
+{
+  "name": "@canvas-ir/motion",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Motion IR: what a camera sees of a person, turned into a calibrated body, its movements and its actions, for any engine",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

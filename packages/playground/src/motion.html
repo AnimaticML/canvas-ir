@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Motion lab</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: #e2e8f0; color: #0f172a; font: 13px/1.4 system-ui, sans-serif; }
+      body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+      header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 12px; background: #fff; border-bottom: 1px solid #cbd5e1; }
+      header h1 { font-size: 15px; margin: 0 6px 0 0; }
+      header label { display: flex; align-items: center; gap: 6px; }
+      header select, header input[type="number"] { font: inherit; padding: 3px 6px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; }
+      header input[type="number"] { width: 64px; }
+      header input[type="range"] { width: 90px; }
+      header output { min-width: 2.6em; font-variant-numeric: tabular-nums; color: #475569; }
+      button { font: 600 13px/1 system-ui, sans-serif; border: 0; border-radius: 999px; padding: 8px 14px; background: #0f172a; color: #fff; cursor: pointer; }
+      button.light { background: #e2e8f0; color: #0f172a; }
+      button:disabled { opacity: 0.4; cursor: default; }
+      button#record.on { background: #dc2626; }
+      .group { display: flex; align-items: center; gap: 6px; padding-left: 12px; border-left: 1px solid #e2e8f0; }
+      main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 300px; min-height: 0; }
+      .camera { position: relative; background: #0f172a; min-height: 0; }
+      .camera video, .camera canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+      .camera.mirrored video, .camera.mirrored canvas { transform: scaleX(-1); }
+      .view { position: relative; min-height: 0; }
+      #scene { width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+      .view .views { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; }
+      .view .views button { padding: 6px 10px; background: rgba(255, 255, 255, 0.9); color: #0f172a; }
+      .view .views button[aria-pressed="true"] { background: #2563eb; color: #fff; }
+      #info { overflow: auto; background: #fff; border-left: 1px solid #cbd5e1; padding: 10px 12px; font-size: 12px; }
+      #info h2 { font-size: 13px; margin: 12px 0 4px; }
+      #info h2:first-child { margin-top: 0; }
+      #info table { border-collapse: collapse; width: 100%; }
+      #info td { padding: 1px 4px; font-variant-numeric: tabular-nums; }
+      #info td:last-child { text-align: right; }
+      #info .seen { color: #059669; } #info .held { color: #d97706; } #info .assumed { color: #94a3b8; }
+      #info p { margin: 4px 0; color: #475569; }
+      footer { height: 170px; background: #fff; border-top: 1px solid #cbd5e1; }
+      #timeline { width: 100%; height: 100%; display: block; touch-action: none; }
+      .note { position: absolute; left: 12px; bottom: 12px; right: 12px; color: #e2e8f0; font-size: 12px; pointer-events: none; }
+      @media (max-width: 900px) {
+        main { grid-template-columns: 1fr; grid-template-rows: 40vh 50vh auto; overflow: auto; }
+        #info { border-left: 0; border-top: 1px solid #cbd5e1; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Motion lab</h1>
+      <label>Source <select id="source"></select></label>
+      <button id="record" disabled>Record</button>
+      <button id="save" class="light">Save take</button>
+      <button id="open" class="light">Open take…</button>
+      <input id="files" type="file" accept=".json,video/*" multiple hidden />
+      <label>Compare <select id="compare">
+        <option value="">nothing</option>
+        <option value="raw">this take, unsmoothed</option>
+        <option value="file">a take from a file…</option>
+      </select></label>
+      <input id="filesB" type="file" accept=".json" hidden />
+      <span class="group">
+        <label>Setup <select id="setup"></select></label>
+        <label>Height <input id="height" type="number" min="1" max="2.3" step="0.01" placeholder="auto" /> m</label>
+      </span>
+      <span class="group">
+        <label><input id="smooth" type="checkbox" checked /> Smooth</label>
+        <label>still <input id="minCutoff" type="range" min="0.1" max="5" step="0.1" value="1.2" /><output id="minCutoffOut"></output></label>
+        <label>speed <input id="beta" type="range" min="0" max="10" step="0.1" value="3" /><output id="betaOut"></output></label>
+        <label>hold <input id="hold" type="range" min="0" max="1500" step="50" value="400" /><output id="holdOut"></output></label>
+      </span>
+      <a href="./index.html" style="margin-left:auto;color:#475569">playground</a>
+    </header>
+    <main>
+      <div class="camera" id="camera">
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+      </div>
+      <div class="view">
+        <canvas id="scene"></canvas>
+        <div class="views">
+          <button data-view="orbit" aria-pressed="true">Orbit</button>
+          <button data-view="behind">Behind</button>
+          <button data-view="side">Side</button>
+          <button data-view="camera">As the camera sees</button>
+        </div>
+      </div>
+      <aside id="info"></aside>
+    </main>
+    <footer><canvas id="timeline"></canvas></footer>
+    <script type="module" src="./motion-main.ts"></script>
+  </body>
+</html>
