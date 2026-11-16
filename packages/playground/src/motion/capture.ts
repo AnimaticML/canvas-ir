@@ -1,7 +1,7 @@
 // The camera and the trackers: a camera stream through MediaPipe's pose and hand landmarkers, frame by frame, into the
 // motion package's frames; and the video recorded beside them while a take is being recorded.
 import { FilesetResolver, HandLandmarker, PoseLandmarker } from "@mediapipe/tasks-vision";
-import type { CameraInfo, Frame, HandObservation, Landmark } from "@canvas-ir/motion";
+import type { CameraInfo, Frame, HandObservation, Landmark, TakeImage } from "@canvas-ir/motion";
 
 export interface Captured {
   readonly frame: Frame;
@@ -21,6 +21,13 @@ export class Capture {
   private start = 0;
   private recorder: MediaRecorder | null = null;
   private chunks: Blob[] = [];
+  /** Small pictures of the camera kept while recording, to go in the take itself. */
+  private images: TakeImage[] | null = null;
+  private lastImage = -Infinity;
+  private readonly still = document.createElement("canvas");
+  /** How often a picture is kept while recording, in milliseconds, and how wide it is in pixels. */
+  imageEvery = 250;
+  imageWidth = 320;
   facing: "user" | "environment" = "user";
 
   constructor(video: HTMLVideoElement, private readonly onFrame: (c: Captured) => void) {
@@ -85,18 +92,37 @@ export class Capture {
       return { side, score: label?.score ?? 0, image: toLandmarks(image), world: toLandmarks(h.worldLandmarks[i] ?? []) };
     });
     const pose = p.landmarks[0] && p.worldLandmarks[0] ? { image: toLandmarks(p.landmarks[0]), world: toLandmarks(p.worldLandmarks[0]) } : undefined;
-    this.onFrame({ frame: { t: now - this.start, ...(pose ? { pose } : {}), hands }, ms });
+    const t = now - this.start;
+    if (this.images && t - this.lastImage >= this.imageEvery) {
+      this.lastImage = t;
+      const w = this.imageWidth;
+      const h = Math.round((w * this.video.videoHeight) / this.video.videoWidth);
+      this.still.width = w;
+      this.still.height = h;
+      this.still.getContext("2d")!.drawImage(this.video, 0, 0, w, h);
+      this.images.push({ t, src: this.still.toDataURL("image/jpeg", 0.7) });
+    }
+    this.onFrame({ frame: { t, ...(pose ? { pose } : {}), hands }, ms });
   }
 
   /** Starts recording the camera's video, for a take. */
   record(): void {
     if (!this.stream) return;
+    this.images = [];
+    this.lastImage = -Infinity;
     this.chunks = [];
     const type = ["video/webm;codecs=vp9", "video/webm", "video/mp4"].find((t) => MediaRecorder.isTypeSupported(t));
     this.recorder = new MediaRecorder(this.stream, type ? { mimeType: type } : {});
     this.recorder.ondataavailable = (e) => e.data.size && this.chunks.push(e.data);
     this.recorder.start(250);
     this.restartClock();
+  }
+
+  /** The pictures kept while recording, taken away. */
+  takeImages(): TakeImage[] {
+    const images = this.images ?? [];
+    this.images = null;
+    return images;
   }
 
   /** Stops recording and gives the video. */

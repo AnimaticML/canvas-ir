@@ -19,10 +19,11 @@ import { Scene } from "@babylonjs/core/scene";
 import { Surface } from "@canvas-ir/babylon";
 import { Components, EventRouter } from "canvas-ir";
 import {
-  BONES, BONE_NAMES, type Body, type BoneName, type Frame, type JointName, SCRIPTS, SETUPS, type SetupId, type SolveOptions, Solver, type Take,
-  boneDifference, coverage, duration, frameIndexAt, jitter, lag, loadTake, saveTake, solveTake, synthesize, v,
+  BONES, BONE_NAMES, type Body, type BoneName, type Frame, type JointName, SETUPS, type SetupId, type SolveOptions, Solver, type Take, type TakeLabel,
+  boneDifference, coverage, duration, frameIndexAt, imageAt, jitter, labelsAt, lag, loadTake, saveTake, solveTake, v,
 } from "@canvas-ir/motion";
 import { Capture } from "./motion/capture";
+import { Character, ROBOT } from "./motion/character";
 import { Mannequin } from "./motion/mannequin";
 import { Overlay, Timeline } from "./motion/views";
 
@@ -34,6 +35,8 @@ const recordButton = $<HTMLButtonElement>("record");
 const info = $<HTMLElement>("info");
 const video = $<HTMLVideoElement>("video");
 const cameraBox = $<HTMLElement>("camera");
+const still = $<HTMLImageElement>("still");
+const labelInput = $<HTMLInputElement>("label");
 
 // The 3D view.
 const canvas = $<HTMLCanvasElement>("scene");
@@ -93,6 +96,13 @@ const drawFrustum = (fov: number, aspect: number): void => {
 };
 
 const mannequin = new Mannequin(scene, "a");
+// The robot, driven by the same body; it loads in a moment.
+let character: Character | null = null;
+Character.load(scene, ROBOT).then(
+  (c) => (character = c),
+  (e) => console.error("the character didn't load", e),
+);
+let showing = "robot" as "robot" | "rods" | "both";
 const ghost = new Mannequin(scene, "b", { ghost: "#7c3aed" });
 ghost.setEnabled(false);
 
@@ -114,6 +124,8 @@ const state = {
   inferMs: 0,
   liveBody: null as Body | null,
   liveFrame: null as Frame | null,
+  /** Labels said while recording, before the take exists. */
+  recLabels: [] as TakeLabel[],
 };
 
 const options = (): SolveOptions => {
@@ -133,7 +145,7 @@ const resolve = (): void => {
   liveSolver = new Solver(options());
   if (state.take) {
     state.bodies = solveTake(state.take, options());
-    timeline.setTake(state.bodies, duration(state.take));
+    timeline.setTake(state.bodies, duration(state.take), state.take.labels ?? []);
   }
   const compare = compareSelect.value;
   if (compare === "raw" && state.take) {
@@ -191,13 +203,14 @@ const openTake = (take: Take, videoBlob: Blob | null = null): void => {
     video.src = state.videoUrl;
     video.loop = false;
   } else video.removeAttribute("src");
+  still.hidden = !!state.videoUrl || !take.images?.length;
   cameraBox.classList.toggle("mirrored", !!take.camera.mirrored);
   setupSelect.value = take.setup;
   state.t = 0;
   state.playing = true;
   timeline.setPlaying(true);
   if (state.videoUrl) void video.play().catch(() => undefined);
-  overlay.show({ image: { width: take.camera.width, height: take.camera.height }, video: !!state.videoUrl, visible: 0.5 });
+  overlay.show({ image: { width: take.camera.width, height: take.camera.height }, video: !!state.videoUrl, still: !still.hidden, visible: 0.5, mirrored: !!take.camera.mirrored });
   drawFrustum(take.camera.fov ?? SETUPS[take.setup].fov, take.camera.height / take.camera.width);
   resolve();
   aimViews();
@@ -210,7 +223,7 @@ const capture = new Capture(video, ({ frame, ms }) => {
   state.liveBody = liveSolver.solve(frame, capture.camera());
   if (state.recording) {
     state.recording.push(frame);
-    timeline.setRecording(state.recording.length);
+    timeline.setRecording(state.recording.length, frame.t);
   }
 });
 const stopLive = (): void => {
@@ -239,7 +252,8 @@ const startLive = async (facing: "user" | "environment"): Promise<void> => {
   liveSolver = new Solver(options());
   const cam = capture.camera();
   cameraBox.classList.toggle("mirrored", !!cam.mirrored);
-  overlay.show({ image: { width: cam.width, height: cam.height }, video: true });
+  still.hidden = true;
+  overlay.show({ image: { width: cam.width, height: cam.height }, video: true, still: false, labels: [], marks: [], mirrored: !!cam.mirrored });
   drawFrustum(SETUPS[setupSelect.value as SetupId].fov, cam.height / cam.width);
   recordButton.disabled = false;
   aimViews();
@@ -249,6 +263,8 @@ recordButton.addEventListener("click", async () => {
   if (!state.live) return;
   if (!state.recording) {
     state.recording = [];
+    state.recLabels = [];
+    timeline.setLabels([]);
     capture.record();
     liveSolver = new Solver(options());
     recordButton.textContent = "Stop";
@@ -261,6 +277,9 @@ recordButton.addEventListener("click", async () => {
   recordButton.classList.remove("on");
   timeline.setRecording(null);
   const blob = await capture.stopRecording();
+  const images = capture.takeImages();
+  const labels = state.recLabels;
+  state.recLabels = [];
   const created = new Date().toISOString();
   const name = `take-${created.slice(0, 19).replace(/[:T]/g, "-")}`;
   const take: Take = {
@@ -271,6 +290,8 @@ recordButton.addEventListener("click", async () => {
     created,
     ...(blob ? { video: `${name}.webm` } : {}),
     frames,
+    images,
+    labels,
   };
   sourceSelect.value = "replay";
   openTake(take, blob);
@@ -323,7 +344,7 @@ filesB.addEventListener("change", async () => {
 });
 
 // The sources: the scripted takes, the cameras, and the take being replayed.
-for (const s of SCRIPTS) sourceSelect.add(new Option(`Scripted: ${s.name}`, `script:${s.name}`));
+sourceSelect.add(new Option("Choose…", ""));
 if (navigator.mediaDevices && "getUserMedia" in navigator.mediaDevices) {
   sourceSelect.add(new Option("Camera, front", "camera:user"));
   sourceSelect.add(new Option("Camera, rear", "camera:environment"));
@@ -332,8 +353,7 @@ sourceSelect.add(new Option("The take being replayed", "replay"));
 for (const s of Object.values(SETUPS)) setupSelect.add(new Option(s.label, s.id));
 sourceSelect.addEventListener("change", () => {
   const value = sourceSelect.value;
-  if (value.startsWith("script:")) openTake(synthesize(SCRIPTS.find((s) => `script:${s.name}` === value)!).take);
-  else if (value.startsWith("camera:")) void startLive(value.slice(7) as "user" | "environment");
+  if (value.startsWith("camera:")) void startLive(value.slice(7) as "user" | "environment");
 });
 for (const id of ["setup", "smooth", "minCutoff", "beta", "hold", "height"]) $(id).addEventListener("input", () => resolve());
 
@@ -448,9 +468,43 @@ const showInfo = (body: Body | null): void => {
       );
     }
   }
-  if (!body && !state.live) parts.push("<p>Pick a scripted take, a camera, or open a saved take.</p>");
+  const labels = takeLabels();
+  if (labels?.length) {
+    const m = (t: number) => `${Math.floor(t / 60000)}:${String(Math.floor(t / 1000) % 60).padStart(2, "0")}`;
+    parts.push(`<h2>Doing</h2><table>${labels.map((l, i) => `<tr><td>${m(l.t0)}</td><td style="text-align:left">${l.by === "watcher" ? "👁 " : ""}${l.text.replace(/</g, "&lt;")}</td><td><button class="light x" data-unlabel="${i}" title="Remove">×</button></td></tr>`).join("")}</table>`);
+  }
+  if (!body && !state.live) parts.push("<p>Open the camera and press Record, or open a saved take. While recording, type what you are doing and press Enter: those labels go into the take, beside small pictures from the camera.</p>");
   info.innerHTML = parts.join("");
 };
+
+// Labels: what the person says they are doing, typed while recording or while replaying a take.
+const takeLabels = (): TakeLabel[] | null => (state.recording ? state.recLabels : state.take && !state.live ? ((state.take as unknown as { labels?: TakeLabel[] }).labels ??= []) : null);
+const labelTime = (): number => (state.recording ? (state.recording.at(-1)?.t ?? 0) : state.t);
+labelInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const text = labelInput.value.trim();
+  const labels = takeLabels();
+  if (!text || !labels) return;
+  labels.push({ t0: Math.round(labelTime()), text, by: "person" });
+  labels.sort((a, b) => a.t0 - b.t0);
+  labelInput.value = "";
+  timeline.setLabels(labels);
+  lastInfo = 0;
+});
+info.addEventListener("click", (e) => {
+  const i = (e.target as HTMLElement).closest<HTMLElement>("[data-unlabel]")?.dataset.unlabel;
+  const labels = takeLabels();
+  if (i === undefined || !labels) return;
+  labels.splice(Number(i), 1);
+  timeline.setLabels(labels);
+  lastInfo = 0;
+});
+const figureButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".figures button"));
+for (const b of figureButtons)
+  b.addEventListener("click", () => {
+    showing = b.dataset.figure as typeof showing;
+    for (const o of figureButtons) o.setAttribute("aria-pressed", String(o === b));
+  });
 
 // Each frame: the clock, the mannequins, the overlay, the timeline.
 let last = performance.now();
@@ -472,7 +526,8 @@ engine.runRenderLoop(() => {
   }
   const body = currentBody();
   const root = currentRoot();
-  mannequin.show(body, root);
+  mannequin.show(showing === "robot" ? null : body, root);
+  character?.show(showing === "rods" ? null : body, root);
   if (body) {
     const target = floorUnder(body, root);
     floorY = floorY === -1 ? target : floorY + (target - floorY) * Math.min(1, dt / 300);
@@ -483,7 +538,13 @@ engine.runRenderLoop(() => {
     ghost.show(b, b?.root ?? root);
   }
   if (!state.live) timeline.setTime(state.t);
-  overlay.show({ frame: currentFrame() });
+  const take = state.live ? null : state.take;
+  if (take && !still.hidden) {
+    const img = imageAt(take, state.t);
+    if (img && still.getAttribute("src") !== img.src) still.src = img.src;
+  }
+  const marks = take?.marks?.filter((m) => m.t0 <= state.t && state.t <= (m.t1 ?? m.t0 + 1000)) ?? [];
+  overlay.show({ frame: currentFrame(), labels: state.recording ? state.recLabels.slice(-1) : take ? labelsAt(take, state.t) : [], marks });
   showInfo(body);
   scene.render();
 });
@@ -502,8 +563,7 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-// Start on the jousting take: what this lab was first made for.
-sourceSelect.value = "script:Joust";
-openTake(synthesize(SCRIPTS.find((s) => s.name === "Joust")!).take);
+sourceSelect.value = "";
+drawFrustum(SETUPS.desk.fov, 9 / 16);
 
-(window as unknown as { canvasIrMotion: unknown }).canvasIrMotion = { state, scene, openTake, resolve, select, mannequin };
+(window as unknown as { canvasIrMotion: unknown }).canvasIrMotion = { state, scene, openTake, resolve, select, mannequin, character: () => character };

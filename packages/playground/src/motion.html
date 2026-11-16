@@ -22,13 +22,17 @@
       .group { display: flex; align-items: center; gap: 6px; padding-left: 12px; border-left: 1px solid #e2e8f0; }
       main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 300px; min-height: 0; }
       .camera { position: relative; background: #0f172a; min-height: 0; }
-      .camera video, .camera canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-      .camera.mirrored video, .camera.mirrored canvas { transform: scaleX(-1); }
+      .camera video, .camera canvas, .camera img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+      .camera.mirrored video, .camera.mirrored canvas, .camera.mirrored img { transform: scaleX(-1); }
       .view { position: relative; min-height: 0; }
       #scene { width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
       .view .views { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; }
       .view .views button { padding: 6px 10px; background: rgba(255, 255, 255, 0.9); color: #0f172a; }
       .view .views button[aria-pressed="true"] { background: #2563eb; color: #fff; }
+      .view .figures { left: auto; right: 8px; }
+      .camera img[hidden] { display: none; }
+      input.label { position: absolute; left: 8px; right: 8px; bottom: 8px; font: 13px system-ui, sans-serif; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 999px; background: rgba(255,255,255,0.95); }
+      #info button.x { padding: 2px 7px; font-size: 12px; }
       #info { overflow: auto; background: #fff; border-left: 1px solid #cbd5e1; padding: 10px 12px; font-size: 12px; }
       #info h2 { font-size: 13px; margin: 12px 0 4px; }
       #info h2:first-child { margin-top: 0; }
@@ -75,6 +79,7 @@
     <main>
       <div class="camera" id="camera">
         <video id="video" playsinline muted></video>
+        <img id="still" alt="" hidden />
         <canvas id="overlay"></canvas>
       </div>
       <div class="view">
@@ -85,6 +90,12 @@
           <button data-view="side">Side</button>
           <button data-view="camera">As the camera sees</button>
         </div>
+        <div class="views figures">
+          <button data-figure="robot" aria-pressed="true">Robot</button>
+          <button data-figure="rods">Rods</button>
+          <button data-figure="both">Both</button>
+        </div>
+        <input id="label" class="label" placeholder="What are you doing now? Enter adds it at this moment" />
       </div>
       <aside id="info"></aside>
     </main>

@@ -1,7 +1,7 @@
 // The 2D parts of the motion page, drawn with CanvasIR: the landmarks over the camera's image, and the timeline with a
 // lane per body part showing, frame by frame, whether it was seen, held or only assumed.
 import { Components, EventRouter, Renderer, Scene, type RecordingContext } from "canvas-ir";
-import { type Body, type Frame, HAND_LINES, type JointName, P, POSE_LINES } from "@canvas-ir/motion";
+import { type Body, type Frame, HAND_LINES, type JointName, P, POSE_LINES, type TakeLabel, type TakeMark } from "@canvas-ir/motion";
 
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
@@ -76,6 +76,14 @@ interface OverlayState {
   video: boolean;
   selected: JointName | null;
   visible: number;
+  /** What was being done now, by the labels in force. */
+  labels: readonly TakeLabel[];
+  /** Marks drawn on the image now. */
+  marks: readonly TakeMark[];
+  /** Whether a still image of the take is under the drawing, in place of a video. */
+  still: boolean;
+  /** Whether the canvas is shown mirrored, so text is drawn the other way round to read right. */
+  mirrored: boolean;
 }
 
 /** The landmarks drawn over the image: the body's stick figure, faint where the tracker was unsure, and the hands. */
@@ -87,7 +95,7 @@ export class Overlay {
     this.c = new Canvas2D(canvas, () => this.handle?.redraw());
     this.handle = this.c.ui.mount<OverlayState>({
       id: "overlay",
-      state: { frame: null, image: { width: 640, height: 480 }, video: false, selected: null, visible: 0.5 },
+      state: { frame: null, image: { width: 640, height: 480 }, video: false, selected: null, visible: 0.5, labels: [], marks: [], still: false, mirrored: false },
       cursor: (_s, ui) => (ui.hoveredParts.some((g) => /lm-\d+$/.test(g.id)) ? "pointer" : null),
       draw: (ctx, s) => this.draw(ctx, s),
       on: {
@@ -98,6 +106,59 @@ export class Overlay {
         },
       },
     });
+  }
+
+  /** Text that reads right on a canvas shown mirrored: drawn flipped about where it starts. */
+  private text(ctx: RecordingContext, s: OverlayState, text: string, x: number, y: number, box?: string): void {
+    const w = ctx.measureText(text).width;
+    ctx.save();
+    if (s.mirrored) {
+      ctx.translate(x, 0);
+      ctx.scale(-1, 1);
+      x = 0;
+    }
+    if (box) {
+      const fill = ctx.fillStyle;
+      ctx.fillStyle = box;
+      ctx.fillRect(x - 5, y - 15, w + 10, 20);
+      ctx.fillStyle = fill;
+    }
+    ctx.fillText(text, x, y);
+    ctx.restore();
+  }
+
+  private drawMarks(ctx: RecordingContext, s: OverlayState, marks: readonly TakeMark[], X: (l: { x: number }) => number, Y: (l: { y: number }) => number): void {
+    for (const m of marks) {
+      const pts = m.points.map(([x, y]) => ({ x: X({ x }), y: Y({ y }) }));
+      if (!pts.length) continue;
+      ctx.strokeStyle = m.color ?? "#facc15";
+      ctx.fillStyle = m.color ?? "#facc15";
+      ctx.lineWidth = 3;
+      ctx.setLineDash(m.kind === "line" ? [8, 6] : []);
+      if (m.kind === "box" && pts.length >= 2) ctx.strokeRect(pts[0]!.x, pts[0]!.y, pts[1]!.x - pts[0]!.x, pts[1]!.y - pts[0]!.y);
+      if ((m.kind === "line" || m.kind === "arrow") && pts.length >= 2) {
+        ctx.beginPath();
+        pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+        ctx.stroke();
+        if (m.kind === "arrow") {
+          const a = pts[pts.length - 2]!;
+          const c = pts[pts.length - 1]!;
+          const angle = Math.atan2(c.y - a.y, c.x - a.x);
+          ctx.beginPath();
+          ctx.moveTo(c.x - 14 * Math.cos(angle - 0.5), c.y - 14 * Math.sin(angle - 0.5));
+          ctx.lineTo(c.x, c.y);
+          ctx.lineTo(c.x - 14 * Math.cos(angle + 0.5), c.y - 14 * Math.sin(angle + 0.5));
+          ctx.stroke();
+        }
+      }
+      ctx.setLineDash([]);
+      if (m.text) {
+        ctx.font = `600 14px ${FONT}`;
+        const at = pts[0]!;
+        ctx.fillStyle = m.color ?? "#facc15";
+        this.text(ctx, s, m.text, at.x + 5, at.y - 5, "rgba(15, 23, 42, 0.75)");
+      }
+    }
   }
 
   /** Where the image is on the canvas: fitted inside it, as the video element shows it. */
@@ -114,17 +175,25 @@ export class Overlay {
 
   private draw(ctx: RecordingContext, s: OverlayState): void {
     const b = this.box(s);
-    if (!s.video) {
+    if (!s.video && !s.still) {
       ctx.fillStyle = "#0f172a";
       ctx.fillRect(b.x, b.y, b.w, b.h);
       ctx.fillStyle = "#64748b";
       ctx.font = `13px ${FONT}`;
-      ctx.fillText("no video: a scripted take, or the video wasn't kept", b.x + 12, b.y + 22);
+      this.text(ctx, s, "no images in this take", s.mirrored ? b.x + b.w - 12 : b.x + 12, b.y + 22);
     }
-    const f = s.frame;
-    if (!f) return;
     const X = (l: { x: number }) => b.x + l.x * b.w;
     const Y = (l: { y: number }) => b.y + l.y * b.h;
+    this.drawMarks(ctx, s, s.marks, X, Y);
+    // What the person (or a watcher) said was being done now, along the image's bottom.
+    ctx.font = `600 14px ${FONT}`;
+    s.labels.forEach((l, i) => {
+      ctx.fillStyle = l.by === "watcher" ? "#facc15" : "#f8fafc";
+      const y = b.y + b.h - 14 - i * 24;
+      this.text(ctx, s, l.text, s.mirrored ? b.x + b.w - 14 : b.x + 14, y, "rgba(15, 23, 42, 0.7)");
+    });
+    const f = s.frame;
+    if (!f) return;
     ctx.lineCap = "round";
     const img = f.pose?.image;
     if (img) {
@@ -177,6 +246,7 @@ const LANES: readonly { label: string; joint?: JointName; hand?: "left" | "right
 const SOURCE_COLORS = { seen: "#10b981", held: "#f59e0b", assumed: "#cbd5e1", none: "#f1f5f9" } as const;
 
 interface TimelineState {
+  labels: readonly TakeLabel[];
   bodies: readonly Body[];
   duration: number;
   /** Frames recorded so far while recording, for the count. */
@@ -192,7 +262,7 @@ export class Timeline {
   private t = 0;
   private playing = false;
   private static readonly LEFT = 96;
-  private static readonly TOP = 30;
+  private static readonly TOP = 48;
   private static readonly LANE = 15;
 
   constructor(canvas: HTMLCanvasElement, private readonly on: { seek: (t: number) => void; toggle: () => void }) {
@@ -207,7 +277,7 @@ export class Timeline {
     };
     this.lanes = this.c.ui.mount<TimelineState>({
       id: "lanes",
-      state: { bodies: [], duration: 0, recording: null },
+      state: { labels: [], bodies: [], duration: 0, recording: null },
       cursor: () => "ew-resize",
       draw: (ctx, s) => this.drawLanes(ctx, s),
       on: {
@@ -249,13 +319,18 @@ export class Timeline {
     });
   }
 
-  setTake(bodies: readonly Body[], duration: number): void {
-    this.lanes.setState({ bodies, duration, recording: null });
+  setTake(bodies: readonly Body[], duration: number, labels: readonly TakeLabel[] = []): void {
+    this.lanes.setState({ bodies, duration, recording: null, labels });
     this.head.setState({ t: this.t });
   }
 
-  setRecording(frames: number | null): void {
-    this.lanes.setState({ recording: frames });
+  setRecording(frames: number | null, duration = 0): void {
+    this.lanes.setState(frames === null ? { recording: null } : { recording: frames, duration });
+    this.head.setState({ t: this.t });
+  }
+
+  setLabels(labels: readonly TakeLabel[]): void {
+    this.lanes.setState({ labels });
   }
 
   setTime(t: number): void {
@@ -277,7 +352,33 @@ export class Timeline {
     ctx.textBaseline = "middle";
     if (s.recording !== null) {
       ctx.fillStyle = "#dc2626";
-      ctx.fillText(`● Recording, ${s.recording} frames`, left, 15);
+      ctx.fillText(`● Recording, ${s.recording} frames`, 44, 15);
+    }
+    // The labels: what was being done, as bars with their words.
+    {
+      const y = Timeline.TOP - Timeline.LANE - 4;
+      ctx.fillStyle = "#475569";
+      ctx.fillText("Doing", 8, y + Timeline.LANE / 2);
+      const sorted = [...s.labels].sort((a, b) => a.t0 - b.t0);
+      const end = s.duration || Math.max(0, ...sorted.map((l) => l.t1 ?? l.t0));
+      sorted.forEach((l, i) => {
+        if (!end) return;
+        const next = sorted.slice(i + 1).find((n) => (n.by ?? "person") === (l.by ?? "person"));
+        const t1 = l.t1 ?? next?.t0 ?? end;
+        const x0 = left + (l.t0 / end) * w;
+        const x1 = left + (t1 / end) * w;
+        ctx.fillStyle = l.by === "watcher" ? (i % 2 ? "#ddd6fe" : "#c4b5fd") : i % 2 ? "#bfdbfe" : "#93c5fd";
+        ctx.fillRect(x0, y + 1, Math.max(2, x1 - x0 - 1), Timeline.LANE - 2);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x0, y, Math.max(0, x1 - x0 - 2), Timeline.LANE);
+        ctx.clip();
+        ctx.fillStyle = "#0f172a";
+        ctx.font = `11px ${FONT}`;
+        ctx.fillText(l.text, x0 + 3, y + Timeline.LANE / 2);
+        ctx.restore();
+        ctx.font = `12px ${FONT}`;
+      });
     }
     LANES.forEach((lane, li) => {
       const y = Timeline.TOP + li * Timeline.LANE;
@@ -318,13 +419,14 @@ export class Timeline {
     ctx.font = `600 12px ${FONT}`;
     ctx.textBaseline = "middle";
     ctx.fillStyle = "#0f172a";
-    if (s.recording === null) ctx.fillText(`${(t / 1000).toFixed(2)} s / ${(s.duration / 1000).toFixed(2)} s`, 44, 15);
+    if (s.recording !== null) return;
+    ctx.fillText(`${(t / 1000).toFixed(2)} s / ${(s.duration / 1000).toFixed(2)} s`, 44, 15);
     if (!s.duration) return;
     const x = left + (Math.min(t, s.duration) / s.duration) * w;
     ctx.strokeStyle = "#0f172a";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(x, Timeline.TOP - 4);
+    ctx.moveTo(x, Timeline.TOP - Timeline.LANE - 6);
     ctx.lineTo(x, Timeline.TOP + LANES.length * Timeline.LANE);
     ctx.stroke();
   }

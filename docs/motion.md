@@ -22,7 +22,9 @@ It is built in layers, each usable on its own, and it depends on no engine. The 
 ## Layers
 
 1. **Landmarks** (`landmarks.ts`). Trackers report points by name: MediaPipe's 33 body landmarks and 21 per hand. Another tracker maps its points onto these names.
-2. **Takes** (`take.ts`). A take is everything a tracker reported over a stretch of time, frame by frame, plus the camera it came from (image size, facing, field of view, mirroring) and the setup. It saves to compact JSON, with the video as a file beside it. Takes are what experiments run on: recorded once, then replayed through the solver as it changes and compared. That way a change is judged on the same movements every time.
+2. **Takes** (`take.ts`). A take is everything a tracker reported over a stretch of time, frame by frame, plus the camera it came from (image size, facing, field of view, mirroring) and the setup. It saves to compact JSON, with the video as a file beside it.
+   - A take also keeps small pictures of the camera (320 px JPEGs, four a second), so it can be judged without its video: by a person scrubbing it, or by a model that looks at the pictures.
+   - **Labels** say what was being done from a moment on, by the person (typed while recording) or by a watcher. **Marks** are boxes, lines, arrows and notes drawn on the picture over a stretch of time, in image units. A watcher, person or model, uses them to show what a movement was meant to be, beside what the solver measured. Takes are what experiments run on: recorded once, then replayed through the solver as it changes and compared. That way a change is judged on the same movements every time.
 3. **Setups** (`setups.ts`). A setup describes the camera arrangement: whether the camera moves, what is usually in view, whether a person is likely seated or standing, and what the ground is (floor, table or nothing).
    - The presets are desk webcam, phone on a stand, handheld selfie, and rear camera on a person, a hand or a table.
    - The solver uses the setup to decide what a part out of view is most likely doing. At a desk, legs are assumed seated.
@@ -42,13 +44,17 @@ It is built in layers, each usable on its own, and it depends on no engine. The 
    - how much each joint shakes (mean acceleration while seen);
    - the share of frames each part was seen;
    - the lag between two takes.
-7. **Synthetic takes** (`synthetic.ts`). Scripted movements of a known body, seen through a pinhole camera with tracker-like noise, misses and parts leaving the frame. The truth is known for them, so the tests hold the solver to it. They also give the lab something to show before a camera is on.
+7. **Retarget** (`retarget.ts`). Drives a rigged character from the body. A rig is its bones' rest placement in its own world; a map says which character bones each body bone turns, where the body's joints are on the character, and its finger bones.
+   - Each mapped bone's rest frame is measured the way the solver measures the body's, so a character in a T, an A or any rest pose takes the same turn: world_new = frame_now · frame_rest⁻¹ · world_rest, made local to its parent.
+   - Nothing in it knows an engine. The lab's Babylon adapter (`motion/character.ts`) reads a glTF's skeleton into a rig and sets the rotations it gives.
+8. **Synthetic takes** (`synthetic.ts`). Scripted movements of a known body, seen through a pinhole camera with tracker-like noise, misses and parts leaving the frame. The truth is known for them, so the tests hold the solver to it. They are test fixtures and stay out of the lab.
    - The scripts are Wave, Reach and pinch, Joust, Squat, and Out of frame.
 
 ## The lab
 
-- **Left: what the tracker found.** The camera, or the replayed take's video, with the landmarks drawn over it in CanvasIR. Points the tracker was unsure of are drawn faint red, and the hands are drawn in their side's color.
-- **Middle: the mannequin.** The solved body as plain rods and balls. Blue is the left side, red the right. A part is solid where seen, amber where held, and faint grey where assumed.
+- **Left: what the tracker found.** The camera, or the replayed take's video (or its pictures, when there is no video), with the landmarks drawn over it in CanvasIR, and the take's labels and marks in force. Points the tracker was unsure of are drawn faint red, and the hands are drawn in their side's color.
+- **Middle: the character.** A rigged robot (RobotExpressive, CC0, by Quaternius) driven by the solved body through retargeting, scaled to the person, its head shrunk so it doesn't hide the arms.
+  - **Rods** shows the solved body itself as plain rods and balls instead, and **Both** shows the two together. Blue is the left side, red the right. A rod is solid where seen, amber where held, and faint grey where assumed.
   - It stands where the solver placed it relative to the camera, which is drawn as a small frustum. The floor is under its feet, or where its stance says.
   - The views are **Orbit**, **Behind**, **Side** and **As the camera sees**. The last uses the camera's own field of view, so the mannequin should lie over the image.
   - A compared take is drawn as a violet ghost.
@@ -59,13 +65,18 @@ It is built in layers, each usable on its own, and it depends on no engine. The 
   - a selected joint's place and rotation (click it on the mannequin or the image);
   - over the take: how much was seen and how much the wrists shake;
   - against a compared take: the lag and the bones that differ most.
-- **Bottom: the timeline**, drawn with CanvasIR components. It has a lane per part showing frame by frame whether it was seen, held or assumed. Drag to scrub, space to play or pause, and the arrow keys to step a frame.
+- **Bottom: the timeline**, drawn with CanvasIR components. It has a **Doing** lane for the labels, and a lane per part showing frame by frame whether it was seen, held or assumed. Drag to scrub, space to play or pause, and the arrow keys to step a frame.
 - **Recording.** Choose **Camera, front** or **Camera, rear**, press **Record**, then **Stop**. The take opens for replay with its video.
+  - While recording, type what you are doing under the character and press Enter. The label starts at that moment and lasts until the next one. Labels can be added the same way while replaying, and removed from the list on the right.
   - **Save take** downloads the JSON and the video. **Open take…** takes both back.
 - **Settings.** The setup, the person's height, the smoothing (**still** and **speed**) and how long a missed part is **hold**-ed all solve the take again as they change.
   - **Compare** sets the take against itself unsmoothed, to see what the smoothing costs, or against another saved take.
 
 MediaPipe's pose (full) and hand models run in the browser. The build fetches them once, checks their checksums and serves them beside the page, so the camera page needs only its own origin.
+
+## Calibrating with a watcher
+
+A take with pictures and labels can be checked by a multimodal model as well as a person. The model looks at the pictures, writes its own labels (`by: "watcher"`) and marks (a box round the hand that should be forward, an arrow for where the arm went), and sets them beside the solved body. Where the watcher and the solver disagree is what to fix next.
 
 ## What the tests hold
 
@@ -79,12 +90,14 @@ MediaPipe's pose (full) and hand models run in the browser. The build fetches th
 - **Placement.** The body is placed within 5 cm of where it stands. A noiseless frame comes out exact.
 - **Hands.** A pinch and a fist are told from an open hand.
 
+`packages/motion/test/retarget.test.ts` poses a rig twice the body's size, with every bone turned an odd way at rest, and checks each of its bones points the way the body's bone points.
+
 ## Next
 
 1. **Real takes.** Record each setup, with poses, gestures, occlusions and table and floor contacts, and keep them as a regression set beside the synthetic ones.
 2. **The torso at a desk.** A desk webcam rarely sees the hips, so leaning in and turning are not measured yet. They can come from the shoulders' depth and the head.
 3. **Contacts.** Feet planted on the floor, hands resting on a table, and the floor and table found from them, so a planted foot doesn't slide.
-4. **Retargeting.** Drive rigged characters of different proportions, bone names and rest poses: two or three CC0 rigs from Quaternius and Kenney, then a knight and a horse.
+4. **More characters.** A human rig and a Kenney one beside the robot, then a knight and a horse.
 5. **Actions.** Point, click, grab, move, rotate and scale, plus gameplay actions, each with a profile from forgiving to strict. The hand code on the board in 3D (`hands.ts`) becomes one of these.
 6. **Calibration.** True scale from a known height or the iris (as the head tracking in `face.ts` does), and the camera's field of view measured instead of assumed.
 7. **Latency.** Measure end to end, and add a short prediction tuned per action.
