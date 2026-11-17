@@ -1,3 +1,5 @@
+import { createMeasurementSession, type MeasurementContextFactory, type MeasurementSession } from '@chenglou/pretext/rich-inline';
+
 /**
  * Text measurement, injected so layout runs anywhere: the default asks a real
  * canvas, tests answer from a table captured in a browser.
@@ -9,6 +11,8 @@ export interface FontMetrics {
 }
 
 export interface TextMeasurer {
+  /** Provider-scoped Pretext preparation; absent for the ambient Canvas backend. */
+  readonly measurement?: MeasurementSession;
   width(font: string, text: string): number;
   metrics(font: string): FontMetrics;
 }
@@ -48,5 +52,24 @@ export const canvasMeasurer = (): TextMeasurer => {
       }
       return m;
     },
+  };
+};
+
+/** Uses one backend for line breaking, widths and caller-supplied font metrics. */
+export const createTextMeasurer = (
+  factory: MeasurementContextFactory,
+  metrics: (font: string) => FontMetrics,
+  options?: { language?: string | null },
+): TextMeasurer => {
+  const language = options?.language || null;
+  let ctx: ReturnType<MeasurementContextFactory> | undefined;
+  return {
+    measurement: createMeasurementSession(factory, { language }),
+    width(font, text) {
+      ctx ??= factory(language);
+      ctx.font = font;
+      return ctx.measureText(text).width;
+    },
+    metrics,
   };
 };

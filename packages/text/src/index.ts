@@ -14,7 +14,7 @@ export {
   flattenBlocks,
   layoutText,
 } from "./layout";
-export { type FontMetrics, type TextMeasurer, canvasMeasurer } from "./measure";
+export { type FontMetrics, type TextMeasurer, canvasMeasurer, createTextMeasurer } from "./measure";
 export * from "./model";
 export { type DecorationLine, type DecorationMetrics, decorationMetrics } from "./decoration";
 export { LiveText, type LiveTextOptions } from "./live";

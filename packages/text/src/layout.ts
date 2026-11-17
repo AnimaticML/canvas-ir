@@ -223,6 +223,7 @@ interface Box {
 export const layoutText = (text: RichText, options: LayoutOptions): TextLayout => {
   const theme: Theme = { ...DEFAULT_THEME, ...options.theme };
   const measurer = options.measurer ?? canvasMeasurer();
+  const preparation = measurer.measurement === undefined ? undefined : { measurement: measurer.measurement };
   const paragraphs = flattenBlocks(text, theme, options.direction ?? "ltr");
   const padding = Math.max(0, options.padding ?? 0);
   const margin = Math.max(0, options.obstacleMargin ?? 0);
@@ -264,7 +265,7 @@ export const layoutText = (text: RichText, options: LayoutOptions): TextLayout =
     // Pretext needs at least one item; empty runs are dropped and mapped back by index.
     const kept = paragraph.runs.map((run, i) => i).filter((i) => paragraph.runs[i]!.text.length > 0);
     const prepared: PreparedRichInline | null =
-      kept.length > 0 ? prepareRichInline(kept.map((i) => ({ text: paragraph.runs[i]!.text, font: fontsOf[i]! }))) : null;
+      kept.length > 0 ? prepareRichInline(kept.map((i) => ({ text: paragraph.runs[i]!.text, font: fontsOf[i]! })), preparation) : null;
     const strut = inlineBox(paragraph.font, paragraph.size);
     const strutHeight = strut.bottom - strut.top;
     const allText = paragraph.runs.map((r) => r.text).join("");

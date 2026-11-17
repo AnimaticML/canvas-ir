@@ -326,3 +326,18 @@ bun run test:pixel   # needs Chromium; set CHROMIUM_PATH if Playwright can't fin
 ```
 
 `packages/core` is the library, `packages/text` the text layout layer on top of it, `packages/physics` the physics layer, `packages/vectorize` the vectorizer experiment, `packages/pixel` holds the browser checks, and `packages/playground` is a demo app that depends on both libraries. After changing a text fixture, run `bun run --cwd packages/pixel capture-text` to capture its measurements and layout from Chromium for the Bun tests. Tooling depends on the libraries, never the reverse. `SVG_DEBUG=<drawing name>` on the pixel run writes that drawing's SVG export and both renderings to `SVG_DEBUG_DIR`.
+
+### Backend text measurement (draft)
+
+`@canvas-ir/text` exports `createTextMeasurer(contextFactory, fontMetrics, options?)`
+for a renderer with its own Canvas text backend. The factory supplies fresh text
+contexts to Pretext and width measurement; `fontMetrics(font)` supplies that same
+backend's ascent/descent. Pass the returned measurer to `layoutText`. Its preparation
+caches belong to that provider, so other renderers need not replace the page's
+`OffscreenCanvas`. `options.language` fixes the locale; omitted, empty or `null` selects none.
+
+This draft requires Pretext's measurement-session change alongside the CanvasIR
+change. An existing width/metrics-only `TextMeasurer` retains its previous ambient
+Pretext preparation behavior; supplying those two callbacks alone does not inject
+Pretext measurement. Default browser layout is unchanged. Font availability,
+baseline choices and backend raster differences remain the adapter's responsibility.
