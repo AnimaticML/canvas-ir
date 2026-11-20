@@ -39,12 +39,20 @@ export interface SynthOptions {
   readonly seed?: number;
   readonly height?: number;
   readonly camera?: { readonly width: number; readonly height: number; readonly fov?: number };
+  /** Plays the script under another setup than its own: its camera's field of view and distance. */
+  readonly setup?: SetupId;
 }
 
 export interface Synth {
   readonly take: Take;
   /** The body as it really was, frame by frame: its joints in body space and its bones' frames. */
-  readonly truth: readonly { readonly joints: Joints; readonly bones: Record<BoneName, Quat>; readonly root: Vec3 }[];
+  readonly truth: readonly {
+    readonly joints: Joints;
+    readonly bones: Record<BoneName, Quat>;
+    readonly root: Vec3;
+    /** Each hand's 21 points in body space. */
+    readonly hands: { readonly left: readonly Vec3[]; readonly right: readonly Vec3[] };
+  }[];
   readonly proportions: Proportions;
 }
 
@@ -167,7 +175,8 @@ const poseLandmarks = (j: Joints, hands: { left: Vec3[]; right: Vec3[] }, turn: 
 
 /** Plays a script into a take, seen from a camera at the origin looking down -z. */
 export const synthesize = (script: Script, options: SynthOptions = {}): Synth => {
-  const setup = SETUPS[script.setup];
+  const setupId = options.setup ?? script.setup;
+  const setup = SETUPS[setupId];
   const fps = options.fps ?? 30;
   const rng = random(options.seed ?? 7);
   const wn = options.worldNoise ?? 0.008;
@@ -191,7 +200,11 @@ export const synthesize = (script: Script, options: SynthOptions = {}): Synth =>
     const s = script.at(t / 1000);
     const turn = s.turn ?? 0;
     const j = posed(p, s.dirs, turn);
-    const root = s.root ?? v(0, setup.stance === "seated" ? -0.45 : -0.1, -setup.distance);
+    const own = SETUPS[script.setup];
+    // Under another setup, a scripted place is kept but moved out to that setup's distance.
+    const root = s.root
+      ? setup === own ? s.root : v(s.root.x, s.root.y, s.root.z * (setup.distance / own.distance))
+      : v(0, setup.stance === "seated" ? -0.45 : -0.1, -setup.distance);
     const handFrames = boneFrames(j);
     const hands = {
       left: handPoints("left", handFrames.leftHand, j.leftWrist, p.hand, s.grip?.left ?? 0, s.pinch?.left ?? 0),
@@ -199,7 +212,7 @@ export const synthesize = (script: Script, options: SynthOptions = {}): Synth =>
     };
     const across = (side: "left" | "right") => normalize(sub(hands[side][H.indexMcp]!, hands[side][H.pinkyMcp]!));
     const ear = normalize(sub(j.leftShoulder, j.rightShoulder));
-    truth.push({ joints: j, bones: boneFrames(j, { headLeft: ear, palmAcross: { left: across("left"), right: across("right") } }), root });
+    truth.push({ joints: j, bones: boneFrames(j, { headLeft: ear, palmAcross: { left: across("left"), right: across("right") } }), root, hands });
     const body = poseLandmarks(j, hands, turn);
     const hidden = new Set(s.hidden ?? []);
     const image: Landmark[] = [];
@@ -234,7 +247,7 @@ export const synthesize = (script: Script, options: SynthOptions = {}): Synth =>
     }
     frames.push({ t, pose: { image, world }, hands: handObs });
   }
-  const take: Take = { version: 1, name: script.name, setup: script.setup, camera: { width: cam.width, height: cam.height, facing: setup.facing, fov }, created: "2026-01-01T00:00:00.000Z", notes: script.notes, frames };
+  const take: Take = { version: 1, name: script.name, setup: setupId, camera: { width: cam.width, height: cam.height, facing: setup.facing, fov }, created: "2026-01-01T00:00:00.000Z", notes: script.notes, frames };
   return { take, truth, proportions: p };
 };
 

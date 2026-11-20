@@ -12,11 +12,39 @@ export interface Captured {
 const toLandmarks = (list: readonly { x: number; y: number; z: number; visibility?: number }[]): Landmark[] =>
   list.map((l) => (l.visibility !== undefined && l.visibility !== 0 ? { x: l.x, y: l.y, z: l.z, visibility: l.visibility } : { x: l.x, y: l.y, z: l.z }));
 
+/** MediaPipe's pose and hand landmarkers, loaded once, run on any image source frame by frame into the motion package's frames. */
+export class Trackers {
+  private constructor(private readonly pose: PoseLandmarker, private readonly hands: HandLandmarker) {}
+
+  static async load(gpu = true): Promise<Trackers> {
+    const files = await FilesetResolver.forVisionTasks("./ar-vendor/mediapipe");
+    const pose = (delegate: "GPU" | "CPU") =>
+      PoseLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: "./ar-vendor/pose_landmarker_full.task", delegate }, runningMode: "VIDEO", numPoses: 1 });
+    const hands = (delegate: "GPU" | "CPU") =>
+      HandLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: "./ar-vendor/hand_landmarker.task", delegate }, runningMode: "VIDEO", numHands: 2 });
+    const d = gpu ? "GPU" : "CPU";
+    return new Trackers(await pose(d).catch(() => pose("CPU")), await hands(d).catch(() => hands("CPU")));
+  }
+
+  /** What the trackers find in one image at time `t` (ms, rising from call to call), as seen unmirrored. */
+  detect(source: HTMLVideoElement | HTMLCanvasElement, t: number, clock = t): Frame {
+    const p = this.pose.detectForVideo(source, clock);
+    const h = this.hands.detectForVideo(source, clock);
+    const hands: HandObservation[] = h.landmarks.map((image, i) => {
+      const label = h.handedness[i]?.[0];
+      // MediaPipe names hands as if the image were mirrored; this one is as captured, so its "Left" is the right hand.
+      const side = label ? (label.categoryName === "Left" ? "right" : "left") : null;
+      return { side, score: label?.score ?? 0, image: toLandmarks(image), world: toLandmarks(h.worldLandmarks[i] ?? []) };
+    });
+    const pose = p.landmarks[0] && p.worldLandmarks[0] ? { image: toLandmarks(p.landmarks[0]), world: toLandmarks(p.worldLandmarks[0]) } : undefined;
+    return { t, ...(pose ? { pose } : {}), hands };
+  }
+}
+
 export class Capture {
   readonly video: HTMLVideoElement;
   private stream: MediaStream | null = null;
-  private pose: PoseLandmarker | null = null;
-  private hands: HandLandmarker | null = null;
+  private trackers: Trackers | null = null;
   private running = false;
   private start = 0;
   private recorder: MediaRecorder | null = null;
@@ -52,15 +80,7 @@ export class Capture {
     this.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
     this.video.srcObject = this.stream;
     await this.video.play();
-    if (!this.pose || !this.hands) {
-      const files = await FilesetResolver.forVisionTasks("./ar-vendor/mediapipe");
-      const pose = (delegate: "GPU" | "CPU") =>
-        PoseLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: "./ar-vendor/pose_landmarker_full.task", delegate }, runningMode: "VIDEO", numPoses: 1 });
-      const hands = (delegate: "GPU" | "CPU") =>
-        HandLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: "./ar-vendor/hand_landmarker.task", delegate }, runningMode: "VIDEO", numHands: 2 });
-      this.pose = await pose("GPU").catch(() => pose("CPU"));
-      this.hands = await hands("GPU").catch(() => hands("CPU"));
-    }
+    this.trackers ??= await Trackers.load();
     this.running = true;
     this.start = performance.now();
     const loop = (): void => {
@@ -79,20 +99,12 @@ export class Capture {
 
   private lastVideoTime = -1;
   private detect(): void {
-    if (!this.pose || !this.hands || this.video.readyState < 2 || this.video.currentTime === this.lastVideoTime) return;
+    if (!this.trackers || this.video.readyState < 2 || this.video.currentTime === this.lastVideoTime) return;
     this.lastVideoTime = this.video.currentTime;
     const now = performance.now();
-    const p = this.pose.detectForVideo(this.video, now);
-    const h = this.hands.detectForVideo(this.video, now);
-    const ms = performance.now() - now;
-    const hands: HandObservation[] = h.landmarks.map((image, i) => {
-      const label = h.handedness[i]?.[0];
-      // MediaPipe names hands as if the image were mirrored; this one is as captured, so its "Left" is the right hand.
-      const side = label ? (label.categoryName === "Left" ? "right" : "left") : null;
-      return { side, score: label?.score ?? 0, image: toLandmarks(image), world: toLandmarks(h.worldLandmarks[i] ?? []) };
-    });
-    const pose = p.landmarks[0] && p.worldLandmarks[0] ? { image: toLandmarks(p.landmarks[0]), world: toLandmarks(p.worldLandmarks[0]) } : undefined;
     const t = now - this.start;
+    const frame = this.trackers.detect(this.video, t, now);
+    const ms = performance.now() - now;
     if (this.images && t - this.lastImage >= this.imageEvery) {
       this.lastImage = t;
       const w = this.imageWidth;
@@ -102,7 +114,7 @@ export class Capture {
       this.still.getContext("2d")!.drawImage(this.video, 0, 0, w, h);
       this.images.push({ t, src: this.still.toDataURL("image/jpeg", 0.7) });
     }
-    this.onFrame({ frame: { t, ...(pose ? { pose } : {}), hands }, ms });
+    this.onFrame({ frame, ms });
   }
 
   /** Starts recording the camera's video, for a take. */

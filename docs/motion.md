@@ -74,6 +74,16 @@ It is built in layers, each usable on its own, and it depends on no engine. The 
 
 MediaPipe's pose (full) and hand models run in the browser. The build fetches them once, checks their checksums and serves them beside the page, so the camera page needs only its own origin.
 
+## The bench
+
+`motion-bench.html` tests the whole chain against a known truth. A rigged human model (opened from a file; the mannequin used so far is not in the repo) is posed by each scripted movement through retargeting, rendered through the camera of a setup (desk webcam, phone on a stand, selfie), and every rendered frame goes through MediaPipe and the solver.
+
+- **The truth is what was rendered.** The character's joints are measured the way the solver measures a body, so the score doesn't depend on how well the character matched the script. How far the character was from the script is shown too, as the bench's own error.
+- **The score** is the angle between each solved bone and the true one, where the bone's end was seen and over every frame, with the share of frames each part was seen. **Run all** gives the table for every movement under every camera.
+- Each run is a take, with pictures, that can be saved and opened in the lab.
+
+A plain clay mannequin with no clothes or texture tracks well: MediaPipe finds the body and both hands as long as the head is in view.
+
 ## Calibrating with a watcher
 
 A take with pictures and labels can be checked by a multimodal model as well as a person. The model looks at the pictures, writes its own labels (`by: "watcher"`) and marks (a box round the hand that should be forward, an arrow for where the arm went), and sets them beside the solved body. Where the watcher and the solver disagree is what to fix next.

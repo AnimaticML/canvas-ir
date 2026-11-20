@@ -7,7 +7,7 @@ import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Node } from "@babylonjs/core/node";
 import type { Scene } from "@babylonjs/core/scene";
-import { type Body, type Rig, type RigMap, Retarget, type Vec3, distance } from "@canvas-ir/motion";
+import { type Body, type JointName, type Rig, type RigMap, Retarget, type Vec3, distance, normalize, sub } from "@canvas-ir/motion";
 import robotUrl from "./robot.glb" with { type: "file" };
 
 export interface CharacterSpec {
@@ -66,6 +66,42 @@ export const ROBOT: CharacterSpec = {
     } as RigMap;
   },
 };
+
+/**
+ * A plain human mannequin rigged for MediaPipe (bones named hips, spine, chest, upper_chest, neck, head, clavicle,
+ * upper_arm, forearm, hand, five three-bone fingers, thigh, shin, foot, toes, each ".L" or ".R"). It isn't in the repo:
+ * give its file to whatever loads it.
+ */
+export const mannequinSpec = (url: string): CharacterSpec => ({
+  url,
+  map: () => {
+    const sided = (s: "L" | "R", prefix: "left" | "right") => {
+      const n = (x: string) => `${x}.${s}`;
+      const fingers: Record<string, string> = {};
+      for (const f of ["thumb", "index", "middle", "ring", "pinky"]) for (const i of [1, 2, 3]) fingers[`${f}${i}`] = n(`${f}_${i}`);
+      return {
+        bones: {
+          [`${prefix}UpperArm`]: n("upper_arm"), [`${prefix}Forearm`]: n("forearm"), [`${prefix}Hand`]: n("hand"),
+          [`${prefix}Thigh`]: n("thigh"), [`${prefix}Shin`]: n("shin"), [`${prefix}Foot`]: n("foot"),
+        },
+        joints: {
+          [`${prefix}Shoulder`]: n("upper_arm"), [`${prefix}Elbow`]: n("forearm"), [`${prefix}Wrist`]: n("hand"), [`${prefix}HandTip`]: n("middle_3"),
+          [`${prefix}Hip`]: n("thigh"), [`${prefix}Knee`]: n("shin"), [`${prefix}Ankle`]: n("foot"), [`${prefix}Toe`]: n("toes"),
+        },
+        fingers,
+        across: [n("pinky_1"), n("index_1")] as const,
+      };
+    };
+    const L = sided("L", "left");
+    const R = sided("R", "right");
+    return {
+      bones: { hips: "hips", spine: "spine", chest: "chest", neck: "neck", ...L.bones, ...R.bones },
+      joints: { hips: "hips", spine: "spine", chest: "chest", neck: "neck", head: "head", ...L.joints, ...R.joints },
+      fingers: { left: L.fingers, right: R.fingers },
+      palmAcross: { left: L.across, right: R.across },
+    } as RigMap;
+  },
+});
 
 export class Character {
   private constructor(
@@ -145,13 +181,47 @@ export class Character {
       f.node.computeWorldMatrix(true);
     }
     // Stand it where the body is: its hips on the solved hips.
-    const hips = this.nodes.get("Hips");
+    const at0 = this.retarget.map.joints.hips;
+    const hips = this.nodes.get(typeof at0 === "string" ? at0 : (at0?.node ?? ""));
     if (hips) {
       const now = hips.getAbsolutePosition();
       this.root.position.addInPlace(new Vector3(at.x - now.x, at.y - now.y, at.z - now.z));
       this.root.computeWorldMatrix(true);
       for (const n of this.order) n.computeWorldMatrix(true);
     }
+  }
+
+  /** Where the body's joints are on the character as it stands now, in the scene, and each hand's line across its knuckles. */
+  joints(): { joints: Partial<Record<JointName, Vec3>>; palmAcross: { left?: Vec3; right?: Vec3 } } {
+    const at = (name: string): Vec3 | undefined => {
+      const n = this.nodes.get(name);
+      if (!n) return undefined;
+      const p = n.getAbsolutePosition();
+      return { x: p.x, y: p.y, z: p.z };
+    };
+    const joints: Partial<Record<JointName, Vec3>> = {};
+    for (const [j, m] of Object.entries(this.retarget.map.joints) as [JointName, string | { node: string; offset: Vec3 }][]) {
+      if (typeof m === "string") {
+        const p = at(m);
+        if (p) joints[j] = p;
+      }
+      else {
+        const n = this.nodes.get(m.node);
+        if (!n) continue;
+        const o = new Vector3(m.offset.x, m.offset.y, m.offset.z);
+        const w = Vector3.TransformCoordinates(o, n.getWorldMatrix());
+        joints[j] = { x: w.x, y: w.y, z: w.z };
+      }
+    }
+    const across = (side: "left" | "right") => {
+      const pair = this.retarget.map.palmAcross?.[side];
+      const a = pair && at(pair[0]);
+      const b = pair && at(pair[1]);
+      return a && b ? normalize(sub(b, a)) : undefined;
+    };
+    const l = across("left");
+    const r = across("right");
+    return { joints, palmAcross: { ...(l ? { left: l } : {}), ...(r ? { right: r } : {}) } };
   }
 
   setEnabled(on: boolean): void {

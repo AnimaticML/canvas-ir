@@ -30,6 +30,7 @@ await page("space-main.ts", "space.html", "space.html", '<script type="module" s
 await page("babylon-main.ts", "babylon.html", "babylon.html", '<script type="module" src="./babylon-main.ts"></script>');
 await page("ar-main.ts", "ar.html", "ar.html", '<script type="module" src="./ar-main.ts"></script>');
 await page("motion-main.ts", "motion.html", "motion.html", '<script type="module" src="./motion-main.ts"></script>');
+await page("motion-bench.ts", "motion-bench.html", "motion-bench.html", '<script type="module" src="./motion-bench.ts"></script>');
 // Keep large vision runtimes outside the inline application bundle, at stable
 // relative URLs so GitHub Pages works under any repository base path.
 await Bun.write(new URL("./dist/ar-vendor/opencv.js", import.meta.url), Bun.file(import.meta.resolve("@techstark/opencv-js/dist/opencv.js").replace("file://", "")));
