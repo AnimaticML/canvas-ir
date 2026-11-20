@@ -1,0 +1,77 @@
+{
+  "Wave / desk": {
+    "found": 1,
+    "overall": 25.9,
+    "seen": 34.5
+  },
+  "Wave / phone-stand": {
+    "found": 1,
+    "overall": 23.1,
+    "seen": 23.1
+  },
+  "Wave / selfie": {
+    "found": 1,
+    "overall": 20.9,
+    "seen": 56.2
+  },
+  "Reach and pinch / desk": {
+    "found": 1,
+    "overall": 22.5,
+    "seen": 19.2
+  },
+  "Reach and pinch / phone-stand": {
+    "found": 1,
+    "overall": 15.8,
+    "seen": 15.8
+  },
+  "Reach and pinch / selfie": {
+    "found": 1,
+    "overall": 12.2,
+    "seen": 23.8
+  },
+  "Joust / desk": {
+    "found": 1,
+    "overall": 23,
+    "seen": 21
+  },
+  "Joust / phone-stand": {
+    "found": 1,
+    "overall": 24,
+    "seen": 24
+  },
+  "Joust / selfie": {
+    "found": 1,
+    "overall": 17.1,
+    "seen": 22.9
+  },
+  "Squat / desk": {
+    "found": 1,
+    "overall": 38.1,
+    "seen": 45.9
+  },
+  "Squat / phone-stand": {
+    "found": 1,
+    "overall": 40.2,
+    "seen": 40.2
+  },
+  "Squat / selfie": {
+    "found": 0.62,
+    "overall": 40.2,
+    "seen": 55.4
+  },
+  "Out of frame / desk": {
+    "found": 1,
+    "overall": 25.8,
+    "seen": 24.4
+  },
+  "Out of frame / phone-stand": {
+    "found": 1,
+    "overall": 23.8,
+    "seen": 23.8
+  },
+  "Out of frame / selfie": {
+    "found": 1,
+    "overall": 30.6,
+    "seen": 31.7
+  }
+}

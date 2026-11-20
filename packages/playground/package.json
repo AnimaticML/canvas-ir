@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun src/index.html",
-    "build": "bun run build.ts"
+    "build": "bun run build.ts",
+    "bench": "bun run bench/run.ts"
   },
   "dependencies": {
     "@babylonjs/core": "9.31.3",

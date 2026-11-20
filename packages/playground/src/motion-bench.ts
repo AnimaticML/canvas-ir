@@ -15,7 +15,9 @@ import {
 } from "@canvas-ir/motion";
 import { Character, mannequinSpec } from "./motion/character";
 import { Trackers } from "./motion/capture";
+import mannequinUrl from "./motion/mannequin.glb" with { type: "file" };
 
+const params = new URLSearchParams(location.search);
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>("render");
 const overlay = $<HTMLCanvasElement>("overlay");
@@ -52,9 +54,11 @@ const loadModel = async (url: string): Promise<void> => {
   character?.setEnabled(false);
   character = await Character.load(scene, mannequinSpec(url));
   await scene.whenReadyAsync();
-  trackers ??= await Trackers.load();
+  // ?cpu runs the trackers on the CPU, as a machine without a GPU must, so results repeat exactly.
+  trackers ??= await Trackers.load(!params.has("cpu"));
   runButton.disabled = allButton.disabled = false;
-  info.innerHTML = "<p>Ready. Pick a movement and a camera, and run.</p>";
+  info.innerHTML =
+    "<p>Ready. Each movement is played on the mannequin, rendered through the camera of a setup, tracked by MediaPipe and solved, and the solve is scored against the bones that were rendered. Pick a movement and a camera and run, or run them all.</p><p>Another model can be opened if its bones are named the same way: hips, spine, chest, neck, head, upper_arm.L, forearm.L, hand.L, thigh.L and so on.</p>";
 };
 
 export interface Summary {
@@ -94,6 +98,10 @@ const run = async (scriptName: string, setupId?: SetupId, fps = 15): Promise<{ t
   const still = document.createElement("canvas");
   still.width = 320;
   still.height = Math.round((320 * canvas.height) / canvas.width);
+  // Fresh trackers for every run: in video mode they follow a body from frame to frame, and what they followed in the
+  // last run would change this one.
+  trackers.close();
+  trackers = await Trackers.load(!params.has("cpu"));
   const clock = performance.now();
   // The truth is what was rendered: the character's own joints, measured the way the solver measures a body. How far
   // that is from the script's bones says how faithfully the character was posed.
@@ -191,8 +199,7 @@ $<HTMLInputElement>("model").addEventListener("change", (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
   if (file) void loadModel(URL.createObjectURL(file));
 });
-const fromUrl = new URLSearchParams(location.search).get("model");
-if (fromUrl) void loadModel(fromUrl);
-else info.innerHTML = "<p>Open a rigged human model (.glb) whose bones are named hips, spine, chest, neck, head, upper_arm.L, forearm.L, hand.L, thigh.L and so on. Each movement is played on it, rendered through the camera of a setup, tracked by MediaPipe and solved, and the solve is scored against the movement's true bones.</p>";
+// The mannequin by default; another model by ?model=, or opened from a file, if its bones are named the same way.
+void loadModel(params.get("model") ?? mannequinUrl);
 
 (window as unknown as { bench: unknown }).bench = { run, runAll, loadModel, scene };

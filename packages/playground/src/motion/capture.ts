@@ -15,6 +15,7 @@ const toLandmarks = (list: readonly { x: number; y: number; z: number; visibilit
 /** MediaPipe's pose and hand landmarkers, loaded once, run on any image source frame by frame into the motion package's frames. */
 export class Trackers {
   private constructor(private readonly pose: PoseLandmarker, private readonly hands: HandLandmarker) {}
+  private clock = -Infinity;
 
   static async load(gpu = true): Promise<Trackers> {
     const files = await FilesetResolver.forVisionTasks("./ar-vendor/mediapipe");
@@ -26,8 +27,17 @@ export class Trackers {
     return new Trackers(await pose(d).catch(() => pose("CPU")), await hands(d).catch(() => hands("CPU")));
   }
 
+  /** Frees the trackers' models. */
+  close(): void {
+    this.pose.close();
+    this.hands.close();
+  }
+
   /** What the trackers find in one image at time `t` (ms, rising from call to call), as seen unmirrored. */
   detect(source: HTMLVideoElement | HTMLCanvasElement, t: number, clock = t): Frame {
+    // The trackers need their clock to rise from call to call, whoever calls and however the caller times frames.
+    clock = Math.max(clock, this.clock + 1);
+    this.clock = clock;
     const p = this.pose.detectForVideo(source, clock);
     const h = this.hands.detectForVideo(source, clock);
     const hands: HandObservation[] = h.landmarks.map((image, i) => {
