@@ -2,12 +2,15 @@
 // parts were seen, and how far one take lags another. They are what experiments report and what tests hold to.
 import { BONE_NAMES, type BoneName, JOINTS, type JointName } from "./skeleton";
 import type { Body } from "./solve";
-import { type Quat, angleBetween, length, sub } from "./vec";
+import { type Quat, angleBetween, conjugate, length, qmul, rotate, sub, v } from "./vec";
 
 export interface BoneDifference {
   /** Mean and largest angle between the two bodies' bones, in degrees. */
   readonly mean: number;
   readonly max: number;
+  /** How much of it is where the bone points (the angle between their lengths), and how much its twist about its length. */
+  readonly direction: number;
+  readonly twist: number;
 }
 
 /** Bone by bone, how far apart two sequences of bone frames are, frame for frame, in degrees. */
@@ -22,14 +25,24 @@ export const boneDifference = (
     let sum = 0;
     let max = 0;
     let count = 0;
+    let dir = 0;
+    let twist = 0;
     for (let i = 0; i < n; i++) {
       if (only && !only(bone, i)) continue;
-      const d = (angleBetween(a[i]!.bones[bone], b[i]!.bones[bone]) * 180) / Math.PI;
+      const qa = a[i]!.bones[bone];
+      const qb = b[i]!.bones[bone];
+      const d = (angleBetween(qa, qb) * 180) / Math.PI;
       sum += d;
       max = Math.max(max, d);
       count++;
+      const ya = rotate(qa, v(0, 1, 0));
+      const yb = rotate(qb, v(0, 1, 0));
+      dir += (Math.acos(Math.max(-1, Math.min(1, ya.x * yb.x + ya.y * yb.y + ya.z * yb.z))) * 180) / Math.PI;
+      // The twist: the turn from one to the other about the bone's length, once its direction is set right.
+      const r = qmul(conjugate(qb), qa);
+      twist += (2 * Math.atan2(Math.abs(r.y), Math.abs(r.w)) * 180) / Math.PI;
     }
-    out[bone] = { mean: count ? sum / count : NaN, max };
+    out[bone] = { mean: count ? sum / count : NaN, max, direction: count ? dir / count : NaN, twist: count ? twist / count : NaN };
   }
   return out;
 };

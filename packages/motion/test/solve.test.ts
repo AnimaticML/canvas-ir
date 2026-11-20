@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   BONES, type BoneName, type Body, type JointName, SCRIPTS, SETUPS, boneDifference, boneLength, coverage, distance, jitter, lag, loadTake,
-  placeRoot, saveTake, solveTake, synthesize,
+  boneFrames, placeRoot, proportionsFor, restPose, rotate, saveTake, solveTake, synthesize, v,
 } from "../src";
 
 const script = (name: string) => SCRIPTS.find((s) => s.name === name)!;
@@ -102,5 +102,32 @@ describe("solving scripted takes", () => {
   test("reports what it saw", () => {
     const c = coverage(solveTake(synthesize(script("Wave")).take));
     expect(c.rightWrist).toBe(1);
+  });
+});
+
+describe("bone frames", () => {
+  test("a straight leg measured a little past straight keeps its twist", () => {
+    const j = restPose(proportionsFor(1.8));
+    const bent = { ...j, leftKnee: { ...j.leftKnee, z: j.leftKnee.z + 0.1 } }; // the knee a little ahead: bent as knees bend
+    const past = { ...j, leftKnee: { ...j.leftKnee, z: j.leftKnee.z - 0.1 } }; // a little behind: past straight
+    const side = (q: ReturnType<typeof boneFrames>["leftShin"]) => rotate(q, v(1, 0, 0));
+    expect(side(boneFrames(bent).leftShin).x).toBeGreaterThan(0.9);
+    expect(side(boneFrames(past).leftShin).x).toBeGreaterThan(0.9);
+  });
+});
+
+describe("depth from the image", () => {
+  test("lifting takes nothing away on a take whose 3D points are already right", () => {
+    for (const s of SCRIPTS) {
+      const { take, truth } = synthesize(s, { height: 1.9 });
+      const off = solveTake(take, { filter: false, lift: false });
+      const on = solveTake(take, { filter: false, lift: true });
+      const mean = (bodies: readonly Body[]) => {
+        const d = boneDifference(bodies, truth, seenOnly(bodies));
+        const m = Object.values(d).map((x) => x.mean).filter(Number.isFinite);
+        return m.reduce((a, b) => a + b, 0) / m.length;
+      };
+      expect([s.name, mean(on) <= mean(off) + 0.5]).toEqual([s.name, true]);
+    }
   });
 });

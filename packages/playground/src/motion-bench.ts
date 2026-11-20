@@ -68,7 +68,7 @@ export interface Summary {
   /** Frames where a body was found at all. */
   readonly found: number;
   /** Per bone: the mean angle to the truth over frames where its far end was seen, and the share seen. */
-  readonly bones: Record<BoneName, { mean: number; max: number; seen: number }>;
+  readonly bones: Record<BoneName, { mean: number; max: number; seen: number; direction: number; twist: number }>;
   /** The same over every frame, held and assumed parts included. */
   readonly overall: number;
   readonly overallSeen: number;
@@ -145,7 +145,7 @@ const run = async (scriptName: string, setupId?: SetupId, fps = 15): Promise<{ t
   const posing = boneDifference(rendered, synth.truth);
   const cov = coverage(bodies);
   const bones = {} as Summary["bones"];
-  for (const b of BONE_NAMES) bones[b] = { mean: seen[b].mean, max: seen[b].max, seen: cov[BONES[b][1] as JointName] };
+  for (const b of BONE_NAMES) bones[b] = { mean: seen[b].mean, max: seen[b].max, seen: cov[BONES[b][1] as JointName], direction: seen[b].direction, twist: seen[b].twist };
   const avg = (r: Record<BoneName, { mean: number }>) => {
     const v = BONE_NAMES.map((b) => r[b].mean).filter(Number.isFinite);
     return v.reduce((a, b) => a + b, 0) / Math.max(1, v.length);
@@ -160,9 +160,10 @@ const grade = (deg: number) => (!Number.isFinite(deg) ? "" : deg < 10 ? "good" :
 const fmt = (n: number, d = 0) => (Number.isFinite(n) ? n.toFixed(d) : "–");
 const showSummary = (s: Summary): string =>
   `<h2>${s.script}, ${SETUPS[s.setup].label}</h2><p>A body was found in ${fmt((100 * s.found) / s.frames)}% of ${s.frames} frames. Mean error ${fmt(s.overallSeen, 1)}° where seen, ${fmt(s.overall, 1)}° over everything. The character was posed within ${fmt(s.posing, 1)}° of the movement.</p>` +
-  `<table><tr><th>bone</th><th>seen</th><th>mean</th><th>max</th></tr>${BONE_NAMES.map(
-    (b) => `<tr><td>${b}</td><td>${fmt(s.bones[b].seen * 100)}%</td><td class="${grade(s.bones[b].mean)}">${fmt(s.bones[b].mean, 1)}°</td><td>${fmt(s.bones[b].max)}°</td></tr>`,
-  ).join("")}</table>`;
+  `<table><tr><th>bone</th><th>seen</th><th>mean</th><th>points</th><th>twist</th><th>max</th></tr>${BONE_NAMES.map(
+    (b) =>
+      `<tr><td>${b}</td><td>${fmt(s.bones[b].seen * 100)}%</td><td class="${grade(s.bones[b].mean)}">${fmt(s.bones[b].mean, 1)}°</td><td>${fmt(s.bones[b].direction, 1)}°</td><td>${fmt(s.bones[b].twist, 1)}°</td><td>${fmt(s.bones[b].max)}°</td></tr>`,
+  ).join("")}</table><p>Mean is the whole difference in each bone's turn; points is how far off its direction is, and twist how far it is turned about its length.</p>`;
 
 runButton.addEventListener("click", async () => {
   runButton.disabled = allButton.disabled = true;

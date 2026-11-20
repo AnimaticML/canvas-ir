@@ -23,6 +23,12 @@ export interface SolveOptions {
   readonly calibrate?: boolean;
   /** How long a part that went out of sight is held where it was before easing to its likely pose, in milliseconds. */
   readonly hold?: number;
+  /**
+   * Whether limbs and the torso take their depth from the image: each bone is laid along the ray through where the
+   * image saw its far end, at its known length from its near end, with the tracker's own depth only choosing between
+   * the two places that fit. The tracker's 3D points are good across the image and poor in depth. Default true.
+   */
+  readonly lift?: boolean;
 }
 
 export type JointSource = "seen" | "held" | "assumed";
@@ -115,7 +121,9 @@ export const boneFrames = (j: Joints, hints: FrameHints = {}): Record<BoneName, 
     const thigh = sub(j[`${s}Knee`], j[`${s}Hip`]);
     const shin = sub(j[`${s}Ankle`], j[`${s}Knee`]);
     const foot = sub(j[`${s}Toe`], j[`${s}Ankle`]);
-    const h = hints.unbent?.has(`${side}Leg`) ? hipsLeft : hinge(thigh, shin, hipsLeft);
+    // A knee bends only one way: one that seems bent the other (a straight leg measured a little past straight) is straight.
+    const bent = cross(normalize(thigh), normalize(shin));
+    const h = hints.unbent?.has(`${side}Leg`) || dot(bent, hipsLeft) < 0 ? hipsLeft : hinge(thigh, shin, hipsLeft);
     return { thigh: frame(thigh, h), shin: frame(shin, h), foot: frame(foot, h) };
   };
   const l = arm("left");
@@ -161,6 +169,8 @@ export class Solver {
   private readonly base: Proportions;
   private readonly measured = new Map<Measure, number[]>();
   private readonly poseFilter: PointsFilter | null;
+  private readonly imageFilter: PointsFilter | null;
+  private readonly lift: boolean;
   private readonly rootFilter: PointsFilter | null;
   private readonly handFilters: { left: PointsFilter | null; right: PointsFilter | null };
   /** Each bone's last direction and when it was last seen. */
@@ -176,6 +186,8 @@ export class Solver {
     this.cached = this.base;
     const f = options.filter === false ? null : (options.filter ?? FILTER_DEFAULTS);
     this.poseFilter = f && new PointsFilter(f);
+    this.imageFilter = f && new PointsFilter(f);
+    this.lift = options.lift ?? true;
     this.rootFilter = f && new PointsFilter(f);
     this.handFilters = { left: f && new PointsFilter(f), right: f && new PointsFilter(f) };
   }
@@ -187,6 +199,7 @@ export class Solver {
 
   reset(): void {
     this.poseFilter?.reset();
+    this.imageFilter?.reset();
     this.rootFilter?.reset();
     this.handFilters.left?.reset();
     this.handFilters.right?.reset();
@@ -309,21 +322,92 @@ export class Solver {
     // Forward kinematics at this person's proportions.
     const j = {} as Record<JointName, Vec3>;
     const go = (from: Vec3, bone: BoneName): Vec3 => add(from, scale(dirs[bone].dir, boneLength(p, bone)));
-    j.hips = v(0, 0, 0);
-    j.spine = go(j.hips, "hips");
-    j.chest = go(j.spine, "spine");
-    j.neck = go(j.chest, "chest");
-    j.head = go(j.neck, "neck");
-    for (const s of ["left", "right"] as const) {
-      const sign = s === "left" ? 1 : -1;
-      j[`${s}Shoulder`] = add(j.neck, scale(shouldersLeft, (sign * p.shoulderWidth) / 2));
-      j[`${s}Elbow`] = go(j[`${s}Shoulder`], `${s}UpperArm`);
-      j[`${s}Wrist`] = go(j[`${s}Elbow`], `${s}Forearm`);
-      j[`${s}HandTip`] = go(j[`${s}Wrist`], `${s}Hand`);
-      j[`${s}Hip`] = add(j.hips, scale(hipsLeft, (sign * p.hipWidth) / 2));
-      j[`${s}Knee`] = go(j[`${s}Hip`], `${s}Thigh`);
-      j[`${s}Ankle`] = go(j[`${s}Knee`], `${s}Shin`);
-      j[`${s}Toe`] = go(j[`${s}Ankle`], `${s}Foot`);
+    const forward = (): void => {
+      j.hips = v(0, 0, 0);
+      j.spine = go(j.hips, "hips");
+      j.chest = go(j.spine, "spine");
+      j.neck = go(j.chest, "chest");
+      j.head = go(j.neck, "neck");
+      for (const s of ["left", "right"] as const) {
+        const sign = s === "left" ? 1 : -1;
+        j[`${s}Shoulder`] = add(j.neck, scale(shouldersLeft, (sign * p.shoulderWidth) / 2));
+        j[`${s}Elbow`] = go(j[`${s}Shoulder`], `${s}UpperArm`);
+        j[`${s}Wrist`] = go(j[`${s}Elbow`], `${s}Forearm`);
+        j[`${s}HandTip`] = go(j[`${s}Wrist`], `${s}Hand`);
+        j[`${s}Hip`] = add(j.hips, scale(hipsLeft, (sign * p.hipWidth) / 2));
+        j[`${s}Knee`] = go(j[`${s}Hip`], `${s}Thigh`);
+        j[`${s}Ankle`] = go(j[`${s}Knee`], `${s}Shin`);
+        j[`${s}Toe`] = go(j[`${s}Ankle`], `${s}Foot`);
+      }
+    };
+    forward();
+
+    // Where the body stands from the camera: the move that lays its points over where the image saw them.
+    let root: Vec3 | null = null;
+    if (world && f.pose) {
+      const r = placeRoot(f.pose.image, world, camera, this.setup, vis, f.pose.world);
+      root = r && this.rootFilter ? this.rootFilter.next([r], t)[0]! : r;
+    }
+
+    // Depth from the image: each seen bone, nearest the hips first, laid along the ray to where its far end was seen.
+    if (this.lift && root && f.pose) {
+      const fov = ((camera.fov ?? this.setup.fov) * Math.PI) / 180;
+      const fx = 0.5 / Math.tan(fov / 2);
+      const aspect = camera.height / camera.width;
+      const raw = f.pose.image.map((l) => v(l.x, l.y, 0));
+      const img = this.imageFilter ? this.imageFilter.next(raw, t) : raw;
+      // A bone's near end is where the image saw it, at the depth the body was placed; its far end is on the ray through
+      // where the image saw that, at the bone's length. Both ends from the image, so where the body was placed matters
+      // only for its distance, and the camera's perspective is kept.
+      const ray = (q: Vec3): Vec3 => v((q.x - 0.5) / fx, (-(q.y - 0.5) * aspect) / fx, -1);
+      const lift = (bone: BoneName, near: Vec3, a: Vec3, b: Vec3, length: number): void => {
+        const d = dirs[bone];
+        if (d.source !== "seen") return;
+        const depth = -(root!.z + near.z);
+        if (!(depth > 0.05)) return;
+        const n = scale(ray(a), depth);
+        const r = normalize(ray(b));
+        const along = dot(r, n);
+        const disc = along * along - dot(n, n) + length * length;
+        const ends = disc <= 0 ? [along] : [along - Math.sqrt(disc), along + Math.sqrt(disc)];
+        // The tracker's depth chooses between the two places that fit: toward the camera or away.
+        let lifted = d.dir;
+        let score = Infinity;
+        for (const k of ends) {
+          const dir = normalize(sub(scale(r, k), n), d.dir);
+          if (Math.abs(dir.z - d.dir.z) < score) {
+            score = Math.abs(dir.z - d.dir.z);
+            lifted = dir;
+          }
+        }
+        // Length tells depth well for a bone pointing at the camera and badly for one lying across the image, where a
+        // little error in its length is a large error in its angle: there the tracker's own depth counts for more. The
+        // direction across the image is the image's either way.
+        const across = Math.hypot(lifted.x, lifted.y);
+        const c = Math.max(0, 1 - across);
+        const z = lifted.z * c + d.dir.z * (1 - c);
+        const k = Math.sqrt(Math.max(0, 1 - z * z)) / (across || 1e-9);
+        const best = normalize(v(lifted.x * k, lifted.y * k, z), lifted);
+        dirs[bone] = { ...d, dir: best };
+        this.last.set(bone, { dir: best, t, seen: true });
+      };
+      const midOf = (a: number, b: number) => mid(img[a]!, img[b]!);
+      lift("hips", j.hips, midOf(P.leftHip, P.rightHip), midOf(P.leftShoulder, P.rightShoulder), p.torso);
+      dirs.spine = dirs.hips;
+      dirs.chest = dirs.hips;
+      forward();
+      for (const s of ["left", "right"] as const) {
+        const L = (n: string) => img[P[`${s}${n}` as keyof typeof P]]!;
+        lift(`${s}UpperArm`, j[`${s}Shoulder`], L("Shoulder"), L("Elbow"), boneLength(p, `${s}UpperArm`));
+        lift(`${s}Thigh`, j[`${s}Hip`], L("Hip"), L("Knee"), boneLength(p, `${s}Thigh`));
+      }
+      forward();
+      for (const s of ["left", "right"] as const) {
+        const L = (n: string) => img[P[`${s}${n}` as keyof typeof P]]!;
+        lift(`${s}Forearm`, j[`${s}Elbow`], L("Elbow"), L("Wrist"), boneLength(p, `${s}Forearm`));
+        lift(`${s}Shin`, j[`${s}Knee`], L("Knee"), L("Ankle"), boneLength(p, `${s}Shin`));
+      }
+      forward();
     }
 
     // The hands' 21 points, hung from the wrists at this person's hand size.
@@ -367,12 +451,6 @@ export class Solver {
       joints[name] = { p: j[name], confidence: d.confidence, source: d.source };
     }
 
-    // Where the body stands from the camera: the move that lays its points over where the image saw them.
-    let root: Vec3 | null = null;
-    if (world && f.pose) {
-      const r = placeRoot(f.pose.image, world, camera, this.setup, vis, f.pose.world);
-      root = r && this.rootFilter ? this.rootFilter.next([r], t)[0]! : r;
-    }
     return { t, joints, bones, rotations, local, root, hands: handStates, proportions: p, seen: !!world };
   }
 
