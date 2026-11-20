@@ -202,9 +202,9 @@ export const synthesize = (script: Script, options: SynthOptions = {}): Synth =>
     const j = posed(p, s.dirs, turn);
     const own = SETUPS[script.setup];
     // Under another setup, a scripted place is kept but moved out to that setup's distance.
-    const root = s.root
-      ? setup === own ? s.root : v(s.root.x, s.root.y, s.root.z * (setup.distance / own.distance))
-      : v(0, setup.stance === "seated" ? -0.45 : -0.1, -setup.distance);
+    const home = (u: typeof setup) => v(0, -u.hipsBelow, -u.distance);
+    // Under another setup, a scripted place keeps its offset from where the script's own setup puts a person.
+    const root = s.root ? (setup === own ? s.root : add(home(setup), sub(s.root, home(own)))) : home(setup);
     const handFrames = boneFrames(j);
     const hands = {
       left: handPoints("left", handFrames.leftHand, j.leftWrist, p.hand, s.grip?.left ?? 0, s.pinch?.left ?? 0),

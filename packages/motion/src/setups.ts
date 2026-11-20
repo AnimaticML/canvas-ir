@@ -22,13 +22,15 @@ export interface Setup {
   readonly fov: number;
   /** How far from the camera the person usually is, in meters. */
   readonly distance: number;
+  /** How far below the camera the middle of the hips usually is, in meters: a desk webcam is at face height, a phone on a stand near the hips. */
+  readonly hipsBelow: number;
 }
 
 export const SETUPS: Record<SetupId, Setup> = {
-  desk: { id: "desk", label: "Desktop webcam", facing: "user", cameraMoves: false, sees: "upper-body", stance: "seated", ground: "none", fov: 63, distance: 0.8 },
-  "phone-stand": { id: "phone-stand", label: "Phone on a stand", facing: "user", cameraMoves: false, sees: "full-body", stance: "standing", ground: "floor", fov: 65, distance: 2.5 },
-  selfie: { id: "selfie", label: "Handheld selfie", facing: "user", cameraMoves: true, sees: "upper-body", stance: "standing", ground: "none", fov: 70, distance: 0.5 },
-  "rear-person": { id: "rear-person", label: "Rear camera on another person", facing: "environment", cameraMoves: true, sees: "full-body", stance: "standing", ground: "floor", fov: 68, distance: 3 },
-  "rear-hand": { id: "rear-hand", label: "Rear camera on a hand", facing: "environment", cameraMoves: true, sees: "hand", stance: "standing", ground: "none", fov: 68, distance: 0.35 },
-  "rear-table": { id: "rear-table", label: "Rear camera on a table", facing: "environment", cameraMoves: true, sees: "hand", stance: "seated", ground: "table", fov: 68, distance: 0.5 },
+  desk: { id: "desk", label: "Desktop webcam", facing: "user", cameraMoves: false, sees: "upper-body", stance: "seated", ground: "none", fov: 63, distance: 0.8, hipsBelow: 0.45 },
+  "phone-stand": { id: "phone-stand", label: "Phone on a stand", facing: "user", cameraMoves: false, sees: "full-body", stance: "standing", ground: "floor", fov: 65, distance: 2.5, hipsBelow: 0.1 },
+  selfie: { id: "selfie", label: "Handheld selfie", facing: "user", cameraMoves: true, sees: "upper-body", stance: "standing", ground: "none", fov: 70, distance: 0.5, hipsBelow: 0.6 },
+  "rear-person": { id: "rear-person", label: "Rear camera on another person", facing: "environment", cameraMoves: true, sees: "full-body", stance: "standing", ground: "floor", fov: 68, distance: 3, hipsBelow: 0.1 },
+  "rear-hand": { id: "rear-hand", label: "Rear camera on a hand", facing: "environment", cameraMoves: true, sees: "hand", stance: "standing", ground: "none", fov: 68, distance: 0.35, hipsBelow: 0.45 },
+  "rear-table": { id: "rear-table", label: "Rear camera on a table", facing: "environment", cameraMoves: true, sees: "hand", stance: "seated", ground: "table", fov: 68, distance: 0.5, hipsBelow: 0.45 },
 };
