@@ -371,27 +371,35 @@ export const SCRIPTS: readonly Script[] = [
 ];
 
 /**
- * A movement made up at random, the same for the same seed: the torso leaning and turning a little, each arm reaching
- * somewhere new every second or so (the elbow bending only as elbows do), eased from pose to pose. Thousands of them,
+ * A movement made up at random, the same for the same seed: the torso leaning, bending and turning, each arm reaching
+ * somewhere new every second or so (the elbow bending only as elbows do), and, standing, the knees bending into a
+ * squat or one leg lifting as in a step, eased from pose to pose. Seated, the legs stay seated. Thousands of them,
  * rendered and tracked on the bench, are labelled examples of how the tracker errs.
  */
 export const randomScript = (seed: number, setup: SetupId = "phone-stand", seconds = 6): Script => {
   const rng = random(seed * 7919 + 13);
   const r = (a: number, b: number) => a + (b - a) * rng.next();
   const keys = Math.ceil(seconds) + 1;
-  // One key pose a second: a direction for each upper arm, how far each elbow bends, and the torso's lean and turn.
+  const standing = SETUPS[setup].stance === "standing";
+  // One key pose a second: a direction for each upper arm, how far each elbow bends, the torso's lean and turn, and
+  // standing, how deep a squat and how far each thigh lifts.
   const poses = Array.from({ length: keys }, () => {
     const arm = (side: 1 | -1) => {
-      // Anywhere from hanging to overhead, out to the side or forward, a little behind at most.
+      // Anywhere from hanging to overhead, across the chest to out to the side, forward or a little behind.
       const up = r(-1, 1);
-      const out = side * r(-0.2, 1);
-      const fwd = r(-0.2, 1);
-      return { upper: dir(out, up, fwd), bend: r(0, 140) * deg, roll: r(-60, 60) * deg };
+      const out = side * r(-0.5, 1);
+      const fwd = r(-0.4, 1);
+      return { upper: dir(out, up, fwd), bend: r(0, 145) * deg, roll: r(-70, 70) * deg };
     };
-    return { left: arm(1), right: arm(-1), lean: r(-10, 25) * deg, side: r(-8, 8) * deg, turn: r(-25, 25) * deg };
+    // A squat two times in five, a lifted leg one in four; otherwise standing with the knees a little soft.
+    const squat = standing && rng.next() < 0.4 ? r(0.2, 1) : 0;
+    const leg = () => ({ lift: standing && rng.next() < 0.25 ? r(10, 60) * deg : 0, out: r(-0.1, 0.25), soft: r(0, 15) * deg });
+    return { left: arm(1), right: arm(-1), lean: r(-15, 40) * deg, side: r(-12, 12) * deg, turn: r(-45, 45) * deg, squat, legs: { left: leg(), right: leg() } };
   });
   const ease = (x: number) => x * x * (3 - 2 * x);
   const lerpV = (a: Vec3, b: Vec3, k: number) => normalize(add(scale(a, 1 - k), scale(b, k)), b);
+  const mix = (a: number, b: number, k: number) => a + (b - a) * k;
+  const home = SETUPS[setup];
   return {
     name: `Random ${seed}`,
     setup,
@@ -402,14 +410,14 @@ export const randomScript = (seed: number, setup: SetupId = "phone-stand", secon
       const k = ease(Math.min(1, t - i));
       const a = poses[i]!;
       const b = poses[i + 1]!;
-      const torso = dir(Math.sin(a.side + (b.side - a.side) * k), 1, Math.sin(a.lean + (b.lean - a.lean) * k));
+      const torso = dir(Math.sin(mix(a.side, b.side, k)), 1, Math.sin(mix(a.lean, b.lean, k)));
       const dirs: Partial<Record<BoneName, Vec3>> = { hips: torso, spine: torso, chest: torso, neck: torso };
       for (const s of ["left", "right"] as const) {
         const upper = lerpV(a[s].upper, b[s].upper, k);
-        const bend = a[s].bend + (b[s].bend - a[s].bend) * k;
-        const roll = a[s].roll + (b[s].roll - a[s].roll) * k;
-        // The elbow bends about an axis square to the upper arm, turned about it by the roll: forearm forward of it. The axis
-        // already points opposite ways for the two arms, as their upper arms do, so both bend by the same sign.
+        const bend = mix(a[s].bend, b[s].bend, k);
+        const roll = mix(a[s].roll, b[s].roll, k);
+        // The elbow bends about an axis square to the upper arm, turned about it by the roll: forearm forward of it. The
+        // axis already points opposite ways for the two arms, as their upper arms do, so both bend by the same sign.
         const sideways = normalize(cross(upper, v(0, 0, 1)), v(1, 0, 0));
         const hingeAxis = rotate(axisAngle(upper, roll), sideways);
         const fore = rotate(axisAngle(hingeAxis, bend), upper);
@@ -417,7 +425,21 @@ export const randomScript = (seed: number, setup: SetupId = "phone-stand", secon
         dirs[`${s}Forearm`] = fore;
         dirs[`${s}Hand`] = fore;
       }
-      return { dirs, turn: a.turn + (b.turn - a.turn) * k };
+      const squat = mix(a.squat, b.squat, k);
+      if (standing) {
+        for (const s of ["left", "right"] as const) {
+          const side = s === "left" ? 1 : -1;
+          // The thigh swings forward by the squat and the lift; the knee bends back by the squat, the lift and a little
+          // softness, so the shin never swings forward of the thigh.
+          const lift = mix(a.legs[s].lift, b.legs[s].lift, k);
+          const thighAngle = squat * 70 * deg + lift;
+          const knee = squat * 100 * deg + lift * 1.2 + mix(a.legs[s].soft, b.legs[s].soft, k);
+          const out = side * mix(a.legs[s].out, b.legs[s].out, k) * 0.3;
+          dirs[`${s}Thigh`] = dir(out, -Math.cos(thighAngle), Math.sin(thighAngle));
+          dirs[`${s}Shin`] = dir(out * 0.5, -Math.cos(thighAngle - knee), Math.sin(thighAngle - knee));
+        }
+      }
+      return { dirs, turn: mix(a.turn, b.turn, k), root: v(0, -home.hipsBelow - 0.45 * squat, -home.distance) };
     },
   };
 };

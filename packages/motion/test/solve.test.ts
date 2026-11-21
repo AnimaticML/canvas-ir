@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   BONES, type BoneName, type Body, type JointName, SCRIPTS, SETUPS, boneDifference, boneLength, coverage, distance, jitter, lag, loadTake,
-  boneFrames, placeRoot, proportionsFor, randomScript, restPose, normalize, rotate, saveTake, sub, solveTake, synthesize, v,
+  boneFrames, placeRoot, proportionsFor, randomScript, restPose, cross, normalize, rotate, saveTake, sub, solveTake, synthesize, v,
 } from "../src";
 
 const script = (name: string) => SCRIPTS.find((s) => s.name === name)!;
@@ -155,5 +155,25 @@ describe("random movements", () => {
     expect(forward.left / n).toBeGreaterThan(0.2);
     expect(forward.right / n).toBeGreaterThan(0.2);
     expect(Math.abs(forward.left - forward.right) / n).toBeLessThan(0.15);
+  });
+
+  test("standing, squat and step with knees that bend only forward", () => {
+    let squats = 0;
+    let lifts = 0;
+    for (let seed = 1; seed <= 30; seed++)
+      for (const f of synthesize(randomScript(seed, "phone-stand"), { fps: 2 }).truth) {
+        const j = f.joints;
+        const hipsLeft = normalize(sub(j.leftHip, j.rightHip));
+        for (const s of ["left", "right"] as const) {
+          const thigh = normalize(sub(j[`${s}Knee`], j[`${s}Hip`]));
+          const shin = normalize(sub(j[`${s}Ankle`], j[`${s}Knee`]));
+          const c = cross(thigh, shin);
+          expect(c.x * hipsLeft.x + c.y * hipsLeft.y + c.z * hipsLeft.z).toBeGreaterThan(-0.01);
+          if (thigh.y > -0.8) lifts++;
+        }
+        if (f.root.y < -0.3) squats++;
+      }
+    expect(squats).toBeGreaterThan(20);
+    expect(lifts).toBeGreaterThan(20);
   });
 });
