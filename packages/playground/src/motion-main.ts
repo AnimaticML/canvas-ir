@@ -19,13 +19,15 @@ import { Scene } from "@babylonjs/core/scene";
 import { Surface } from "@canvas-ir/babylon";
 import { Components, EventRouter } from "canvas-ir";
 import {
-  BONES, BONE_NAMES, type Body, type BoneName, type Frame, type JointName, SETUPS, type SetupId, type SolveOptions, Solver, type Take, type TakeLabel,
+  BONES, BONE_NAMES, type Body, type BoneName, Correction, type Frame, type JointName, SETUPS, type SetupId, type SolveOptions, Solver, type Take, type TakeLabel,
   boneDifference, coverage, duration, frameIndexAt, imageAt, jitter, labelsAt, lag, loadTake, saveTake, solveTake, v,
 } from "@canvas-ir/motion";
 import { Capture } from "./motion/capture";
 import { Character, ROBOT } from "./motion/character";
 import { Mannequin } from "./motion/mannequin";
 import { Overlay, Timeline } from "./motion/views";
+// Imported as a file, so the page fetches it only when it is used; TypeScript types it as the JSON regardless.
+import correctionUrl from "./motion/correction.json" with { type: "file" };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const sourceSelect = $<HTMLSelectElement>("source");
@@ -128,6 +130,13 @@ const state = {
   recLabels: [] as TakeLabel[],
 };
 
+/** The learned correction, fetched the first time it's turned on. */
+let correction: Correction | undefined;
+$("correct").addEventListener("input", async () => {
+  correction ??= new Correction(await (await fetch(correctionUrl as unknown as string)).json());
+  resolve();
+});
+
 const options = (): SolveOptions => {
   const height = Number(($<HTMLInputElement>("height")).value);
   return {
@@ -135,6 +144,7 @@ const options = (): SolveOptions => {
     ...(height > 0 ? { height } : {}),
     filter: $<HTMLInputElement>("smooth").checked ? { minCutoff: Number($<HTMLInputElement>("minCutoff").value), beta: Number($<HTMLInputElement>("beta").value), dCutoff: 1 } : false,
     hold: Number($<HTMLInputElement>("hold").value),
+    ...(correction && $<HTMLInputElement>("correct").checked ? { correction } : {}),
   };
 };
 let liveSolver = new Solver(options());

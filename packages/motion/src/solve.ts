@@ -4,6 +4,7 @@
 //
 // The result keeps its bones the same length from frame to frame, says how sure it is of each joint, and gives each
 // bone's rotation, which is what a character is driven from.
+import type { Correction } from "./correct";
 import { FILTER_DEFAULTS, type FilterOptions, PointsFilter } from "./filter";
 import { FINGERS, H, type Landmark, P } from "./landmarks";
 import { BONES, BONE_NAMES, BONE_PARENT, type BoneName, JOINTS, type JointName, type Joints, type Proportions, boneLength, proportionsFor, restPose } from "./skeleton";
@@ -29,6 +30,8 @@ export interface SolveOptions {
    * the two places that fit. The tracker's 3D points are good across the image and poor in depth. Default true.
    */
   readonly lift?: boolean;
+  /** A learned correction of the tracker's 3D points, applied before anything else (see correct.ts). */
+  readonly correction?: Correction;
 }
 
 export type JointSource = "seen" | "held" | "assumed";
@@ -171,6 +174,7 @@ export class Solver {
   private readonly poseFilter: PointsFilter | null;
   private readonly imageFilter: PointsFilter | null;
   private readonly lift: boolean;
+  private readonly correction: Correction | undefined;
   private readonly rootFilter: PointsFilter | null;
   private readonly handFilters: { left: PointsFilter | null; right: PointsFilter | null };
   /** Each bone's last direction and when it was last seen. */
@@ -188,6 +192,7 @@ export class Solver {
     this.poseFilter = f && new PointsFilter(f);
     this.imageFilter = f && new PointsFilter(f);
     this.lift = options.lift ?? true;
+    this.correction = options.correction;
     this.rootFilter = f && new PointsFilter(f);
     this.handFilters = { left: f && new PointsFilter(f), right: f && new PointsFilter(f) };
   }
@@ -232,7 +237,8 @@ export class Solver {
   solve(f: Frame, camera: CameraInfo): Body {
     const t = f.t;
     const vis = this.visible;
-    const world = f.pose ? (this.poseFilter ? this.poseFilter.next(f.pose.world.map(toBody), t) : f.pose.world.map(toBody)) : null;
+    const tracked = f.pose && this.correction ? this.correction.apply(f.pose.image, f.pose.world, camera, this.visible) : f.pose?.world;
+    const world = tracked ? (this.poseFilter ? this.poseFilter.next(tracked.map(toBody), t) : tracked.map(toBody)) : null;
     const seenAt = (i: number): number => f.pose?.world[i]?.visibility ?? (f.pose ? 1 : 0);
     const W = (i: number): Vec3 => world![i]!;
     const both = (a: number, b: number): number => Math.min(seenAt(a), seenAt(b));
@@ -345,7 +351,7 @@ export class Solver {
     // Where the body stands from the camera: the move that lays its points over where the image saw them.
     let root: Vec3 | null = null;
     if (world && f.pose) {
-      const r = placeRoot(f.pose.image, world, camera, this.setup, vis, f.pose.world);
+      const r = placeRoot(f.pose.image, world, camera, this.setup, vis, tracked);
       root = r && this.rootFilter ? this.rootFilter.next([r], t)[0]! : r;
     }
 

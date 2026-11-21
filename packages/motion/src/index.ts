@@ -19,3 +19,4 @@ export * from "./solve";
 export * from "./compare";
 export * from "./synthetic";
 export * from "./retarget";
+export * from "./correct";

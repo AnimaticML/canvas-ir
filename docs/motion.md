@@ -41,6 +41,7 @@ It is built in layers, each usable on its own, and it depends on no engine. The 
    - It takes depth from the image. MediaPipe's 3D points are good across the image and poor toward the camera, so each seen bone of the torso, arms and legs is laid from where the image saw its near end (at the depth the body was placed) to the ray through where it saw its far end, at the bone's known length. The tracker's depth only chooses between the two places that fit, and counts for more where the bone lies across the image, since there length says little about depth. On the bench, with the knee fix below, this cut the mean error by 1 to 8° in most runs (Squat at a phone on a stand, 40° to 32°).
    - A knee bends only one way, so a leg measured a little past straight is taken as straight instead of as bent backwards, which had turned the whole leg half round.
    - The twist of each limb comes from its hinge (elbow or knee). When the limb is straight, the twist comes from the knuckles' line if the hand was seen, or from the chest otherwise.
+   - It can apply a **learned correction** (`correct.ts`, the `correction` option) to MediaPipe's 3D points before anything else. See below.
 6. **Compare** (`compare.ts`). Measures for judging a solve:
    - the angle between two takes' bones, frame by frame;
    - how much each joint shakes (mean acceleration while seen);
@@ -87,6 +88,16 @@ MediaPipe's pose (full) and hand models run in the browser. The build fetches th
 - `?pose=heavy` runs MediaPipe's heavy pose model instead of the full one, if `pose_landmarker_heavy.task` is served beside the page (it isn't on the site: 30 MB). On the bench it did worse than the full model in 12 of 15 runs (Wave at a desk, 27° to 50°), so the full model stays.
 - Budgets hold for the whole run in its fixed order; a single movement run alone can come out a little differently.
 - **In CI**, `bun run --cwd packages/playground bench` runs every movement under the desk, phone and selfie cameras at 5 frames a second, with the trackers on the CPU and fresh for each run so results repeat exactly. Each run is held to its budget in `bench/budgets.json` (with 2° of slack): worse fails, clearly better says to tighten the budget with `--update`. All fifteen take about a minute.
+
+### The learned correction
+
+Some of MediaPipe's errors repeat whenever a pose comes up: a raised forearm is reported pointing at the camera, the neck leans more than it does. The bench can show the tracker thousands of poses whose truth is known, so a small network learns them.
+
+- **Data.** `bench/collect.ts` plays made-up movements (`randomScript`: each arm reaching somewhere new every second, the torso leaning and turning) on the mannequin under the desk, phone and selfie cameras, and writes each frame's MediaPipe landmarks beside the bone frames it was rendered in. 450 movements make about 14,000 frames, in about two hours on the CPU.
+- **Model.** `bench/train.py` (numpy only) fits a network with two hidden layers of 128. From the landmarks (3D, in the image, and how visible), it says how far to turn each of the tracker's bone directions. `correct.ts` runs it and moves the landmarks so each corrected bone points where the network says, keeping its length and carrying what hangs from it. Calibration, filtering and the solve run as before.
+- **Applied** to the torso, neck and upper arms, and only where they were seen. On the scripted movements, correcting the forearms and thighs did worse.
+- **Results.** On movements it didn't train on (one seed in ten), the tracker's bones go from 20.7° to 12.3° off. On the scripted bench, which it never saw, the mean goes from 24.0° to 22.4°, better or equal in all 15 runs. The neck goes from 15° to 8° and the raised right arm from 43° to 38°. Most of what is left is in parts out of view, which no correction of the points can reach, and the gap shows the made-up movements don't yet cover what the scripted ones do (standing, squatting, the legs).
+- **Off by default.** It learned from one mannequin, so how far it carries to real people is for real takes to tell. In the lab, **Learned correction** turns it on for live tracking and takes. On the bench, `?correct` does the same. The weights are `playground/src/motion/correction.json` (200 KB), fetched only when used.
 
 A plain clay mannequin with no clothes or texture tracks well: MediaPipe finds the body and both hands as long as the head is in view.
 

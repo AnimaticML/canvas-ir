@@ -4,7 +4,7 @@ CanvasIR is a stand-in for `CanvasRenderingContext2D` that records drawing inste
 
 Design: [docs/design.md](docs/design.md). What comes next: [docs/roadmap.md](docs/roadmap.md).
 
-Experimental **[motion](docs/motion.md)** (`packages/motion`, the playground's `motion.html`): what a camera sees of a person turned into a calibrated body, its bones' rotations and its hands, for any engine, with a lab that shows the camera and its landmarks, a rigged character driven by the solved body, and a timeline, and records, replays and compares takes with their camera pictures and labels; and a bench (`motion-bench.html`) that renders a rigged human through each camera setup and scores the tracker and solver against the true bones.
+Experimental **[motion](docs/motion.md)** (`packages/motion`, the playground's `motion.html`): what a camera sees of a person turned into a calibrated body, its bones' rotations and its hands, for any engine, with a lab that shows the camera and its landmarks, a rigged character driven by the solved body, and a timeline, and records, replays and compares takes with their camera pictures and labels; and a bench (`motion-bench.html`) that renders a rigged human through each camera setup and scores the tracker and solver against the true bones, and trains a correction of the tracker's 3D points from it.
 
 Experimental **[AR mode of the original Babylon demo](docs/ar-table.md)** (`ar.html`) runs the same `startBabylon` scene, board, controls, crates, balls, and Havok bodies over a full-screen camera. ArUco places it relative to a group of markers; MediaPipe touch calibration and pinch gestures drive the original components and physics. Interaction traces capture concrete success/failure reasons without a diagnostic dashboard.
 

@@ -57,7 +57,8 @@ try {
   await page.goto(`http://localhost:${server.port}/motion-bench.html?cpu`);
   await page.waitForFunction(() => !(document.getElementById("run") as HTMLButtonElement).disabled, null, { timeout: 120_000 });
   const budgets: Record<string, Budget> = (await Bun.file(budgetsFile).exists()) ? await Bun.file(budgetsFile).json() : {};
-  const scripts: string[] = await page.evaluate(() => Array.from((document.getElementById("script") as HTMLSelectElement).options).map((o) => o.value));
+  // The scripted movements; the made-up ones are training data (collect.ts), not held to budgets.
+  const scripts: string[] = (await page.evaluate(() => Array.from((document.getElementById("script") as HTMLSelectElement).options).map((o) => o.value))).filter((s) => !s.startsWith("Random"));
   const setups = ["desk", "phone-stand", "selfie"];
   for (const script of scripts) {
     for (const setup of setups) {

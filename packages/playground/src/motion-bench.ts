@@ -12,13 +12,17 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
 import {
   BONES, BONE_NAMES, type Body, type BoneName, type Frame, type JointName, SCRIPTS, SETUPS, type SetupId, type Take, type TakeImage,
-  HAND_LINES, type Joints, POSE_LINES, type Quat, angleBetween, boneDifference, randomScript, boneFrames, coverage, saveTake, solveTake, synthesize,
+  HAND_LINES, type Joints, POSE_LINES, type Quat, angleBetween, boneDifference, Correction, randomScript, boneFrames, coverage, saveTake, solveTake, synthesize,
 } from "@canvas-ir/motion";
 import { Character, mannequinSpec } from "./motion/character";
 import { Trackers } from "./motion/capture";
 import mannequinUrl from "./motion/mannequin.glb" with { type: "file" };
+// Imported as a file, so the page fetches it only when it is used; TypeScript types it as the JSON regardless.
+import correctionUrl from "./motion/correction.json" with { type: "file" };
 
 const params = new URLSearchParams(location.search);
+/** With ?correct, runs are solved with the learned correction of MediaPipe's points (see correct.ts in the motion package). */
+const correction = params.has("correct") ? fetch(correctionUrl as unknown as string).then(async (r) => new Correction(await r.json())) : Promise.resolve(undefined);
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>("render");
 const overlay = $<HTMLCanvasElement>("overlay");
@@ -285,7 +289,8 @@ const run = async (scriptName: string, setupId?: SetupId, fps = 15): Promise<{ t
     images,
     labels: [{ t0: 0, text: script.name, by: "watcher" }],
   };
-  const bodies = solveTake(take);
+  const corrected = await correction;
+  const bodies = solveTake(take, corrected ? { correction: corrected } : {});
   const seenAt = (bone: BoneName, i: number) => bodies[i]!.joints[BONES[bone][1] as JointName].source === "seen";
   const seen = boneDifference(bodies, rendered, seenAt);
   const all = boneDifference(bodies, rendered);
