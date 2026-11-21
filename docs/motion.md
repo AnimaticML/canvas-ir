@@ -82,7 +82,9 @@ MediaPipe's pose (full) and hand models run in the browser. The build fetches th
 
 - **The truth is what was rendered.** The character's joints are measured the way the solver measures a body, so the score doesn't depend on how well the character matched the script. How far the character was from the script is shown too, as the bench's own error.
 - **The score** is the angle between each solved bone and the true one, where the bone's end was seen and over every frame, with the share of frames each part was seen. **Run all** gives the table for every movement under every camera.
+- **The replay** follows each run: frame by frame, what the camera saw with what MediaPipe found drawn over it, beside the mannequin re-animated from the solved body and, see-through in amber, the mannequin as the movement played it. **Front**, **Side** and **Apart** set the view; the bar under them scrubs, and the line beside it says how far off the bones are at that frame and which is worst.
 - Each run is a take, with pictures, that can be saved and opened in the lab.
+- Budgets hold for the whole run in its fixed order; a single movement run alone can come out a little differently.
 - **In CI**, `bun run --cwd packages/playground bench` runs every movement under the desk, phone and selfie cameras at 5 frames a second, with the trackers on the CPU and fresh for each run so results repeat exactly. Each run is held to its budget in `bench/budgets.json` (with 2° of slack): worse fails, clearly better says to tighten the budget with `--update`. All fifteen take about a minute.
 
 A plain clay mannequin with no clothes or texture tracks well: MediaPipe finds the body and both hands as long as the head is in view.

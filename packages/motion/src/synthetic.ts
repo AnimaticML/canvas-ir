@@ -176,6 +176,7 @@ const poseLandmarks = (j: Joints, hands: { left: Vec3[]; right: Vec3[] }, turn: 
 /** Plays a script into a take, seen from a camera at the origin looking down -z. */
 export const synthesize = (script: Script, options: SynthOptions = {}): Synth => {
   const setupId = options.setup ?? script.setup;
+  const own = SETUPS[script.setup];
   const setup = SETUPS[setupId];
   const fps = options.fps ?? 30;
   const rng = random(options.seed ?? 7);
@@ -199,8 +200,9 @@ export const synthesize = (script: Script, options: SynthOptions = {}): Synth =>
     const t = (i / fps) * 1000;
     const s = script.at(t / 1000);
     const turn = s.turn ?? 0;
-    const j = posed(p, s.dirs, turn);
-    const own = SETUPS[script.setup];
+    // A seated script sits: thighs forward and shins down, unless it says otherwise.
+    const seat = own.stance === "seated" ? { leftThigh: dir(0, -0.15, 1), rightThigh: dir(0, -0.15, 1), leftShin: v(0, -1, 0), rightShin: v(0, -1, 0) } : {};
+    const j = posed(p, { ...seat, ...s.dirs }, turn);
     // Under another setup, a scripted place is kept but moved out to that setup's distance.
     const home = (u: typeof setup) => v(0, -u.hipsBelow, -u.distance);
     // Under another setup, a scripted place keeps its offset from where the script's own setup puts a person.

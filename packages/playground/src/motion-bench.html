@@ -15,9 +15,24 @@
       button.light { background: #e2e8f0; color: #0f172a; }
       button:disabled { opacity: 0.4; cursor: default; }
       header a { margin-left: auto; color: #334155; }
-      main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 0; }
-      .stage { position: relative; background: #0f172a; display: grid; place-items: center; min-height: 60vh; }
-      #render { max-width: 100%; max-height: 80vh; display: block; }
+      main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 340px; gap: 0; }
+      .stage { position: relative; background: #0f172a; display: grid; place-items: center; min-height: 60vh; align-content: center; }
+      #render, #picture { max-width: 100%; max-height: 72vh; display: block; }
+      #picture { width: 640px; aspect-ratio: 4 / 3; }
+      #picture[hidden], #render[hidden] { display: none; }
+      .replay3d { background: #e2e8f0; }
+      #replay { width: 100%; height: 72vh; display: block; touch-action: none; outline: none; }
+      .caption { margin: 6px 0 0; color: #94a3b8; font-size: 12px; text-align: center; }
+      .replay3d .caption { color: #475569; }
+      .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
+      .swatch.solved { background: #9ca3af; } .swatch.truth { background: #f59e0b; }
+      .views { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; }
+      .views button { padding: 6px 10px; }
+      .views button[aria-pressed="true"] { background: #2563eb; color: #fff; }
+      footer { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: #fff; border-top: 1px solid #cbd5e1; }
+      footer[hidden] { display: none; }
+      #scrub { flex: 1; }
+      #when { font-variant-numeric: tabular-nums; min-width: 260px; }
       .frame { position: relative; }
       #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
       aside { background: #fff; border-left: 1px solid #cbd5e1; padding: 10px 12px; font-size: 12px; overflow: auto; max-height: calc(100vh - 50px); }
@@ -29,7 +44,7 @@
       td:first-child, th:first-child { text-align: left; }
       th { color: #64748b; font-weight: 500; }
       .bad { color: #dc2626; } .ok { color: #d97706; } .good { color: #059669; }
-      @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { border-left: 0; max-height: none; } }
+      @media (max-width: 1100px) { main { grid-template-columns: 1fr; } aside { border-left: 0; max-height: none; } }
     </style>
   </head>
   <body>
@@ -44,9 +59,16 @@
       <a href="./motion.html">motion lab</a>
     </header>
     <main>
-      <div class="stage"><div class="frame"><canvas id="render" width="640" height="480"></canvas><canvas id="overlay" width="640" height="480"></canvas></div></div>
+      <div class="stage"><div class="frame"><canvas id="render" width="640" height="480"></canvas><img id="picture" alt="" hidden /><canvas id="overlay" width="640" height="480"></canvas></div><p class="caption">What the camera saw, and in green and blue what MediaPipe found</p></div>
+      <div class="stage replay3d"><canvas id="replay"></canvas><p class="caption"><span class="swatch solved"></span>re-animated from what was found <span class="swatch truth"></span>as it was played</p>
+        <div class="views"><button data-view="front" class="light" aria-pressed="true">Front</button><button data-view="side" class="light">Side</button><button data-view="apart" class="light">Apart</button></div></div>
       <aside id="info"></aside>
     </main>
+    <footer id="controls" hidden>
+      <button id="play" class="light">Play</button>
+      <input id="scrub" type="range" min="0" max="0" value="0" />
+      <span id="when"></span>
+    </footer>
     <script type="module" src="./motion-bench.ts"></script>
   </body>
 </html>

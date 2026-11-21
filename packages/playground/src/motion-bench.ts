@@ -1,6 +1,7 @@
 // The motion bench: a rigged human posed by a scripted movement, rendered through a camera placed as a setup places
 // it, and run through the real trackers and the solver. The movement's bones are known, so the solve is scored
 // against the truth, bone by bone, for each camera setup: what the camera-only takes can't tell.
+import { ArcRotateCamera } from "@babylonjs/core/Cameras/arcRotateCamera";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
 import { Camera } from "@babylonjs/core/Cameras/camera";
 import { Engine } from "@babylonjs/core/Engines/engine";
@@ -11,7 +12,7 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
 import {
   BONES, BONE_NAMES, type Body, type BoneName, type Frame, type JointName, SCRIPTS, SETUPS, type SetupId, type Take, type TakeImage,
-  type Joints, type Quat, boneDifference, boneFrames, coverage, saveTake, solveTake, synthesize,
+  HAND_LINES, type Joints, POSE_LINES, type Quat, angleBetween, boneDifference, boneFrames, coverage, saveTake, solveTake, synthesize,
 } from "@canvas-ir/motion";
 import { Character, mannequinSpec } from "./motion/character";
 import { Trackers } from "./motion/capture";
@@ -54,6 +55,13 @@ const loadModel = async (url: string): Promise<void> => {
   character?.setEnabled(false);
   character = await Character.load(scene, mannequinSpec(url));
   await scene.whenReadyAsync();
+  solvedFigure?.setEnabled(false);
+  truthFigure?.setEnabled(false);
+  solvedFigure = await Character.load(replayScene, mannequinSpec(url));
+  truthFigure = await Character.load(replayScene, mannequinSpec(url));
+  truthFigure.tint(0.96, 0.62, 0.04, 0.35);
+  solvedFigure.setEnabled(false);
+  truthFigure.setEnabled(false);
   // ?cpu runs the trackers on the CPU, as a machine without a GPU must, so results repeat exactly.
   trackers ??= await Trackers.load(!params.has("cpu"));
   runButton.disabled = allButton.disabled = false;
@@ -78,13 +86,136 @@ export interface Summary {
 
 const drawLandmarks = (f: Frame): void => {
   const c = overlay.getContext("2d")!;
-  c.clearRect(0, 0, overlay.width, overlay.height);
+  const W = overlay.width;
+  const H = overlay.height;
+  c.clearRect(0, 0, W, H);
+  c.lineCap = "round";
   const pts = f.pose?.image;
-  c.fillStyle = "#22c55e";
-  for (const l of pts ?? []) if ((l.visibility ?? 1) > 0.5) c.fillRect(l.x * overlay.width - 2, l.y * overlay.height - 2, 4, 4);
-  c.fillStyle = "#60a5fa";
-  for (const h of f.hands) for (const l of h.image) c.fillRect(l.x * overlay.width - 1.5, l.y * overlay.height - 1.5, 3, 3);
+  if (pts) {
+    for (const [a, b] of POSE_LINES) {
+      const p = pts[a]!;
+      const q = pts[b]!;
+      const sure = Math.min(p.visibility ?? 1, q.visibility ?? 1) > 0.5;
+      c.strokeStyle = sure ? "#22c55e" : "rgba(239, 68, 68, 0.6)";
+      c.lineWidth = sure ? 3 : 1.5;
+      c.beginPath();
+      c.moveTo(p.x * W, p.y * H);
+      c.lineTo(q.x * W, q.y * H);
+      c.stroke();
+    }
+    c.fillStyle = "#f8fafc";
+    for (const l of pts) if ((l.visibility ?? 1) > 0.5) c.fillRect(l.x * W - 2, l.y * H - 2, 4, 4);
+  }
+  for (const h of f.hands) {
+    c.strokeStyle = h.side === "left" ? "#60a5fa" : "#f472b6";
+    c.lineWidth = 1.5;
+    for (const [a, b] of HAND_LINES) {
+      c.beginPath();
+      c.moveTo(h.image[a]!.x * W, h.image[a]!.y * H);
+      c.lineTo(h.image[b]!.x * W, h.image[b]!.y * H);
+      c.stroke();
+    }
+  }
 };
+
+// The replay: the run frame by frame, what the camera saw beside the mannequin re-animated from what was found and,
+// see-through, the mannequin as it was played.
+const replayCanvas = $<HTMLCanvasElement>("replay");
+const picture = $<HTMLImageElement>("picture");
+const controls = $<HTMLElement>("controls");
+const scrub = $<HTMLInputElement>("scrub");
+const playButton = $<HTMLButtonElement>("play");
+const when = $<HTMLElement>("when");
+const replayEngine = new Engine(replayCanvas, true, { antialias: true });
+const replayScene = new Scene(replayEngine);
+replayScene.useRightHandedSystem = true;
+replayScene.clearColor = new Color4(0.89, 0.91, 0.94, 1);
+new HemisphericLight("sky", new Vector3(0.2, 1, 0.4), replayScene).intensity = 0.8;
+new DirectionalLight("sun", new Vector3(-0.3, -0.8, -0.5), replayScene).intensity = 0.6;
+const orbit = new ArcRotateCamera("orbit", Math.PI / 2, 1.35, 2.6, new Vector3(0, 0.05, 0), replayScene);
+orbit.lowerRadiusLimit = 0.8;
+orbit.upperRadiusLimit = 10;
+orbit.wheelDeltaPercentage = 0.02;
+orbit.minZ = 0.02;
+orbit.attachControl(replayCanvas, true);
+let solvedFigure: Character | null = null;
+let truthFigure: Character | null = null;
+let replayView: "front" | "side" | "apart" = "front";
+interface Replay {
+  readonly frames: readonly Frame[];
+  readonly pictures: readonly string[];
+  readonly bodies: readonly Body[];
+  readonly truth: readonly Body[];
+  readonly rendered: readonly { bones: Record<BoneName, Quat> }[];
+}
+let replay: Replay | null = null;
+let replayAt = 0;
+let replayPlaying = false;
+let replayFps = 15;
+
+const showReplay = (i: number): void => {
+  if (!replay) return;
+  replayAt = Math.max(0, Math.min(replay.frames.length - 1, i));
+  scrub.value = String(replayAt);
+  const f = replay.frames[replayAt]!;
+  if (picture.getAttribute("src") !== replay.pictures[replayAt]) picture.src = replay.pictures[replayAt]!;
+  drawLandmarks(f);
+  const body = replay.bodies[replayAt]!;
+  const apart = replayView === "apart" ? 0.45 : 0;
+  solvedFigure?.show(body, { x: -apart, y: 0, z: 0 });
+  truthFigure?.show(replay.truth[replayAt]!, { x: apart, y: 0, z: 0 });
+  // How far off each bone is now, where its end was seen.
+  const off: [BoneName, number][] = [];
+  for (const b of BONE_NAMES) {
+    if (body.joints[BONES[b][1] as JointName].source !== "seen") continue;
+    off.push([b, (angleBetween(body.bones[b], replay.rendered[replayAt]!.bones[b]) * 180) / Math.PI]);
+  }
+  off.sort((a, b) => b[1] - a[1]);
+  const mean = off.reduce((a, [, d]) => a + d, 0) / Math.max(1, off.length);
+  when.textContent = `${(f.t / 1000).toFixed(2)} s · ${f.pose ? `off by ${mean.toFixed(0)}° on average${off[0] ? `, most at ${off[0][0]} (${off[0][1].toFixed(0)}°)` : ""}` : "no body found"}`;
+};
+
+const startReplay = (r: Replay, fps: number): void => {
+  replay = r;
+  replayFps = fps;
+  canvas.hidden = true;
+  picture.hidden = false;
+  controls.hidden = false;
+  scrub.max = String(r.frames.length - 1);
+  replayPlaying = true;
+  playButton.textContent = "Pause";
+  showReplay(0);
+};
+scrub.addEventListener("input", () => {
+  replayPlaying = false;
+  playButton.textContent = "Play";
+  showReplay(Number(scrub.value));
+});
+playButton.addEventListener("click", () => {
+  replayPlaying = !replayPlaying;
+  playButton.textContent = replayPlaying ? "Pause" : "Play";
+});
+for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>(".views button"))) {
+  b.addEventListener("click", () => {
+    replayView = b.dataset.view as typeof replayView;
+    for (const o of Array.from(document.querySelectorAll<HTMLButtonElement>(".views button"))) o.setAttribute("aria-pressed", String(o === b));
+    orbit.alpha = replayView === "side" ? 0 : Math.PI / 2;
+    orbit.beta = 1.35;
+    showReplay(replayAt);
+  });
+}
+let replayClock = 0;
+replayEngine.runRenderLoop(() => {
+  if (replay && replayPlaying) {
+    replayClock += replayEngine.getDeltaTime();
+    if (replayClock >= 1000 / replayFps) {
+      replayClock = 0;
+      showReplay(replayAt + 1 >= replay.frames.length ? 0 : replayAt + 1);
+    }
+  }
+  replayScene.render();
+});
+addEventListener("resize", () => replayEngine.resize());
 
 /** Plays a movement on the character under a setup, tracks every rendered frame and scores the solve. */
 const run = async (scriptName: string, setupId?: SetupId, fps = 15): Promise<{ take: Take; summary: Summary; bodies: Body[]; rendered: { bones: Record<BoneName, Quat> }[] }> => {
@@ -106,10 +237,17 @@ const run = async (scriptName: string, setupId?: SetupId, fps = 15): Promise<{ t
   // The truth is what was rendered: the character's own joints, measured the way the solver measures a body. How far
   // that is from the script's bones says how faithfully the character was posed.
   const rendered: { bones: Record<BoneName, Quat> }[] = [];
+  const pictures: string[] = [];
+  const truthBodies: Body[] = [];
+  replay = null;
+  replayPlaying = false;
+  canvas.hidden = false;
+  picture.hidden = true;
   for (let i = 0; i < synth.truth.length; i++) {
     const truth = synth.truth[i]!;
     const t = synth.take.frames[i]!.t;
     const body = { bones: truth.bones, hands: { left: { points: truth.hands.left }, right: { points: truth.hands.right } }, proportions: synth.proportions } as unknown as Body;
+    truthBodies.push(body);
     character.show(body, truth.root);
     const seenNow = character.joints();
     const J = Object.fromEntries(Object.entries(seenNow.joints).map(([k, p]) => [k, { x: p!.x - truth.root.x, y: p!.y - truth.root.y, z: p!.z - truth.root.z }])) as Joints;
@@ -117,6 +255,7 @@ const run = async (scriptName: string, setupId?: SetupId, fps = 15): Promise<{ t
     scene.render();
     const frame = trackers.detect(canvas, t, clock + t);
     frames.push(frame);
+    pictures.push(canvas.toDataURL("image/jpeg", 0.8));
     if (images.length === 0 || t - images[images.length - 1]!.t >= 250) {
       still.getContext("2d")!.drawImage(canvas, 0, 0, still.width, still.height);
       images.push({ t, src: still.toDataURL("image/jpeg", 0.7) });
@@ -153,6 +292,7 @@ const run = async (scriptName: string, setupId?: SetupId, fps = 15): Promise<{ t
   const summary: Summary = { script: script.name, setup: setup.id, frames: frames.length, found: frames.filter((f) => f.pose).length, bones, overall: avg(all), overallSeen: avg(seen), posing: avg(posing) };
   last = { take, summary };
   saveButton.disabled = false;
+  startReplay({ frames, pictures, bodies, truth: truthBodies, rendered }, fps);
   return { ...last, bodies, rendered };
 };
 

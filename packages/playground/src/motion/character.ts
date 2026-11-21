@@ -2,6 +2,7 @@
 // its retargeting each frame, scaled to the person and stood where the solver placed them.
 import "@babylonjs/loaders/glTF";
 import { ImportMeshAsync } from "@babylonjs/core/Loading/sceneLoader";
+import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
@@ -222,6 +223,20 @@ export class Character {
     const l = across("left");
     const r = across("right");
     return { joints, palmAcross: { ...(l ? { left: l } : {}), ...(r ? { right: r } : {}) } };
+  }
+
+  /** Paints the character one colour, see-through by `alpha`: to tell two characters apart where they overlap. */
+  tint(r: number, g: number, b: number, alpha = 1): void {
+    for (const m of this.root.getChildMeshes()) {
+      const mat = m.material?.clone(`${m.material.name}-tint`);
+      if (!mat) continue;
+      const any = mat as unknown as { albedoColor?: Color3; diffuseColor?: Color3; alpha: number; transparencyMode: number | null };
+      if (any.albedoColor) any.albedoColor = new Color3(r, g, b);
+      if (any.diffuseColor) any.diffuseColor = new Color3(r, g, b);
+      any.alpha = alpha;
+      if (alpha < 1) any.transparencyMode = 2;
+      m.material = mat;
+    }
   }
 
   setEnabled(on: boolean): void {
