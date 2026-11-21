@@ -12,7 +12,7 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
 import {
   BONES, BONE_NAMES, type Body, type BoneName, type Frame, type JointName, SCRIPTS, SETUPS, type SetupId, type Take, type TakeImage,
-  HAND_LINES, type Joints, POSE_LINES, type Quat, angleBetween, boneDifference, boneFrames, coverage, saveTake, solveTake, synthesize,
+  HAND_LINES, type Joints, POSE_LINES, type Quat, angleBetween, boneDifference, randomScript, boneFrames, coverage, saveTake, solveTake, synthesize,
 } from "@canvas-ir/motion";
 import { Character, mannequinSpec } from "./motion/character";
 import { Trackers } from "./motion/capture";
@@ -30,6 +30,7 @@ const allButton = $<HTMLButtonElement>("all");
 const saveButton = $<HTMLButtonElement>("save");
 
 for (const s of SCRIPTS) scriptSelect.add(new Option(s.name, s.name));
+for (const n of [1, 2, 3]) scriptSelect.add(new Option(`Random ${n}`, `Random ${n}`));
 setupSelect.add(new Option("The movement's own", ""));
 for (const s of Object.values(SETUPS)) if (s.sees !== "hand") setupSelect.add(new Option(s.label, s.id));
 
@@ -225,7 +226,9 @@ addEventListener("resize", () => replayEngine.resize());
 /** Plays a movement on the character under a setup, tracks every rendered frame and scores the solve. */
 const run = async (scriptName: string, setupId?: SetupId, fps = 15): Promise<{ take: Take; summary: Summary; bodies: Body[]; rendered: { bones: Record<BoneName, Quat> }[] }> => {
   if (!character || !trackers) throw new Error("load a model first");
-  const script = SCRIPTS.find((s) => s.name === scriptName)!;
+  // "Random 12" is the made-up movement of seed 12, played under the chosen setup.
+  const seed = /^Random (\d+)$/.exec(scriptName)?.[1];
+  const script = seed !== undefined ? randomScript(Number(seed), setupId ?? "phone-stand") : SCRIPTS.find((s) => s.name === scriptName)!;
   const synth = synthesize(script, { fps, height: 1.8, camera: { width: canvas.width, height: canvas.height }, ...(setupId ? { setup: setupId } : {}) });
   const setup = SETUPS[synth.take.setup];
   camera.fov = (setup.fov * Math.PI) / 180;

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   BONES, type BoneName, type Body, type JointName, SCRIPTS, SETUPS, boneDifference, boneLength, coverage, distance, jitter, lag, loadTake,
-  boneFrames, placeRoot, proportionsFor, restPose, rotate, saveTake, solveTake, synthesize, v,
+  boneFrames, placeRoot, proportionsFor, randomScript, restPose, rotate, saveTake, solveTake, synthesize, v,
 } from "../src";
 
 const script = (name: string) => SCRIPTS.find((s) => s.name === name)!;
@@ -129,5 +129,16 @@ describe("depth from the image", () => {
       };
       expect([s.name, mean(on) <= mean(off) + 0.5]).toEqual([s.name, true]);
     }
+  });
+});
+
+describe("random movements", () => {
+  test("are the same for a seed and different across seeds, and keep their bones", () => {
+    const a = synthesize(randomScript(1), { fps: 5 });
+    const b = synthesize(randomScript(1), { fps: 5 });
+    const c = synthesize(randomScript(2), { fps: 5 });
+    expect(a.truth[10]!.joints.leftWrist).toEqual(b.truth[10]!.joints.leftWrist);
+    expect(a.truth[10]!.joints.leftWrist).not.toEqual(c.truth[10]!.joints.leftWrist);
+    for (const f of a.truth) for (const q of Object.values(f.joints)) expect(Number.isFinite(q.x + q.y + q.z)).toBe(true);
   });
 });

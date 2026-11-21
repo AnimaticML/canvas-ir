@@ -369,3 +369,54 @@ export const SCRIPTS: readonly Script[] = [
     },
   },
 ];
+
+/**
+ * A movement made up at random, the same for the same seed: the torso leaning and turning a little, each arm reaching
+ * somewhere new every second or so (the elbow bending only as elbows do), eased from pose to pose. Thousands of them,
+ * rendered and tracked on the bench, are labelled examples of how the tracker errs.
+ */
+export const randomScript = (seed: number, setup: SetupId = "phone-stand", seconds = 6): Script => {
+  const rng = random(seed * 7919 + 13);
+  const r = (a: number, b: number) => a + (b - a) * rng.next();
+  const keys = Math.ceil(seconds) + 1;
+  // One key pose a second: a direction for each upper arm, how far each elbow bends, and the torso's lean and turn.
+  const poses = Array.from({ length: keys }, () => {
+    const arm = (side: 1 | -1) => {
+      // Anywhere from hanging to overhead, out to the side or forward, a little behind at most.
+      const up = r(-1, 1);
+      const out = side * r(-0.2, 1);
+      const fwd = r(-0.2, 1);
+      return { upper: dir(out, up, fwd), bend: r(0, 140) * deg, roll: r(-60, 60) * deg };
+    };
+    return { left: arm(1), right: arm(-1), lean: r(-10, 25) * deg, side: r(-8, 8) * deg, turn: r(-25, 25) * deg };
+  });
+  const ease = (x: number) => x * x * (3 - 2 * x);
+  const lerpV = (a: Vec3, b: Vec3, k: number) => normalize(add(scale(a, 1 - k), scale(b, k)), b);
+  return {
+    name: `Random ${seed}`,
+    setup,
+    seconds,
+    notes: `A made-up movement, seed ${seed}.`,
+    at: (t) => {
+      const i = Math.min(keys - 2, Math.floor(t));
+      const k = ease(Math.min(1, t - i));
+      const a = poses[i]!;
+      const b = poses[i + 1]!;
+      const torso = dir(Math.sin(a.side + (b.side - a.side) * k), 1, Math.sin(a.lean + (b.lean - a.lean) * k));
+      const dirs: Partial<Record<BoneName, Vec3>> = { hips: torso, spine: torso, chest: torso, neck: torso };
+      for (const s of ["left", "right"] as const) {
+        const upper = lerpV(a[s].upper, b[s].upper, k);
+        const bend = a[s].bend + (b[s].bend - a[s].bend) * k;
+        const roll = a[s].roll + (b[s].roll - a[s].roll) * k;
+        // The elbow bends about an axis square to the upper arm, turned about it by the roll: forearm forward of it.
+        const sideways = normalize(cross(upper, v(0, 0, 1)), v(1, 0, 0));
+        const hingeAxis = rotate(axisAngle(upper, roll), sideways);
+        const fore = rotate(axisAngle(hingeAxis, s === "left" ? -bend : bend), upper);
+        dirs[`${s}UpperArm`] = upper;
+        dirs[`${s}Forearm`] = fore;
+        dirs[`${s}Hand`] = fore;
+      }
+      return { dirs, turn: a.turn + (b.turn - a.turn) * k };
+    },
+  };
+};
