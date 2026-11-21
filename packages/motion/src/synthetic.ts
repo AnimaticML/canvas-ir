@@ -408,10 +408,11 @@ export const randomScript = (seed: number, setup: SetupId = "phone-stand", secon
         const upper = lerpV(a[s].upper, b[s].upper, k);
         const bend = a[s].bend + (b[s].bend - a[s].bend) * k;
         const roll = a[s].roll + (b[s].roll - a[s].roll) * k;
-        // The elbow bends about an axis square to the upper arm, turned about it by the roll: forearm forward of it.
+        // The elbow bends about an axis square to the upper arm, turned about it by the roll: forearm forward of it. The axis
+        // already points opposite ways for the two arms, as their upper arms do, so both bend by the same sign.
         const sideways = normalize(cross(upper, v(0, 0, 1)), v(1, 0, 0));
         const hingeAxis = rotate(axisAngle(upper, roll), sideways);
-        const fore = rotate(axisAngle(hingeAxis, s === "left" ? -bend : bend), upper);
+        const fore = rotate(axisAngle(hingeAxis, bend), upper);
         dirs[`${s}UpperArm`] = upper;
         dirs[`${s}Forearm`] = fore;
         dirs[`${s}Hand`] = fore;

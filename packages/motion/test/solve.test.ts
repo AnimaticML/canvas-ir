@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   BONES, type BoneName, type Body, type JointName, SCRIPTS, SETUPS, boneDifference, boneLength, coverage, distance, jitter, lag, loadTake,
-  boneFrames, placeRoot, proportionsFor, randomScript, restPose, rotate, saveTake, solveTake, synthesize, v,
+  boneFrames, placeRoot, proportionsFor, randomScript, restPose, normalize, rotate, saveTake, sub, solveTake, synthesize, v,
 } from "../src";
 
 const script = (name: string) => SCRIPTS.find((s) => s.name === name)!;
@@ -140,5 +140,20 @@ describe("random movements", () => {
     expect(a.truth[10]!.joints.leftWrist).toEqual(b.truth[10]!.joints.leftWrist);
     expect(a.truth[10]!.joints.leftWrist).not.toEqual(c.truth[10]!.joints.leftWrist);
     for (const f of a.truth) for (const q of Object.values(f.joints)) expect(Number.isFinite(q.x + q.y + q.z)).toBe(true);
+  });
+
+  test("bend both elbows the way elbows bend", () => {
+    // A forearm bent backward would teach whatever learns from these that elbows do that: both arms' forearms should
+    // reach forward alike, on average, and neither mostly back.
+    const forward = { left: 0, right: 0 };
+    let n = 0;
+    for (let seed = 1; seed <= 40; seed++)
+      for (const f of synthesize(randomScript(seed), { fps: 2 }).truth) {
+        for (const s of ["left", "right"] as const) forward[s] += normalize(sub(f.joints[`${s}Wrist`], f.joints[`${s}Elbow`])).z;
+        n++;
+      }
+    expect(forward.left / n).toBeGreaterThan(0.2);
+    expect(forward.right / n).toBeGreaterThan(0.2);
+    expect(Math.abs(forward.left - forward.right) / n).toBeLessThan(0.15);
   });
 });
