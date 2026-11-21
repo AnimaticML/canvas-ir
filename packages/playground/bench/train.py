@@ -3,8 +3,11 @@
 # how far to turn each bone the tracker reported; one seed in ten is held out, and the scripted movements are scored as
 # a test set it never trained on. Needs only numpy.
 #
-#   python3 train.py random.jsonl scripted.jsonl [out.json]     (out defaults to ../src/motion/correction.json)
-#   H=64 EPOCHS=40 WD=1e-3 python3 train.py ...                 other sizes and training lengths
+#   python3 train.py random.jsonl[,more.jsonl] scripted.jsonl [out.json]   (out defaults to ../src/motion/correction.json)
+#   H=64 EPOCHS=20 WD=1e-3 python3 train.py ...                             other sizes and training lengths
+#
+# The shipped correction: random-1-450 (collected before the movements stood and squatted) and random2 (after), both
+# seeds 1 to 450, so `python3 train.py random-1-450.jsonl,random2.jsonl scripted.jsonl`.
 import json, sys, glob, os, numpy as np
 ENV = lambda k, d: type(d)(os.environ.get(k, d))
 rng = np.random.default_rng(0)
@@ -38,21 +41,21 @@ def seen(I):
     return np.array([min(I[i,2] for i in f+t) >= 0.5 for f,t in BONES.values()])
 def load(paths):
     X,R,T,S,G,M = [],[],[],[],[],[]
-    for p in paths:
+    for k,p in enumerate(paths):
         for line in open(p):
             r = json.loads(line)
             if r["world"] is None: continue
             f, D = features(r)
             X.append(f); R.append(D); M.append(seen(np.array(r['image'])))
             T.append(target(r["truth"])); S.append(target(r["solved"]))
-            G.append(r["seed"] if r.get("movement","Random").startswith("Random") else f'{r["movement"]} / {r["setup"]}')
+            G.append(r["seed"]+1000*k if r.get("movement","Random").startswith("Random") else f'{r["movement"]} / {r["setup"]}')
     return [np.array(a) for a in (X,R,T,S)] + [G, np.array(M)]
 def angle(a,b,m=None):
     e = np.degrees(np.arccos(np.clip((a*b).sum(-1),-1,1)))
     return e if m is None else e[m]
 class Net:
     def __init__(s, n_in, h=None):
-        h = h or ENV('H', 128)
+        h = h or ENV('H', 256)
         s.p = {"W1": rng.normal(0,np.sqrt(2/n_in),(n_in,h)), "b1": np.zeros(h), "W2": rng.normal(0,np.sqrt(2/h),(h,h)), "b2": np.zeros(h), "W3": np.zeros((h,30)), "b3": np.zeros(30)}
     def fwd(s, X, R):
         p = s.p; h1 = np.maximum(0, X@p["W1"]+p["b1"]); h2 = np.maximum(0, h1@p["W2"]+p["b2"])
@@ -61,7 +64,7 @@ class Net:
     def predict(s, X, R):
         raw,_ = s.fwd(X,R); return unit(raw.reshape(len(X),10,3))
 def train(Xn, R, T, M, epochs=None, lr=2e-3, wd=None):
-    epochs = epochs or ENV('EPOCHS', 20); wd = wd if wd is not None else ENV('WD', 1e-4)
+    epochs = epochs or ENV('EPOCHS', 40); wd = wd if wd is not None else ENV('WD', 1e-4)
     net = Net(Xn.shape[1]); m = {k:0 for k in net.p}; v2 = {k:0 for k in net.p}; step=0
     n = len(Xn)
     for e in range(epochs):
@@ -93,7 +96,7 @@ def export(net, mu, sd, path, apply):
     json.dump(out, open(path, "w"))
 
 if __name__ == "__main__":
-    X,R,T,S,G,M = load([sys.argv[1]])
+    X,R,T,S,G,M = load(sys.argv[1].split(","))
     seeds = np.array(G); val = seeds % 10 == 0
     mu, sd = X[~val].mean(0), X[~val].std(0)+1e-3
     net = train((X[~val]-mu)/sd, R[~val], T[~val], M[~val])
@@ -110,5 +113,5 @@ if __name__ == "__main__":
     for g in dict.fromkeys(G2):
         k = G2 == g
         print(f"  {g:28s} mediapipe {angle(R2[k],T2[k],M2[k]).mean():5.1f}  solver {angle(S2[k],T2[k],M2[k]).mean():5.1f}  corrected {angle(C2[k],T2[k],M2[k]).mean():5.1f}")
-    # Applied to the torso, neck and upper arms only: on the scripted movements, correcting forearms and thighs did worse.
-    export(net, mu, sd, sys.argv[3] if len(sys.argv) > 3 else "../src/motion/correction.json", ["hips","neck","leftUpperArm","rightUpperArm"])
+    # Applied to the torso, neck, upper arms and thighs: on the scripted movements, correcting forearms and shins did worse.
+    export(net, mu, sd, sys.argv[3] if len(sys.argv) > 3 else "../src/motion/correction.json", ["hips","neck","leftUpperArm","rightUpperArm","leftThigh","rightThigh"])
