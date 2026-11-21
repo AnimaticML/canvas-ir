@@ -17,14 +17,16 @@ export class Trackers {
   private constructor(private readonly pose: PoseLandmarker, private readonly hands: HandLandmarker) {}
   private clock = -Infinity;
 
-  static async load(gpu = true): Promise<Trackers> {
+  /** `pose` names the pose model: "full" (the default, served with the page) or "heavy" (slower, if it is served too). */
+  static async load(gpu = true, pose: "full" | "heavy" = "full"): Promise<Trackers> {
     const files = await FilesetResolver.forVisionTasks("./ar-vendor/mediapipe");
-    const pose = (delegate: "GPU" | "CPU") =>
-      PoseLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: "./ar-vendor/pose_landmarker_full.task", delegate }, runningMode: "VIDEO", numPoses: 1 });
+    const model = `./ar-vendor/pose_landmarker_${pose}.task`;
+    const poseTask = (delegate: "GPU" | "CPU") =>
+      PoseLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: model, delegate }, runningMode: "VIDEO", numPoses: 1 });
     const hands = (delegate: "GPU" | "CPU") =>
       HandLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: "./ar-vendor/hand_landmarker.task", delegate }, runningMode: "VIDEO", numHands: 2 });
     const d = gpu ? "GPU" : "CPU";
-    return new Trackers(await pose(d).catch(() => pose("CPU")), await hands(d).catch(() => hands("CPU")));
+    return new Trackers(await poseTask(d).catch(() => poseTask("CPU")), await hands(d).catch(() => hands("CPU")));
   }
 
   /** Frees the trackers' models. */

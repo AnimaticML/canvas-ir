@@ -63,7 +63,7 @@ const loadModel = async (url: string): Promise<void> => {
   solvedFigure.setEnabled(false);
   truthFigure.setEnabled(false);
   // ?cpu runs the trackers on the CPU, as a machine without a GPU must, so results repeat exactly.
-  trackers ??= await Trackers.load(!params.has("cpu"));
+  trackers ??= await Trackers.load(!params.has("cpu"), params.get("pose") === "heavy" ? "heavy" : "full");
   runButton.disabled = allButton.disabled = false;
   info.innerHTML =
     "<p>Ready. Each movement is played on the mannequin, rendered through the camera of a setup, tracked by MediaPipe and solved, and the solve is scored against the bones that were rendered. Pick a movement and a camera and run, or run them all.</p><p>Another model can be opened if its bones are named the same way: hips, spine, chest, neck, head, upper_arm.L, forearm.L, hand.L, thigh.L and so on.</p>";
@@ -237,7 +237,7 @@ const run = async (scriptName: string, setupId?: SetupId, fps = 15): Promise<{ t
   // Fresh trackers for every run: in video mode they follow a body from frame to frame, and what they followed in the
   // last run would change this one.
   trackers.close();
-  trackers = await Trackers.load(!params.has("cpu"));
+  trackers = await Trackers.load(!params.has("cpu"), params.get("pose") === "heavy" ? "heavy" : "full");
   const clock = performance.now();
   // The truth is what was rendered: the character's own joints, measured the way the solver measures a body. How far
   // that is from the script's bones says how faithfully the character was posed.
