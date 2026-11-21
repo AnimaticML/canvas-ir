@@ -132,7 +132,7 @@ replayScene.useRightHandedSystem = true;
 replayScene.clearColor = new Color4(0.89, 0.91, 0.94, 1);
 new HemisphericLight("sky", new Vector3(0.2, 1, 0.4), replayScene).intensity = 0.8;
 new DirectionalLight("sun", new Vector3(-0.3, -0.8, -0.5), replayScene).intensity = 0.6;
-const orbit = new ArcRotateCamera("orbit", Math.PI / 2, 1.35, 2.6, new Vector3(0, 0.05, 0), replayScene);
+const orbit = new ArcRotateCamera("orbit", Math.PI / 2, 1.35, 3.1, new Vector3(0, 0.15, 0), replayScene);
 orbit.lowerRadiusLimit = 0.8;
 orbit.upperRadiusLimit = 10;
 orbit.wheelDeltaPercentage = 0.02;
@@ -162,8 +162,11 @@ const showReplay = (i: number): void => {
   drawLandmarks(f);
   const body = replay.bodies[replayAt]!;
   const apart = replayView === "apart" ? 0.45 : 0;
-  solvedFigure?.show(body, { x: -apart, y: 0, z: 0 });
-  truthFigure?.show(replay.truth[replayAt]!, { x: apart, y: 0, z: 0 });
+  // Both at the played body's size, so only the pose differs; the size the solver guessed is said in words.
+  const truth = replay.truth[replayAt]!;
+  solvedFigure?.show({ ...body, proportions: truth.proportions }, { x: -apart, y: 0, z: 0 });
+  truthFigure?.show(truth, { x: apart, y: 0, z: 0 });
+  const tall = (p: Body["proportions"]) => p.torso + p.neck + p.thigh + p.shin + 0.2;
   // How far off each bone is now, where its end was seen.
   const off: [BoneName, number][] = [];
   for (const b of BONE_NAMES) {
@@ -172,7 +175,9 @@ const showReplay = (i: number): void => {
   }
   off.sort((a, b) => b[1] - a[1]);
   const mean = off.reduce((a, [, d]) => a + d, 0) / Math.max(1, off.length);
-  when.textContent = `${(f.t / 1000).toFixed(2)} s · ${f.pose ? `off by ${mean.toFixed(0)}° on average${off[0] ? `, most at ${off[0][0]} (${off[0][1].toFixed(0)}°)` : ""}` : "no body found"}`;
+  when.textContent =
+    `${(f.t / 1000).toFixed(2)} s · ${f.pose ? `off by ${mean.toFixed(0)}° on average${off[0] ? `, most at ${off[0][0]} (${off[0][1].toFixed(0)}°)` : ""}` : "no body found"}` +
+    ` · height guessed ${tall(body.proportions).toFixed(2)} m of ${tall(truth.proportions).toFixed(2)} m`;
 };
 
 const startReplay = (r: Replay, fps: number): void => {
