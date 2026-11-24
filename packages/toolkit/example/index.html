@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Toolkit example</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #f4f2ec;
+        font: 14px system-ui, sans-serif;
+        color: #2a2c2a;
+      }
+      #stage {
+        position: fixed;
+        inset: 40px 0 0 0;
+      }
+      #board {
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+      header {
+        height: 40px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 0 16px;
+      }
+      .canvas-ir-a11y :focus-visible {
+        outline: 2px solid #1b5293;
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>Toolkit example</strong>
+      <span>Drag title bars, press buttons, pan, wheel or pinch to zoom.</span>
+      <button id="undo">Undo</button>
+    </header>
+    <div id="stage"><canvas id="board"></canvas></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

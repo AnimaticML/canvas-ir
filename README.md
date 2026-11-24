@@ -8,6 +8,8 @@ Experimental **[motion](docs/motion.md)** (`packages/motion`, the playground's `
 
 Experimental **[AR mode of the original Babylon demo](docs/ar-table.md)** (`ar.html`) runs the same `startBabylon` scene, board, controls, crates, balls, and Havok bodies over a full-screen camera. ArUco places it relative to a group of markers; MediaPipe touch calibration and pinch gestures drive the original components and physics. Interaction traces capture concrete success/failure reasons without a diagnostic dashboard.
 
+
+**[Toolkit](docs/toolkit.md)** (`packages/toolkit`): what apps built on CanvasIR were each writing around it, a viewport that pans and zooms about a point within limits, pointers made into taps, drags and pinches, a canvas kept at device pixels and drawn once a frame, and actions shared by clicks and the accessibility mirror, with the document and its meaning left to the app. The playground's board uses it, and `packages/toolkit/example` is a separate page built only on its public exports.
 ## World and runtime proposals
 
 The `proposal-world-runtime-` series records owner-requested research and

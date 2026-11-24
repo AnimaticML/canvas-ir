@@ -1,0 +1,20 @@
+{
+  "name": "@canvas-ir/toolkit",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Editor and interaction building blocks for CanvasIR boards: a viewport, multi-touch gestures, a canvas host and actions, with the document and its meaning left to the application",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "example": "bun example/index.html",
+    "check": "bun run example/check.ts"
+  },
+  "dependencies": {
+    "canvas-ir": "workspace:*"
+  },
+  "devDependencies": {
+    "playwright-core": "1.56.1"
+  }
+}

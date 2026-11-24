@@ -65,6 +65,7 @@
         "@canvas-ir/physics": "workspace:*",
         "@canvas-ir/text": "workspace:*",
         "@canvas-ir/three": "workspace:*",
+        "@canvas-ir/toolkit": "workspace:*",
         "@canvas-ir/vectorize": "workspace:*",
         "@mediapipe/tasks-vision": "0.10.32",
         "@techstark/opencv-js": "4.11.0-release.1",
@@ -108,6 +109,16 @@
         "three": ">=0.160.0",
       },
     },
+    "packages/toolkit": {
+      "name": "@canvas-ir/toolkit",
+      "version": "0.0.0",
+      "dependencies": {
+        "canvas-ir": "workspace:*",
+      },
+      "devDependencies": {
+        "playwright-core": "1.56.1",
+      },
+    },
     "packages/vectorize": {
       "name": "@canvas-ir/vectorize",
       "version": "0.0.0",
@@ -136,6 +147,8 @@
     "@canvas-ir/text": ["@canvas-ir/text@workspace:packages/text"],
 
     "@canvas-ir/three": ["@canvas-ir/three@workspace:packages/three"],
+
+    "@canvas-ir/toolkit": ["@canvas-ir/toolkit@workspace:packages/toolkit"],
 
     "@canvas-ir/vectorize": ["@canvas-ir/vectorize@workspace:packages/vectorize"],
 

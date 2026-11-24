@@ -32,6 +32,7 @@ import {
 } from "canvas-ir";
 import { vectorize } from "@canvas-ir/vectorize";
 import { LiveText } from "@canvas-ir/text";
+import { Gestures, Viewport, wheelPixels, wheelZoom } from "@canvas-ir/toolkit";
 import { datumAt } from "./charts";
 import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
@@ -105,7 +106,9 @@ const recorderOptions: RecordingContextOptions = {
 
 let scene = new Scene({ version: 1, ops: [] });
 let liveTexts: LiveText[] = [];
-let view: Matrix2D = IDENTITY;
+// The board's pan and zoom; `view` is its matrix, kept beside it for the many places that read one.
+const viewport = new Viewport();
+let view: Matrix2D = viewport.matrix;
 let router = new EventRouter(scene);
 let renderer = new Renderer(scene, ctx);
 // The playground's controls: cards in a scene of their own, drawn over the board with its view.
@@ -652,7 +655,8 @@ const wire = (): void => {
       // Pan by the pointer's movement in host pixels; world-space deltas shift as the view moves.
       const d = { x: e.screen.x - panFrom.x, y: e.screen.y - panFrom.y };
       panFrom = e.screen;
-      setView(multiply({ a: 1, b: 0, c: 0, d: 1, e: d.x, f: d.y }, view));
+      viewport.panBy(d.x, d.y);
+      viewChanged();
       return;
     }
     render();
@@ -695,7 +699,12 @@ const wire = (): void => {
 };
 
 const setView = (next: Matrix2D): void => {
-  view = next;
+  viewport.setMatrix(next);
+  viewChanged();
+};
+/** After the viewport moved: everything that keeps its own copy of the view follows it. */
+const viewChanged = (): void => {
+  view = viewport.matrix;
   router.setView(view);
   points?.zoomed();
   galaxy?.zoomed();
@@ -708,6 +717,19 @@ const point = (e: MouseEvent): { x: number; y: number } => {
   return { x: e.clientX - r.left, y: e.clientY - r.top };
 };
 const pointer = (e: PointerEvent) => ({ ...point(e), button: e.button, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey });
+
+// Two fingers on the board pinch it: the press the first began is let go, and the board zooms and pans with them.
+const fingers = new Gestures({
+  cancel: () => {
+    tools.cancel();
+    router.pointerCancel();
+  },
+  pinch: ({ scale, center, pan }) => {
+    viewport.zoomAt(scale, center);
+    viewport.panBy(pan.x, pan.y);
+    viewChanged();
+  },
+});
 
 // The cards get the pointer where they are; the board gets it everywhere else, and keeps a press it began.
 canvas.addEventListener("pointerdown", (e) => {
@@ -727,6 +749,8 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   keysToCards = false;
   boardPress = true;
+  fingers.down(e.pointerId, point(e));
+  if (fingers.multiTouch) return;
   // A drawing tool takes the press; the select tool hands it to the router.
   if (tools.down(point(e), e.shiftKey)) return;
   router.pointerDown(pointer(e));
@@ -752,6 +776,8 @@ canvas.addEventListener("pointermove", (e) => {
     overCards = false;
     canvas.style.cursor = boardCursor();
   }
+  fingers.move(e.pointerId, point(e));
+  if (fingers.multiTouch) return;
   if (tools.drawing) tools.move(point(e), e.shiftKey);
   else router.pointerMove(pointer(e));
   showTooltip(point(e));
@@ -762,11 +788,15 @@ canvas.addEventListener("pointerup", (e) => {
     cards.router.pointerUp(pointer(e));
     return;
   }
-  boardPress = false;
+  const pinched = fingers.multiTouch;
+  fingers.up(e.pointerId, point(e));
+  boardPress = fingers.active > 0;
+  if (pinched) return;
   if (tools.drawing) tools.up();
   else router.pointerUp(pointer(e));
 });
-canvas.addEventListener("pointercancel", () => {
+canvas.addEventListener("pointercancel", (e) => {
+  fingers.cancel(e.pointerId);
   cardPress = false;
   boardPress = false;
   cards.router.pointerCancel();
@@ -785,17 +815,14 @@ canvas.addEventListener(
     e.preventDefault();
     const p = point(e);
     // A card or anything on the board that scrolls (the million rows) keeps the wheel; anywhere else it zooms the board.
-    // Firefox counts a mouse wheel's notches in lines, three a notch; the rest of the board reads pixels, about a hundred a notch.
-    const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? canvas.clientHeight : 1;
-    const deltaX = e.deltaX * unit;
-    const deltaY = e.deltaY * unit;
+    const { x: deltaX, y: deltaY } = wheelPixels(e, canvas.clientHeight);
     const input = { ...p, deltaX, deltaY, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
     if (cards.hits(p) && cards.wheel(input)) return;
     wheelFree = false;
     router.wheel(input);
     if (!wheelFree) return;
-    const k = Math.exp(-deltaY * 0.0015);
-    setView(multiply({ a: k, b: 0, c: 0, d: k, e: p.x - k * p.x, f: p.y - k * p.y }, view));
+    viewport.zoomAt(wheelZoom(deltaY), p);
+    viewChanged();
   },
   { passive: false },
 );

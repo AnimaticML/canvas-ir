@@ -16,6 +16,7 @@
     "@canvas-ir/physics": "workspace:*",
     "@canvas-ir/text": "workspace:*",
     "@canvas-ir/three": "workspace:*",
+    "@canvas-ir/toolkit": "workspace:*",
     "@canvas-ir/vectorize": "workspace:*",
     "@mediapipe/tasks-vision": "0.10.32",
     "@techstark/opencv-js": "4.11.0-release.1",

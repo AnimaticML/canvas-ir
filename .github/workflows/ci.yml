@@ -21,4 +21,5 @@ jobs:
       - run: bun run --cwd packages/playground build
       - run: bun run --cwd packages/pixel install-browser
       - run: bun run test:pixel
+      - run: bun run --cwd packages/toolkit check
       - run: bun run --cwd packages/playground bench
