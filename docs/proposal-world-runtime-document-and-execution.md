@@ -75,6 +75,8 @@ Distinguish the following without prescribing a separate format for each:
 
 Preparation and use can share the same operations. Moving a card while preparing a table and moving it during play do not require different document models. Conversely, recording every simulation step through operational transformation is not the proposed synchronization mechanism.
 
+Real-time multiplayer has a separate synchronization contract. The reference direction is player input delivered to a server-authoritative simulation, with confirmed state or events communicated to participants. Codec can still represent world definitions, meaningful document changes, and saved states or checkpoints. The application's network adapter owns that synchronization policy; the shared temporal layer does not decide player authority or implement the multiplayer protocol. Implementing that protocol is not a prerequisite for the first examples.
+
 Use existing asset formats for meshes, rigs, textures, audio, video, and recorded animation. A document element can expose only the parameters and actions its application needs. Importing an animated character need not copy its vertices or every sampled pose into the collaborative tree. A pose editor may deliberately expose joint parameters; an application that merely plays a clip need not.
 
 Research common 2D/3D concepts without forcing identical geometry or interaction APIs. Define units, coordinate-space references, object identity, and conversion boundaries where interoperability needs them. More expressive camera or staging intentions can be component types; exact transforms must remain available when needed.
@@ -99,6 +101,7 @@ Questions for a first temporal contract:
 - How are pending events cancelled, and how does disposal of an activity cancel its pending work?
 - How does an event request a component-defined condition check? If that check fails, the component's declared policy must determine skip, cancellation, or rescheduling; the timing library must not invent domain behavior.
 - What do `seek`, `reset`, replay, and playback mean for each provider? Which require a checkpoint and recorded inputs, and which are unsupported?
+- What mappings are needed between local seconds, media frame/sample positions, and musical positions under a tempo model? Include [Harmonica](https://github.com/alexandr-panchenko/harmonica/blob/main/docs/canvas-collab-architecture.md)'s transport and audio paths in the consumer comparison before treating the extracted time contract as generally reusable. Musical semantics remain with their provider; this comparison does not require migrating Harmonica in the first slice.
 - How are external input timestamps translated and how is late input reported?
 - What happens when real-time playback falls behind, compared with offline rendering that must process all required steps?
 
