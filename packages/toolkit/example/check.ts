@@ -4,7 +4,7 @@
 import { chromium } from "playwright-core";
 
 const out = new URL("./dist/", import.meta.url).pathname;
-const built = await Bun.build({ entrypoints: [new URL("./index.html", import.meta.url).pathname], outdir: out, minify: false });
+const built = await Bun.build({ entrypoints: [new URL("./index.html", import.meta.url).pathname, new URL("./board.html", import.meta.url).pathname], outdir: out, minify: false });
 if (!built.success) throw new AggregateError(built.logs, "build failed");
 const server = Bun.serve({
   port: 0,
@@ -181,6 +181,80 @@ await page.mouse.move(q.x, q.y + 120, { steps: 5 });
 await page.mouse.up();
 const linkAfter = (await more()).link!;
 expect(linkAfter.y + linkAfter.height > linkBefore.y + linkBefore.height + 40, "a connector follows the card it holds");
+
+// The board example: a toolkit Board with a document of its own.
+await page.goto(`http://localhost:${server.port}/board.html`);
+await page.waitForFunction(() => "boardExample" in window);
+await page.waitForTimeout(100);
+type B = { changes: string[]; history: number; groups: string[]; tool: string; zoom: number };
+const b = (): Promise<B> =>
+  page.evaluate(() => {
+    const e = (window as any).boardExample;
+    return { changes: [...e.changes], history: e.history.length, groups: e.doc.map((d: any) => d.groups.find((g: any) => g.parent === undefined).id), tool: e.board.tools.current, zoom: e.board.viewport.zoom };
+  });
+const box = (id: string) => page.evaluate((id) => (window as any).boardExample.board.scene.bounds(id), id);
+// The view is (240, 20) at zoom 1, under a 40 px header.
+const at = (x: number, y: number) => ({ x: x + 240, y: y + 60 });
+const drag = async (from: { x: number; y: number }, by: { x: number; y: number }, ctrl = false) => {
+  if (ctrl) await page.keyboard.down("Control");
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + by.x, from.y + by.y, { steps: 6 });
+  await page.mouse.up();
+  if (ctrl) await page.keyboard.up("Control");
+  await page.waitForTimeout(50);
+};
+const idea0 = await box("idea");
+const link0 = await box("idea-sketch");
+// Ctrl turns snapping off, so the shape moves by exactly the pointer.
+await drag(at(150, 125), { x: 60, y: 120 }, true);
+let idea1 = await box("idea");
+let bs = await b();
+expect(Math.abs(idea1.x - idea0.x - 60) < 0.01 && Math.abs(idea1.y - idea0.y - 120) < 0.01 && bs.changes.join() === "moved", "board: a drag moves a shape and the page commits it once");
+expect(JSON.stringify(await box("idea-sketch")) !== JSON.stringify(link0), "board: the arrows on it are drawn again");
+await page.keyboard.press("Control+z");
+await page.waitForTimeout(50);
+idea1 = await box("idea");
+expect(Math.abs(idea1.x - idea0.x) < 0.01 && Math.abs(idea1.y - idea0.y) < 0.01 && JSON.stringify(await box("idea-sketch")) === JSON.stringify(link0), "board: undo loads the last document back, arrows and all");
+// A tool from the card, then a rectangle on empty board.
+const tb = await page.evaluate(() => (window as any).boardExample.board.cards.scene.bounds("card-tools:rect"));
+await page.mouse.click(tb.x + 240 + tb.width / 2, tb.y + 60 + tb.height / 2);
+bs = await b();
+expect(bs.tool === "rect", "board: a button on the tools card picks a tool");
+await drag(at(150, 330), { x: 120, y: 70 });
+bs = await b();
+const rect = bs.groups.find((g) => g.startsWith("drawn-rect"));
+expect(!!rect && bs.changes.at(-1) === "drawn", "board: the rectangle tool draws, and the page commits it");
+// An arrow from the new rectangle to the round shape holds on to both.
+await page.keyboard.press("a");
+const r = await box(rect!);
+await drag(at(r.x + r.width / 2, r.y + r.height / 2), { x: 360 + 70 - (r.x + r.width / 2), y: 240 + 45 - (r.y + r.height / 2) });
+bs = await b();
+const made = bs.groups.find((g) => g.startsWith("drawn-arrow"));
+expect(!!made && bs.changes.at(-1) === "connected", "board: the arrow tool joins two shapes, and the page commits it");
+await page.keyboard.press("v");
+const arrow0 = await box(made!);
+await drag(at(360 + 70, 240 + 45), { x: 150, y: 60 }, true);
+expect(JSON.stringify(await box(made!)) !== JSON.stringify(arrow0), "board: the new arrow follows the shape it holds");
+// Delete what is selected (the shape just dragged), and undo puts it back.
+await page.keyboard.press("Delete");
+bs = await b();
+expect(!bs.groups.includes("shot") && bs.changes.at(-1) === "removed", "board: Delete removes the selection, and the page commits it");
+await page.keyboard.press("Control+z");
+bs = await b();
+expect(bs.groups.includes("shot"), "board: undo brings it back");
+// Two fingers pinch the board.
+const z = (await b()).zoom;
+const t = (type: string, id: number, x: number, y: number) =>
+  page.evaluate(([type, id, x, y]) => {
+    document.getElementById("board")!.dispatchEvent(new PointerEvent(type as string, { pointerId: id as number, pointerType: "touch", clientX: x as number, clientY: y as number, bubbles: true }));
+  }, [type, id, x, y] as const);
+await t("pointerdown", 21, 700, 500);
+await t("pointerdown", 22, 800, 500);
+await t("pointermove", 22, 900, 500);
+await t("pointerup", 22, 900, 500);
+await t("pointerup", 21, 700, 500);
+expect(Math.abs((await b()).zoom / z - 2) < 1e-6, "board: two fingers pinch it");
 
 expect(errors.length === 0, `no page errors${errors.length ? `: ${errors.join("; ")}` : ""}`);
 await browser.close();

@@ -8,7 +8,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "example": "bun example/index.html",
+    "example": "bun example/index.html example/board.html",
     "check": "bun run example/check.ts",
     "check:wheel": "bun run example/check-wheel.ts"
   },

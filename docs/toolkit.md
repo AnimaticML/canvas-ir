@@ -28,7 +28,10 @@ All three already use CanvasIR's `Scene`, `Renderer`, `EventRouter` and `Accessi
 
 ## What the toolkit holds
 
-It came out in two steps. The view and input mechanisms, in all three apps (five copies), came first. The second step took the playground's reusable board UI out whole: cards, window parts, connectors, drawing tools and controls, which only it had built in full.
+It came out in three steps:
+1. The view and input mechanisms, in all three apps (five copies), came first.
+2. The playground's reusable board UI came out whole: cards, window parts, connectors, drawing tools and controls, which only it had built in full.
+3. The board itself, which wires them together, came out of the playground's `main.ts`.
 
 ### View, gestures, canvas host and actions
 
@@ -75,6 +78,29 @@ These moved from the playground unchanged in behavior, and the playground import
   The tools draw previews and record the new drawing.
 - **Controls** (`controls.ts`): button, toggle, slider, swatches, text box and field, section headings, the palette, and the text sink (one hidden textarea that takes typing for every text field). They mount on a `Surface`, which a card is.
 
+### The board
+
+`Board` (`board.ts`) is a scene on a canvas with everything that makes it a board. The host gives it a stage with three canvases (the board, its cards and an overlay), and optionally a `CardLayer`, recorder and renderer options, and snap settings. The board then:
+- picks what is clicked (the outermost group, or the op itself with Alt) and outlines the hovered and selected things;
+- drags the selection, snapping its anchors to what is near (Ctrl turns it off), and lassoes with Shift;
+- pans on empty board, pans or zooms with a wheel burst where nothing scrolls (through `WheelGesture`), and pinches with two fingers;
+- draws with the tools (V, P, R, O, T, A), and keeps connectors on what they hold, drawn again when it moves;
+- deletes the selection with Delete;
+- routes pointers and keys between its cards and the board, and keeps the accessibility mirror in step;
+- draws once a frame, or only a part of the page for a host showing it in 3D (`part`);
+- flies the view (`flyTo`, `reveal`, `home`);
+- gives its drawings as documents (`documents`, `documentOf`) and loads them again (`load`), for a host's undo or save.
+
+What is on it, and what a change means, stays the host's, through `BoardHooks`:
+- `changed` says a drag ended, a drawing or arrow was added, or things were deleted, for the host to commit;
+- `grab` lets the host drag something itself (a simulated body);
+- `expand` and `moved` say what moves with a thing;
+- `keyAt` and `boxOf` say what an arrow's end holds;
+- `bound`, `beforeDraw`, `paint`, `overlay` and `viewChanged` let content with its own handlers and drawing take part;
+- `tooltip` gives text to show beside the pointer.
+
+The playground's `main.ts` is now a host of a `Board`. It went from 1,799 lines to 1,184, keeping only its content: the demos, the collage, the saved layout, its keys for connector ends, and the 3D hosts.
+
 ### The host contract
 
 | The toolkit | The host |
@@ -87,6 +113,7 @@ These moved from the playground unchanged in behavior, and the playground import
 | A card's widget calls back; a card's frame ends a drag (`onMove`). | Commits what the widget means, or the card's new place, and calls `moveTo` to put a card back. |
 | A connector asks for the box of a key. | Says what the key is and where it is, and records connectors in its drawing. |
 | A tool records a drawing and asks the host to commit it. | Puts it in its scene and its history. |
+| The board reports a change (`changed`): moved, drawn, connected, removed. | Commits it: reads `board.documents()` into its document and history, or saves the layout. On undo, `board.load(...)` puts a document back. |
 
 ### In the playground
 
@@ -97,7 +124,7 @@ The playground imports the cards, window parts, connectors, tools and controls f
 
 The board also gained two-finger pinch, through `Gestures` fed beside its router. A second finger cancels whatever the first began (a tool's stroke, a router drag), and the remaining finger does nothing until both are up. Clicks, drags, tools and the cards are routed as before.
 
-### The example
+### The examples
 
 `packages/toolkit/example` is a separate page with its own state that imports only the public `canvas-ir` and `@canvas-ir/toolkit` exports. It has:
 - cards with title bars to drag;
@@ -110,8 +137,10 @@ The board also gained two-finger pinch, through `Gestures` fed beside its router
 
 Its document is a plain object with a history. A drag previews as it goes and commits once, and a slider's run of changes is one step.
 
-- Run it with `bun run --cwd packages/toolkit example`.
-- `bun run --cwd packages/toolkit check` builds it, opens it in Chromium and drives each of those interactions, including touch through pointer events. It runs in CI.
+`packages/toolkit/example/board.html` is a `Board` with a document of its own: shapes joined by arrows, a tools card, and an undo history of the board's documents. Every change the board reports is one step, and undo loads the last document back, arrows and all.
+
+- Run them with `bun run --cwd packages/toolkit example`.
+- `bun run --cwd packages/toolkit check` builds both, opens them in Chromium and drives each of those interactions, including touch through pointer events. It runs in CI.
 
 ## Usage in Harmonica and ML Painter
 
@@ -134,20 +163,12 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 
 ## What stays in the playground, for now
 
-- **The board itself, in `main.ts`.** This is the largest piece left. It wires the scene, router, tools, cards, connectors, selection and dragging, snapping, tooltips, the frame loop for three canvases and the 3D host's capture, and the saved layout. Its pointer routing between the cards and the board is the hand-written form of `bindGestures({ above })`.
-- **The playground's own cards and icons:** `ui/chrome.ts` (the toolbar and inspector cards, tied to its devtools and tools) and `ui/features.ts` (the demo icons).
-- **The demos, and their content.**
+- **Its content:** the demos, the collage, the samples added to the board, the saved layout, and the keys it gives connector ends (icons, content, windows).
+- **Its own cards and icons:** `ui/chrome.ts` (the toolbar and inspector cards, tied to its devtools and settings) and `ui/features.ts` (the demo icons).
+- **Its 3D hosts:** the floor host for the room in 3D, and the capture of a part of the page for a 3D screen, which it sets on the board.
 
 ## Next
 
-1. **A board.** Take out of `main.ts` what any board needs, behind a host contract like `ToolHost`'s:
-   - the scene, router and accessibility mirror kept in step with a `Viewport`;
-   - selection, hover outlines and dragging of drawn things, with snapping;
-   - the arrow tool's keys and boxes, and connectors drawn again when what they hold moves;
-   - the cards' layer and the pointer routing between it and the board;
-   - the frame loop.
-
-   The saved layout, the demos and the collage stay the playground's. The example would then be a board with a document of its own.
-2. **Inspector and toolbar cards.** Generalize `ui/chrome.ts` into cards built from what the host lists, such as tools, styles and the selection's properties.
-3. **Desktop icons and windows.** `ui/features.ts`'s icons and the demo windows' frames, as one launcher-and-window mechanism.
-4. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
+1. **Inspector and toolbar cards.** Generalize `ui/chrome.ts` into cards built from what the host lists, such as tools, styles, snap settings and the selection's properties, so a board gets a toolbar and an inspector without writing them.
+2. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
+3. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.

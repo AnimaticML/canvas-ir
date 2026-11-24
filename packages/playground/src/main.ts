@@ -2,13 +2,8 @@
 // and made interactive through the scene and the event router.
 import { Canvg } from "canvg";
 import {
-  AccessibilityLayer,
   type AccessibleNode,
-  Components,
   EmbedLayer,
-  EventRouter,
-  Renderer,
-  IDENTITY,
   type Matrix2D,
   RecordingContext,
   type RecordingContextOptions,
@@ -16,7 +11,6 @@ import {
   Scene,
   type SnapKind,
   applyToPoint,
-  multiply,
   replayDocument,
   serializeDocument,
   imageToWorld,
@@ -33,7 +27,7 @@ import {
 } from "canvas-ir";
 import { vectorize } from "@canvas-ir/vectorize";
 import { LiveText } from "@canvas-ir/text";
-import { Gestures, Viewport, WheelGesture, wheelPixels, wheelZoom, type ToolName, Tools, windowFrame, type Connector, drawArrow, drawRing, fromMeta, route, toMeta, CardLayer, textSink } from "@canvas-ir/toolkit";
+import { Board, CardLayer, type Connector, textSink, windowFrame } from "@canvas-ir/toolkit";
 import { datumAt } from "./charts";
 import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
@@ -56,20 +50,12 @@ import { CONNECTORS, CONTENT as CONTENT_AT, DRAWINGS, ICONS, WINDOWS, origin } f
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
-const ctx = canvas.getContext("2d")!;
 const cardCanvas = document.getElementById("cards") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLCanvasElement;
-const octx = overlay.getContext("2d")!;
 /** What the inspector's controls set. */
 const settings: Settings = { snapOn: true, snapRadius: 8, snapKinds: new Set(["points", "bounds", "path"]), snapText: false, lod: true };
 /** The playground and inspector cards; made once the board's parts exist. */
 let chrome: Chrome | null = null;
-/** Whether key presses go to the cards, after a press on one, rather than the board. */
-let keysToCards = false;
-/** Whether the press that is down began on a card, and whether the pointer is over one. */
-let cardPress = false;
-let boardPress = false;
-let overCards = false;
 
 // Images seen while recording, by the src the IR stores, so replay draws the same objects.
 const images = new Map<string, CanvasImageSource>();
@@ -100,58 +86,122 @@ const recorderOptions: RecordingContextOptions = {
   },
 };
 
-let scene = new Scene({ version: 1, ops: [] });
-let liveTexts: LiveText[] = [];
-// The board's pan and zoom; `view` is its matrix, kept beside it for the many places that read one.
-const viewport = new Viewport();
-let view: Matrix2D = viewport.matrix;
-let router = new EventRouter(scene);
-let renderer = new Renderer(scene, ctx);
 // The playground's controls: cards in a scene of their own, drawn over the board with its view.
 const cards = new CardLayer(cardCanvas, stage, {
   recorder: recorderOptions,
   onCursor: (cursor) => {
-    if (overCards) canvas.style.cursor = cursor ?? "default";
+    if (board.pointerOverCards) canvas.style.cursor = cursor ?? "default";
   },
-  onFocus: () => {
-    keysToCards = true;
-  },
+  onFocus: () => board.keysToCardsLayer(),
 });
-/** The board's cursor: a hovered component's, or the drawing tool's. */
-const boardCursor = (): string => components?.cursor ?? (tools.current === "select" ? "" : tools.current === "text" ? "text" : "crosshair");
-// HTML and WebGL elements of embed ops, beneath the board.
-const embeds = new EmbedLayer(scene, stage, canvas, { create: createEmbed, destroy: destroyEmbed });
-// What screen readers read and Tab reaches: a DOM mirror of the board's roles and text.
+// What screen readers read and Tab reaches: a DOM mirror of the board's roles and text, shown in the inspector.
 const outlineOf = (nodes: readonly AccessibleNode[], depth = 0): string[] =>
   nodes.flatMap((n) => [`${"  ".repeat(depth)}${n.role}${n.label ? ` "${n.label.length > 48 ? `${n.label.slice(0, 47)}…` : n.label}"` : ""}${n.value !== undefined ? ` = ${n.value}` : ""}`, ...outlineOf(n.children, depth + 1)]);
-const a11y = new AccessibilityLayer(scene, stage, {
-  onFocus: (id) => {
-    keysToCards = false;
-    router.focusOn(id);
-  },
-  // Enter or Space presses the control where it is drawn, as a click would.
-  onActivate: (id) => {
-    const b = scene.bounds(id);
-    if (!b) return;
-    const p = applyToPoint(view, b.x + b.width / 2, b.y + b.height / 2);
-    router.pointerDown({ x: p.x, y: p.y, button: 0 });
-    router.pointerUp({ x: p.x, y: p.y, button: 0 });
-  },
-  onChange: (tree) => {
-    a11yText = outlineOf(tree).join("\n");
-    chrome?.setText("a11y", a11yText);
+let a11yText = "";
+const KIND_GROUPS: Record<string, readonly SnapKind[]> = {
+  points: ["vertex", "intersection", "center", "midpoint", "extreme", "baseline"],
+  bounds: ["bounds"],
+  path: ["path"],
+};
+const snapKinds = (): SnapKind[] => [...settings.snapKinds].flatMap((k) => KIND_GROUPS[k] ?? []);
+// The board (the toolkit's): picking, outlines, dragging with snapping, the lasso, the tools, connectors, the cards'
+// pointers, pinch and wheel zoom, and the frame loop. What is on it, and what a change means, is this page's.
+const board: Board = new Board({
+  stage,
+  canvas,
+  overlay,
+  cards,
+  recorder: recorderOptions,
+  renderer: () => ({ images: (src) => images.get(src), ...(settings.lod ? {} : { lod: false }) }),
+  snap: () => ({ on: settings.snapOn, radius: settings.snapRadius, kinds: snapKinds(), text: settings.snapText }),
+  hooks: {
+    bound: (s, r) => {
+      devtools.attach(s);
+      embeds.setScene(s);
+      if (table?.alive) table.bind(s, r);
+      if (points?.alive) points.bind(s, r);
+      if (galaxy?.alive) galaxy.bind(s, r);
+      if (worldMap?.alive) worldMap.bind(s, r);
+      if (book?.alive) book.bind(s, r);
+      if (rights?.alive) rights.bind(s, r);
+    },
+    // What the map records now is drawn in this frame, not the next.
+    beforeDraw: () => worldMap?.flush(),
+    // While devtools steps through the ops, it draws the board itself.
+    paint: (c, device) => devtools.drawBoard(c, device),
+    drawn: (stats, ms) =>
+      chrome?.setText("render-stats", `${stats.mode} redraw: ${stats.ops} of ${scene.document.ops.length} ops in ${ms.toFixed(1)} ms${stats.rects.length > 0 ? `, ${stats.rects.length} rect${stats.rects.length > 1 ? "s" : ""}` : ""}`),
+    overlay: (c, device, ui) => devtools.preview(c, device, ui),
+    viewChanged: (next) => {
+      view = next;
+      embeds.setView(next);
+      points?.zoomed();
+      galaxy?.zoomed();
+      worldMap?.zoomed();
+    },
+    // A body or node is dragged through its simulation, so it keeps colliding or pulling on its links.
+    grab: (e) => {
+      const parts = e.target === null ? [] : [e.target, ...e.path];
+      const body = sandbox && scene.getGroup(PHYSICS_ID) ? parts.find((p) => sandbox!.physics.body(p)?.isDynamic()) : undefined;
+      if (body && sandbox!.physics.grab(body, e.point)) {
+        holding = true;
+        runPhysics();
+        return {
+          drag: (p) => sandbox?.physics.drag(p),
+          end: () => {
+            holding = false;
+            sandbox?.physics.release();
+          },
+        };
+      }
+      const node = graph && scene.getGroup(GRAPH_ID) ? parts.find((p) => graph!.nodeOf(p)) : undefined;
+      if (node) {
+        graph!.grab(node, e.point);
+        return { drag: (p) => graph?.drag(p), end: () => graph?.release() };
+      }
+      return null;
+    },
+    // A window's frame, its drawing and its controls move as one.
+    expand: (ids) => withWindows(ids),
+    // Text laid out against what moves moves with it: snapping to it would chase a moving target.
+    following: (ids) => liveTexts.filter((l) => ids.some((id) => l.dependsOn(id))).map((l) => l.id),
+    moved: (id, dx, dy) => followMove(id, dx, dy),
+    changed: () => remember(),
+    removed: () => {
+      liveTexts = liveTexts.filter((live) => scene.getGroup(parentOf(live)));
+      for (const live of liveTexts) live.update();
+    },
+    selected: () => showSelection(),
+    // Over an embed, the pointer goes to its element (a form, a WebGL view); with Alt held, the board keeps it, to drag the embed.
+    enter: (e) => {
+      if (e.op?.kind === "embed" && !board.dragActive && !board.tools.drawing && !("altKey" in e.input && e.input.altKey)) embeds.passThrough(e.op.id);
+    },
+    tooltip: (world, path) => datumAt(scene, path, world),
+    keyAt: (screen) => keyAt(screen),
+    boxOf: (key) => boxOfKey(key),
+    recorded: (opId, source) => sources.set(opId, source),
+    tool: (name) => chrome?.setTool(name),
+    mirror: (tree) => {
+      a11yText = outlineOf(tree).join("\n");
+      chrome?.setText("a11y", a11yText);
+    },
+    log: (line) => log(line),
   },
 });
-let a11yText = "";
-/** The view and canvas size the renderer last had, so it redraws everything only when they change. */
-let viewKey = "";
-const makeRenderer = (): void => {
-  renderer.dispose();
-  renderer = new Renderer(scene, ctx, { images: (src) => images.get(src), ...(settings.lod ? {} : { lod: false }) });
-  viewKey = "";
-};
-/** Set when a wheel on the board reaches the end of its path unclaimed, so it zooms. */
-let wheelFree = false;
+let scene = board.scene;
+/** Whether a physics body is held, so the simulation keeps running while it is. */
+let holding = false;
+let liveTexts: LiveText[] = [];
+/** The board's view, kept beside it for the many places that read one. */
+let view: Matrix2D = board.view;
+const tools = board.tools;
+// HTML and WebGL elements of embed ops, beneath the board.
+const embeds = new EmbedLayer(scene, stage, canvas, { create: createEmbed, destroy: destroyEmbed });
+const render = (): void => board.render();
+const setView = (next: Matrix2D): void => board.setView(next);
+const select = (ids: string[]): void => board.select(ids);
+const boxOf = (ids: readonly string[]): Rect | null => board.boxOf(ids);
+const reveal = (b: Rect): void => board.reveal(b);
 /** The ten-million-point chart, once added. */
 let points: TenMillionPoints | null = null;
 let galaxy: StarsAndPlanets | null = null;
@@ -160,40 +210,6 @@ let book: Reader | null = null;
 let rights: Reader | null = null;
 /** The million-row table, once added. */
 let table: MillionRows | null = null;
-/** Interactive objects (the note, the controls), drawn from their state. */
-let components: Components | null = null;
-/** Selected objects (outermost groups, or single ops picked with Alt), in the order picked. */
-let selected: string[] = [];
-let hovered: string | null = null;
-/** The op under the pointer and its groups, innermost first, for chart tooltips. */
-let hoverPath: readonly string[] = [];
-/** A chart's datum under the pointer, drawn on the overlay next to it. */
-let tooltip: { text: string; x: number; y: number } | null = null;
-const showTooltip = (screen: { x: number; y: number }): void => {
-  const text = hoverPath.length > 0 && !tools.drawing ? datumAt(scene, hoverPath, router.toWorld(screen)) : null;
-  const next = text === null ? null : { text, x: screen.x + 14, y: screen.y + 14 };
-  if (next?.text === tooltip?.text && next?.x === tooltip?.x && next?.y === tooltip?.y) return;
-  tooltip = next;
-  render();
-};
-/** While dragging objects: what moves, their snap anchors where the drag began, and how far they've moved. */
-let drag: { ids: string[]; anchors: { x: number; y: number }[]; moved: { x: number; y: number } } | null = null;
-/** The snap target shown while dragging. */
-let snapMark: { x: number; y: number; kind: string } | null = null;
-/** While lassoing (Shift-drag on empty space): the outline so far, in world space. */
-let lasso: { x: number; y: number }[] | null = null;
-/** While panning empty space: the last pointer position, in host pixels. */
-let panFrom: { x: number; y: number } | null = null;
-/** A physics body or graph node being dragged: it follows the pointer through its simulation, not by moving its ops. */
-let grabbed: "physics" | "graph" | null = null;
-
-/** What a click or drag acts on: the outermost group around the op, or the op itself with Alt held. */
-const objectOf = (e: RouterEvent): string | null => {
-  if (e.target === null) return null;
-  if ("altKey" in e.input && e.input.altKey) return e.target;
-  return e.path[e.path.length - 1] ?? e.target;
-};
-
 let logLines: string[] = [];
 const log = (line: string): void => {
   logLines = [line, ...logLines].slice(0, 200);
@@ -236,12 +252,6 @@ const followMove = (moved: string, dx: number, dy: number): void => {
   if (rights?.alive && inside(DECLARATION_ID)) rights.moved(dx, dy);
 };
 
-let stepped = false;
-let frame = 0;
-/** Draws the board at the next frame, once however many changes come before it: a mouse wheel can send several events a frame. */
-const render = (): void => {
-  if (!frame) frame = requestAnimationFrame(draw);
-};
 /**
  * The part of the page a host showing it on a 3D screen wants, in CSS pixels,
  * and how many canvas pixels to draw per CSS pixel: the canvases then hold
@@ -250,12 +260,12 @@ const render = (): void => {
  * `canvasIrDrawn`, as the canvases change size a frame after it asks.
  */
 type Capture = { x: number; y: number; width: number; height: number; scale: number; ui?: number };
-let capture: Capture | null = null;
 const host = window as unknown as { canvasIrCapture?: (c: Capture | null) => void; canvasIrDrawn?: Capture };
 host.canvasIrCapture = (c) => {
-  capture = c;
+  board.part = c;
   render();
 };
+Object.defineProperty(host, "canvasIrDrawn", { get: () => board.drawnPart ?? undefined, configurable: true });
 
 /** A thing standing on the floor of a 3D room the board is laid out as: its footprint on the board, in board units. */
 interface FloorThing {
@@ -312,7 +322,7 @@ floorHost.canvasIrFloor = {
   lod: () => settings.lod,
   view: () => view,
   setView: (next) => setView(next),
-  bounds: () => boardBox(),
+  bounds: () => board.contentBox(),
   background: () => getComputedStyle(stage).backgroundColor || getComputedStyle(document.body).backgroundColor,
   hits: (point) => scene.hitTest(point).length > 0 || cards.scene.hitTest(point).length > 0,
   windows: () => openWindows(),
@@ -325,16 +335,10 @@ floorHost.canvasIrFloor = {
   // A wheel at a board point, for what keeps one there (the map, the stars, the million rows); false when nothing does.
   wheel: (at, deltaX, deltaY) => {
     const p = { x: view.a * at.x + view.c * at.y + view.e, y: view.b * at.x + view.d * at.y + view.f };
-    const input = { ...p, deltaX, deltaY, altKey: false, shiftKey: false, ctrlKey: false, metaKey: false };
-    if (cards.hits(p) && cards.wheel(input)) return true;
-    wheelFree = false;
-    router.wheel(input);
-    if (wheelFree) return false;
-    render();
-    return true;
+    return board.wheel({ ...p, deltaX, deltaY, altKey: false, shiftKey: false, ctrlKey: false, metaKey: false });
   },
   footprints: (things) => {
-    if (!components) return;
+    const components = board.components;
     const keep = new Set((things ?? []).map((t) => `floor/${t.id}`));
     for (const id of footprints) {
       if (keep.has(id)) continue;
@@ -386,119 +390,8 @@ floorHost.canvasIrFloor = {
   onFootprint: null,
 };
 
-const draw = (): void => {
-  // Arrows follow what they hold before the frame is drawn.
-  reconnect();
-  // What the map records now is drawn in this frame, not the next.
-  worldMap?.flush();
-  frame = 0;
-  const { width, height } = stage.getBoundingClientRect();
-  const part = capture ?? { x: 0, y: 0, width, height, scale: window.devicePixelRatio || 1 };
-  const dpr = part.scale;
-  // Outlines and marks are as thin on the host's screen as on this one: canvas pixels per pixel of whoever is looking.
-  const ui = part.ui ?? dpr;
-  for (const c of [canvas, cardCanvas, overlay]) {
-    if (c.width !== Math.round(part.width * dpr) || c.height !== Math.round(part.height * dpr)) {
-      c.width = Math.round(part.width * dpr);
-      c.height = Math.round(part.height * dpr);
-    }
-  }
-  host.canvasIrDrawn = part;
-  const device = multiply({ a: dpr, b: 0, c: 0, d: dpr, e: -part.x * dpr, f: -part.y * dpr }, view);
-  // The board redraws only what changed since the last frame; selection marks go on the overlay, redrawn whole.
-  const key = `${canvas.width}x${canvas.height} ${Object.values(device).join(",")}`;
-  if (key !== viewKey) {
-    renderer.setView(device, canvas.width, canvas.height);
-    embeds.setView(view);
-    a11y.setView(view);
-    cards.setView(view, device);
-    viewKey = key;
-  }
-  const start = performance.now();
-  // While devtools steps through the ops, it draws the board itself; the renderer starts over afterwards.
-  if (devtools.drawBoard(canvas.getContext("2d")!, device)) stepped = true;
-  else if (stepped) {
-    stepped = false;
-    renderer.invalidate();
-  }
-  const stats = stepped ? ({ mode: "idle", ops: 0, rects: [] } as const) : renderer.render();
-  if (stats.mode !== "idle") {
-    const ms = performance.now() - start;
-    chrome?.setText("render-stats", `${stats.mode} redraw: ${stats.ops} of ${scene.document.ops.length} ops in ${ms.toFixed(1)} ms${stats.rects.length > 0 ? `, ${stats.rects.length} rect${stats.rects.length > 1 ? "s" : ""}` : ""}`);
-  }
-  const ctx = octx;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, overlay.width, overlay.height);
-
-  // Outlines, drawn in device pixels so they stay thin at any zoom.
-  const outline = (id: string, color: string, dash: number[]): void => {
-    const b = scene.bounds(id);
-    if (!b) return;
-    const p = applyToPoint(device, b.x, b.y);
-    const q = applyToPoint(device, b.x + b.width, b.y + b.height);
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "source-over";
-    ctx.filter = "none";
-    ctx.shadowColor = "transparent";
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5 * ui;
-    ctx.setLineDash(dash.map((d) => d * ui));
-    ctx.strokeRect(Math.round(p.x) + 0.5, Math.round(p.y) + 0.5, Math.round(q.x - p.x), Math.round(q.y - p.y));
-  };
-  const style = getComputedStyle(document.documentElement);
-  const accent = style.getPropertyValue("--accent").trim();
-  if (hovered && !selected.includes(hovered)) outline(hovered, style.getPropertyValue("--hover").trim(), [4, 3]);
-  for (const id of selected) outline(id, accent, []);
-  ctx.setLineDash([]);
-  if (lasso && lasso.length > 1) {
-    ctx.beginPath();
-    for (const p of lasso) {
-      const q = applyToPoint(device, p.x, p.y);
-      ctx.lineTo(q.x, q.y);
-    }
-    ctx.closePath();
-    ctx.globalAlpha = 0.12;
-    ctx.fillStyle = accent;
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.lineWidth = ui;
-    ctx.stroke();
-  }
-  devtools.preview(octx, device, ui);
-  tools.preview(octx, device, ui);
-  if (snapMark) {
-    const q = applyToPoint(device, snapMark.x, snapMark.y);
-    const r = 6 * ui;
-    ctx.strokeStyle = "#e11d48";
-    ctx.lineWidth = 1.5 * ui;
-    ctx.beginPath();
-    ctx.moveTo(q.x - r, q.y - r);
-    ctx.lineTo(q.x + r, q.y + r);
-    ctx.moveTo(q.x + r, q.y - r);
-    ctx.lineTo(q.x - r, q.y + r);
-    ctx.stroke();
-    ctx.font = `${11 * ui}px system-ui, sans-serif`;
-    ctx.fillStyle = "#e11d48";
-    ctx.fillText(snapMark.kind, q.x + r + 2 * ui, q.y - r);
-  }
-  if (tooltip) {
-    ctx.setTransform(dpr, 0, 0, dpr, -part.x * dpr, -part.y * dpr);
-    ctx.font = "12px system-ui, sans-serif";
-    const lines = tooltip.text.split("\n");
-    const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 16;
-    const h = lines.length * 16 + 8;
-    ctx.fillStyle = "#111827";
-    ctx.beginPath();
-    ctx.roundRect(tooltip.x, tooltip.y, w, h, 4);
-    ctx.fill();
-    ctx.fillStyle = "#ffffff";
-    ctx.textBaseline = "top";
-    lines.forEach((l, i) => ctx.fillText(l, tooltip!.x + 8, tooltip!.y + 5 + i * 16));
-  }
-};
-
 const showSelection = (): void => {
+  const selected = board.selected;
   chrome?.setText(
     "selection",
     selected.length === 0
@@ -509,375 +402,6 @@ const showSelection = (): void => {
   );
   if (selected.length === 1) devtools.show(selected[0]!);
 };
-
-const select = (ids: string[]): void => {
-  selected = ids;
-  showSelection();
-  render();
-};
-
-const shiftHeld = (e: RouterEvent): boolean => "shiftKey" in e.input && e.input.shiftKey === true;
-const snapping = (e: RouterEvent): boolean => !("ctrlKey" in e.input && (e.input.ctrlKey || e.input.metaKey));
-
-const KIND_GROUPS: Record<string, readonly SnapKind[]> = {
-  points: ["vertex", "intersection", "center", "midpoint", "extreme", "baseline"],
-  bounds: ["bounds"],
-  path: ["path"],
-};
-const snapKinds = (): SnapKind[] => [...settings.snapKinds].flatMap((k) => KIND_GROUPS[k] ?? []);
-
-/** Moves the dragged objects so that, if one of their anchors lands near another object's snap point, it lands on it. */
-const dragTo = (total: { x: number; y: number }, snap: boolean): void => {
-  if (!drag) return;
-  let target = total;
-  snapMark = null;
-  const kinds = snapKinds();
-  if (snap && settings.snapOn && kinds.length > 0) {
-    const radius = settings.snapRadius / Math.hypot(view.a, view.b);
-    // Text laid out against what moves moves with it: snapping to it would chase a moving target.
-    const exclude = [...drag.ids, ...liveTexts.filter((l) => drag!.ids.some((id) => l.dependsOn(id))).map((l) => l.id)];
-    const filter = settings.snapText ? undefined : (op: { kind: string }) => op.kind !== "text";
-    let best: { dx: number; dy: number; distance: number; x: number; y: number; kind: string } | null = null;
-    for (const a of drag.anchors) {
-      const p = { x: a.x + total.x, y: a.y + total.y };
-      const found = scene.snap(p, { radius, kinds, exclude, ...(filter ? { filter } : {}) });
-      if (found && (!best || found.distance < best.distance)) {
-        best = { dx: found.point.x - p.x, dy: found.point.y - p.y, distance: found.distance, x: found.point.x, y: found.point.y, kind: found.kind };
-      }
-    }
-    if (best) {
-      target = { x: total.x + best.dx, y: total.y + best.dy };
-      snapMark = { x: best.x, y: best.y, kind: best.kind };
-    }
-  }
-  const step = { x: target.x - drag.moved.x, y: target.y - drag.moved.y };
-  if (step.x === 0 && step.y === 0) return;
-  for (const id of drag.ids) {
-    components!.move(id, { a: 1, b: 0, c: 0, d: 1, e: step.x, f: step.y });
-    followMove(id, step.x, step.y);
-  }
-  drag.moved = target;
-};
-
-const wire = (): void => {
-  router = new EventRouter(scene, { view, tolerance: 3 });
-  devtools.attach(scene);
-  embeds.setScene(scene);
-  a11y.setScene(scene);
-  makeRenderer();
-  if (components) components.bind(scene, router);
-  else {
-    components = new Components(scene, router, {
-      recorder: recorderOptions,
-      onChange: () => {
-        if (!overCards) canvas.style.cursor = boardCursor();
-        render();
-      },
-    });
-  }
-  if (table?.alive) table.bind(scene, router);
-  if (points?.alive) points.bind(scene, router);
-  if (galaxy?.alive) galaxy.bind(scene, router);
-  if (worldMap?.alive) worldMap.bind(scene, router);
-  if (book?.alive) book.bind(scene, router);
-  if (rights?.alive) rights.bind(scene, router);
-  router.on("*", "wheel", () => {
-    wheelFree = true;
-  });
-  router.on("*", "enter", (e) => {
-    hoverPath = e.path;
-    // Over an embed, the pointer goes to its element (a form, a WebGL view); with Alt held, the board keeps it, to drag the embed.
-    if (e.op?.kind === "embed" && !drag && !tools.drawing && !("altKey" in e.input && e.input.altKey)) embeds.passThrough(e.op.id);
-    hovered = objectOf(e);
-    render();
-  });
-  router.on("*", "leave", () => {
-    // An enter for whatever is under the pointer now follows, if anything is.
-    hovered = null;
-    hoverPath = [];
-    render();
-  });
-  router.on("*", "click", (e) => {
-    const id = objectOf(e);
-    if (shiftHeld(e)) select(id === null ? selected : selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
-    else select(id === null ? [] : [id]);
-    log(`click ${e.target ?? "empty space"}${e.path.length > 1 ? ` in ${e.path.slice(1).join(" < ")}` : ""}`);
-  });
-  router.on("*", "dragstart", (e) => {
-    // A body or node is dragged through its simulation, so it keeps colliding or pulling on its links.
-    const parts = e.target === null ? [] : [e.target, ...e.path];
-    const body = sandbox && scene.getGroup(PHYSICS_ID) ? parts.find((p) => sandbox!.physics.body(p)?.isDynamic()) : undefined;
-    if (body && sandbox!.physics.grab(body, e.point)) {
-      grabbed = "physics";
-      runPhysics();
-      return;
-    }
-    const node = graph && scene.getGroup(GRAPH_ID) ? parts.find((p) => graph!.nodeOf(p)) : undefined;
-    if (node) {
-      graph!.grab(node, e.point);
-      grabbed = "graph";
-      return;
-    }
-    const id = objectOf(e);
-    if (id === null) {
-      if (shiftHeld(e)) lasso = [router.toWorld(e.screen)];
-      else panFrom = e.screen;
-      return;
-    }
-    // Dragging a selected object moves the whole selection.
-    if (!selected.includes(id)) select([id]);
-    // A window's frame, its drawing and its controls move as one.
-    const ids = withWindows(selected.includes(id) ? selected : [id]);
-    // Bounds points and vertices are what usually lines up; keep the list short so each move stays cheap.
-    const anchors = ids
-      .flatMap((i) => scene.anchors(i).filter((a) => a.kind === "bounds" || (a.kind === "vertex" && ids.length === 1)))
-      .slice(0, 120)
-      .map((a) => a.point);
-    drag = { ids, anchors, moved: { x: 0, y: 0 } };
-    // What is below and above the dragged objects is cached, so each frame draws two bitmaps and them.
-    renderer.lift(ids);
-    log(`drag ${ids.join(", ")}`);
-  });
-  router.on("*", "drag", (e) => {
-    if (grabbed === "physics") sandbox?.physics.drag(e.point);
-    if (grabbed === "graph") graph?.drag(e.point);
-    if (grabbed) return;
-    if (drag) {
-      dragTo(e.total!, snapping(e));
-      showSelection();
-    } else if (lasso) {
-      lasso.push(router.toWorld(e.screen));
-    } else if (panFrom) {
-      // Pan by the pointer's movement in host pixels; world-space deltas shift as the view moves.
-      const d = { x: e.screen.x - panFrom.x, y: e.screen.y - panFrom.y };
-      panFrom = e.screen;
-      viewport.panBy(d.x, d.y);
-      viewChanged();
-      return;
-    }
-    render();
-  });
-  router.on("*", "dragend", () => {
-    if (grabbed === "physics") sandbox?.physics.release();
-    if (grabbed === "graph") graph?.release();
-    grabbed = null;
-    if (lasso && lasso.length > 2) {
-      // Select the outermost object of every op the lasso touches.
-      const picked = new Set<string>();
-      for (const opId of scene.queryPolygon(lasso)) picked.add(scene.groupChain(opId).at(-1) ?? opId);
-      select([...picked]);
-      log(`lasso picked ${picked.size}`);
-    }
-    if (drag && (drag.moved.x !== 0 || drag.moved.y !== 0)) {
-      for (const id of drag.ids) if (connectors.has(id)) movedConnector(id, drag.moved.x, drag.moved.y);
-      remember();
-    }
-    drag = null;
-    renderer.drop();
-    lasso = null;
-    snapMark = null;
-    panFrom = null;
-    render();
-  });
-  router.on("*", "keydown", (e) => {
-    const key = (e.input as { key: string }).key;
-    if ((key === "Delete" || key === "Backspace") && selected.length > 0) {
-      log(`remove ${selected.join(", ")}`);
-      for (const id of selected) if (scene.get(id) || scene.getGroup(id)) scene.remove(id);
-      for (const id of components!.ids) if (!scene.getGroup(id)) components!.unmount(id);
-      liveTexts = liveTexts.filter((live) => scene.getGroup(parentOf(live)));
-      for (const live of liveTexts) live.update();
-      hovered = null;
-      select([]);
-      remember();
-    }
-  });
-};
-
-const setView = (next: Matrix2D): void => {
-  viewport.setMatrix(next);
-  viewChanged();
-};
-/** After the viewport moved: everything that keeps its own copy of the view follows it. */
-const viewChanged = (): void => {
-  view = viewport.matrix;
-  router.setView(view);
-  points?.zoomed();
-  galaxy?.zoomed();
-  worldMap?.zoomed();
-  render();
-};
-
-const point = (e: MouseEvent): { x: number; y: number } => {
-  const r = canvas.getBoundingClientRect();
-  return { x: e.clientX - r.left, y: e.clientY - r.top };
-};
-const pointer = (e: PointerEvent) => ({ ...point(e), button: e.button, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey });
-
-// Two fingers on the board pinch it: the press the first began is let go, and the board zooms and pans with them.
-const fingers = new Gestures({
-  cancel: () => {
-    tools.cancel();
-    router.pointerCancel();
-  },
-  pinch: ({ scale, center, pan }) => {
-    viewport.zoomAt(scale, center);
-    viewport.panBy(pan.x, pan.y);
-    viewChanged();
-  },
-});
-
-// The cards get the pointer where they are; the board gets it everywhere else, and keeps a press it began.
-canvas.addEventListener("pointerdown", (e) => {
-  // A pointer a host page forwards, as the 3D page does when it shows the playground on a panel, can't be captured here.
-  try {
-    canvas.setPointerCapture(e.pointerId);
-  } catch {}
-  // Keeps focus where it is, so the text tool's hidden textarea keeps the keyboard.
-  e.preventDefault();
-  textSink().release();
-  // The arrow tool starts on icons too, to hold on to them.
-  if (cards.hits(point(e)) && tools.current !== "arrow") {
-    cardPress = true;
-    keysToCards = true;
-    cards.router.pointerDown(pointer(e));
-    return;
-  }
-  keysToCards = false;
-  boardPress = true;
-  fingers.down(e.pointerId, point(e));
-  if (fingers.multiTouch) return;
-  // A drawing tool takes the press; the select tool hands it to the router.
-  if (tools.down(point(e), e.shiftKey)) return;
-  router.pointerDown(pointer(e));
-});
-canvas.addEventListener("pointermove", (e) => {
-  if (cardPress) {
-    cards.router.pointerMove(pointer(e));
-    return;
-  }
-  if (!boardPress && cards.hits(point(e))) {
-    if (!overCards) {
-      router.pointerLeave(pointer(e));
-      tooltip = null;
-      render();
-    }
-    overCards = true;
-    cards.router.pointerMove(pointer(e));
-    canvas.style.cursor = cards.components.cursor ?? "default";
-    return;
-  }
-  if (overCards) {
-    cards.router.pointerLeave(pointer(e));
-    overCards = false;
-    canvas.style.cursor = boardCursor();
-  }
-  fingers.move(e.pointerId, point(e));
-  if (fingers.multiTouch) return;
-  if (tools.drawing) tools.move(point(e), e.shiftKey);
-  else router.pointerMove(pointer(e));
-  showTooltip(point(e));
-});
-canvas.addEventListener("pointerup", (e) => {
-  if (cardPress) {
-    cardPress = false;
-    cards.router.pointerUp(pointer(e));
-    return;
-  }
-  const pinched = fingers.multiTouch;
-  fingers.up(e.pointerId, point(e));
-  boardPress = fingers.active > 0;
-  if (pinched) return;
-  if (tools.drawing) tools.up();
-  else router.pointerUp(pointer(e));
-});
-canvas.addEventListener("pointercancel", (e) => {
-  fingers.cancel(e.pointerId);
-  cardPress = false;
-  boardPress = false;
-  cards.router.pointerCancel();
-  router.pointerCancel();
-});
-canvas.addEventListener("pointerleave", (e) => {
-  overCards = false;
-  cards.router.pointerLeave(pointer(e));
-  router.pointerLeave(pointer(e));
-  tooltip = null;
-  render();
-});
-const wheelGesture = new WheelGesture();
-canvas.addEventListener(
-  "wheel",
-  (e) => {
-    e.preventDefault();
-    const p = point(e);
-    // A card or anything on the board that scrolls (the million rows) keeps the wheel; elsewhere the board handles pan and zoom.
-    const { x: deltaX, y: deltaY } = wheelPixels(e, canvas.clientHeight);
-    const input = { ...p, deltaX, deltaY, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
-    if (cards.hits(p) && cards.wheel(input)) return;
-    wheelFree = false;
-    router.wheel(input);
-    if (!wheelFree) return;
-    if (wheelGesture.push({ deltaX, deltaY, timeStamp: e.timeStamp, ctrlKey: e.ctrlKey }) === "zoom") {
-      viewport.zoomAt(wheelZoom(deltaY), p);
-    } else viewport.panBy(-deltaX, -deltaY);
-    viewChanged();
-  },
-  { passive: false },
-);
-const TOOL_KEYS: Record<string, ToolName> = { v: "select", p: "pen", r: "rect", o: "ellipse", t: "text", a: "arrow" };
-const useTool = (name: ToolName): void => {
-  tools.cancel();
-  tools.current = name;
-  chrome?.setTool(name);
-  canvas.style.cursor = boardCursor();
-  render();
-};
-window.addEventListener("keydown", (e) => {
-  // Typing in a text field goes through its hidden textarea, which keeps its keys.
-  if (textSink().active) return;
-  const keys = { key: e.key, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
-  if (keysToCards) {
-    if (e.key === " " || e.key.startsWith("Arrow")) e.preventDefault();
-    cards.router.keyDown(keys);
-    return;
-  }
-  const tool = TOOL_KEYS[e.key.toLowerCase()];
-  if (tool && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    useTool(tool);
-    return;
-  }
-  if (e.key === "Escape" && tools.current !== "select") {
-    useTool("select");
-    return;
-  }
-  router.keyDown({ key: e.key, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey });
-});
-new ResizeObserver(render).observe(stage);
-
-const tools = new Tools({
-  scene: () => scene,
-  toWorld: (screen) => router.toWorld(screen),
-  pixel: () => 1 / Math.hypot(view.a, view.b),
-  snap: (world) => {
-    const kinds = snapKinds();
-    if (!settings.snapOn || kinds.length === 0) return null;
-    const found = scene.snap(world, { radius: settings.snapRadius / Math.hypot(view.a, view.b), kinds });
-    return found ? { point: found.point, kind: found.kind } : null;
-  },
-  keyAt: (screen) => keyAt(screen),
-  boxOf: (key) => boxOfKey(key),
-  connect: (from, to) => connect(from, to),
-  commit: (id, draw) => {
-    drawOnBoard(id, draw);
-    select([id]);
-    remember();
-  },
-  recorder: recorderOptions,
-  stage,
-  redraw: () => render(),
-  log: (line) => log(line),
-});
 
 const devtools = new Devtools({
   scene: () => scene,
@@ -902,7 +426,7 @@ const hooks: ControlHooks = {
     log(`open link ${href}`);
     window.open(href, "_blank", "noopener");
   },
-  get: (id) => components?.get(id),
+  get: (id) => board.components.get(id),
 };
 
 /**
@@ -941,7 +465,7 @@ const add = async (sample: Sample, at?: { x: number; y: number; middle?: boolean
   sources.clear();
   for (const [id, source] of kept) sources.set(id, source);
   scene = new Scene(document);
-  wire();
+  board.setScene(scene);
   // Texts and components already on the board were replayed with it; bind them to the new scene.
   liveTexts = liveTexts.map((l) => new LiveText(scene, l.settings));
   for (const spec of drawn?.live ?? []) {
@@ -949,7 +473,7 @@ const add = async (sample: Sample, at?: { x: number; y: number; middle?: boolean
     l.update();
     liveTexts.push(l);
   }
-  for (const spec of drawn?.components ?? []) components!.mount(spec);
+  for (const spec of drawn?.components ?? []) board.components.mount(spec);
   log(`added ${sample.name}; the board has ${scene.document.ops.length} ops`);
   const added = scene.document.ops.slice(before.length).map((op) => op.id);
   const outer = [...new Set(added.map((op) => scene.groupChain(op).at(-1) ?? op))];
@@ -959,7 +483,7 @@ const add = async (sample: Sample, at?: { x: number; y: number; middle?: boolean
     const dy = at.y - (at.middle ? box.height / 2 : 0) - box.y;
     // Each new outermost group moves as one, with what is laid out against it.
     for (const id of outer) {
-      components!.move(id, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
+      board.components.move(id, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
       followMove(id, dx, dy);
     }
     box = { ...box, x: box.x + dx, y: box.y + dy };
@@ -969,18 +493,6 @@ const add = async (sample: Sample, at?: { x: number; y: number; middle?: boolean
   return outer;
 };
 
-/** The world box around some ops. */
-const boxOf = (ids: readonly string[]): { x: number; y: number; width: number; height: number } | null => {
-  let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
-  for (const id of ids) {
-    const b = scene.bounds(id);
-    if (!b) continue;
-    box = box
-      ? { minX: Math.min(box.minX, b.x), minY: Math.min(box.minY, b.y), maxX: Math.max(box.maxX, b.x + b.width), maxY: Math.max(box.maxY, b.y + b.height) }
-      : { minX: b.x, minY: b.y, maxX: b.x + b.width, maxY: b.y + b.height };
-  }
-  return box && { x: box.minX, y: box.minY, width: box.maxX - box.minX, height: box.maxY - box.minY };
-};
 let initial = true;
 
 const download = (name: string, type: string, text: string): void => {
@@ -1020,7 +532,7 @@ const exportSvg = (): void => {
 };
 const vectorizeSelection = (): void => {
   // Images in the selection become fills, one per color, drawn where the image was.
-  const ops = selected.flatMap((id) => (scene.getGroup(id) ? scene.groupOps(id) : [id])).map((id) => scene.get(id)).filter((op): op is ImageOp => op?.kind === "image");
+  const ops = board.selected.flatMap((id) => (scene.getGroup(id) ? scene.groupOps(id) : [id])).map((id) => scene.get(id)).filter((op): op is ImageOp => op?.kind === "image");
   if (ops.length === 0) {
     log("select an image to vectorize, such as the orange sticker");
     return;
@@ -1045,69 +557,6 @@ const vectorizeSelection = (): void => {
   render();
 };
 
-/** What the cards and the drawing on the board cover, in board units. */
-const boardBox = (): { x: number; y: number; width: number; height: number } | null => {
-  let box = cards.bounds();
-  for (const op of scene.document.ops) {
-    const b = scene.bounds(op.id);
-    if (!b || !box) {
-      box ??= b;
-      continue;
-    }
-    const x = Math.min(box.x, b.x);
-    const y = Math.min(box.y, b.y);
-    box = { x, y, width: Math.max(box.x + box.width, b.x + b.width) - x, height: Math.max(box.y + box.height, b.y + b.height) - y };
-  }
-  return box;
-};
-
-/** The view that shows the cards and the drawing on the board, at most at full size. */
-const home = (): Matrix2D => {
-  const box = boardBox();
-  if (!box) return IDENTITY;
-  const { width, height } = stage.getBoundingClientRect();
-  const k = Math.min(1, (width - 48) / box.width, (height - 48) / box.height);
-  return { a: k, b: 0, c: 0, d: k, e: (width - box.width * k) / 2 - box.x * k, f: Math.max(24, (height - box.height * k) / 2) - box.y * k };
-};
-
-/** Glides the view from where it is to `to`, zooming out and back in on the way when the move is long. */
-let flight = 0;
-const flyTo = (to: Matrix2D): void => {
-  const from = view;
-  const run = ++flight;
-  const { width, height } = stage.getBoundingClientRect();
-  // The world points at the center of the screen, and the zooms, at both ends.
-  const center = (m: Matrix2D) => ({ x: (width / 2 - m.e) / m.a, y: (height / 2 - m.f) / m.d });
-  const c0 = center(from);
-  const c1 = center(to);
-  const k0 = Math.log(from.a);
-  const k1 = Math.log(to.a);
-  // Far apart, the view backs out so both ends are in sight midway.
-  const span = Math.hypot(c1.x - c0.x, c1.y - c0.y);
-  const out = Math.min(k0, k1, Math.log(Math.max(0.05, Math.min(width, height) / Math.max(1, span * 1.4))));
-  const start = performance.now();
-  const ms = 450 + Math.min(450, span / 8);
-  const frame = (now: number): void => {
-    if (run !== flight) return;
-    const t = Math.min(1, (now - start) / ms);
-    const e = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
-    const bump = Math.min(k0, k1) - out;
-    const k = Math.exp(k0 + (k1 - k0) * e - bump * Math.sin(Math.PI * e));
-    const x = c0.x + (c1.x - c0.x) * e;
-    const y = c0.y + (c1.y - c0.y) * e;
-    setView({ a: k, b: 0, c: 0, d: k, e: width / 2 - k * x, f: height / 2 - k * y });
-    if (t < 1) requestAnimationFrame(frame);
-  };
-  requestAnimationFrame(frame);
-};
-
-/** Flies to a world rect, fitting it on the screen at most at full size. */
-const reveal = (b: { x: number; y: number; width: number; height: number }): void => {
-  const { width, height } = stage.getBoundingClientRect();
-  const k = Math.min(1, (width - 120) / b.width, (height - 120) / b.height);
-  flyTo({ a: k, b: 0, c: 0, d: k, e: width / 2 - k * (b.x + b.width / 2), f: height / 2 - k * (b.y + b.height / 2) });
-};
-
 // The morph demo: day and night drawn apart, blended by controls drawn on the board under them.
 const morphTo = (t: number): void => {
   scene.replaceGroup(MORPH_ID, dayToNight().at(t));
@@ -1119,8 +568,8 @@ const morphDemo = (): void => {
     const m = dayToNight();
     log(`morph demo: ${m.paired} ops paired by their groups' names, ${m.removed} fading out, ${m.added} fading in`);
   }
-  const controls = morphControls(morphTo, (id) => components?.get(id));
-  for (const spec of controls) if (!components!.get(spec.id)) components!.mount(spec);
+  const controls = morphControls(morphTo, (id) => board.components.get(id));
+  for (const spec of controls) if (!board.components.get(spec.id)) board.components.mount(spec);
   frameAround(MORPH_ID, "Morph: day to night", [MORPH_ID, ...controls.map((c) => c.id)], closeMorph);
   const b = scene.bounds(MORPH_ID)!;
   reveal({ ...b, height: b.height + 70 });
@@ -1138,11 +587,11 @@ const rideTo = (p: number): void => {
 };
 const stopRiding = (): void => {
   riding++;
-  components?.get<{ riding: boolean }>("pelican-ride")?.setState({ riding: false });
+  board.components.get<{ riding: boolean }>("pelican-ride")?.setState({ riding: false });
 };
 const startRiding = (): void => {
   const run = ++riding;
-  components?.get<{ riding: boolean }>("pelican-ride")?.setState({ riding: true });
+  board.components.get<{ riding: boolean }>("pelican-ride")?.setState({ riding: true });
   let last = performance.now();
   const frame = (now: number): void => {
     // Stop when this run was stopped or the pelican was deleted.
@@ -1156,8 +605,8 @@ const startRiding = (): void => {
 };
 const pelicanDemo = (): void => {
   if (scene.getGroup(PELICAN_ID) === undefined) rideTo(0);
-  if (!components!.get("pelican-ride")) {
-    components!.mount(rideButton(PELICAN_AT, () => (components?.get<{ riding: boolean }>("pelican-ride")?.state.riding ? stopRiding() : startRiding())));
+  if (!board.components.get("pelican-ride")) {
+    board.components.mount(rideButton(PELICAN_AT, () => (board.components.get<{ riding: boolean }>("pelican-ride")?.state.riding ? stopRiding() : startRiding())));
   }
   frameAround(PELICAN_ID, "A pelican riding a bicycle", [PELICAN_ID, "pelican-ride"], closePelican);
   const b = scene.bounds(PELICAN_ID)!;
@@ -1189,7 +638,7 @@ const runPhysics = (): void => {
       const body = sandbox!.physics.body(id)!;
       return body.isDynamic() && body.isAwake();
     });
-    if (!awake && grabbed !== "physics") {
+    if (!awake && !holding) {
       physicsRun = 0;
       return;
     }
@@ -1204,17 +653,17 @@ const physicsDemo = (): void => {
     log(`physics: ${sandbox.physics.bodies.length} bodies, colliders read off their drawings (boxes, circles, hulls, outlines)`);
   }
   const count = (): number => sandbox!.physics.bodies.filter((id) => sandbox!.physics.body(id)!.isDynamic()).length;
-  if (!components!.get("physics-drop")) {
-    components!.mount(
+  if (!board.components.get("physics-drop")) {
+    board.components.mount(
       sandboxButton(() => {
         if (sandbox!.physics.scene !== scene) sandbox!.physics.rebind(scene);
         sandbox!.drop(6);
-        components?.get<{ bodies: number }>("physics-drop")?.setState({ bodies: count() });
+        board.components.get<{ bodies: number }>("physics-drop")?.setState({ bodies: count() });
         runPhysics();
       }),
     );
   }
-  components?.get<{ bodies: number }>("physics-drop")?.setState({ bodies: count() });
+  board.components.get<{ bodies: number }>("physics-drop")?.setState({ bodies: count() });
   frameAround(PHYSICS_ID, "Physics: crates, balls and stars", [PHYSICS_ID, "physics-drop"], closePhysics);
   const b = scene.bounds(PHYSICS_ID)!;
   reveal({ ...b, height: b.height + 50 });
@@ -1231,12 +680,12 @@ const graphDemo = (): void => {
       () => scene,
       () => {
         // Show the cost now and then; every tick would redraw the caption too.
-        if (frames++ % 20 === 0) components?.get<{ ms: number }>("graph-shake")?.setState({ ms: graph?.stats.ms ?? 0 });
+        if (frames++ % 20 === 0) board.components.get<{ ms: number }>("graph-shake")?.setState({ ms: graph?.stats.ms ?? 0 });
         render();
       },
     );
   }
-  if (!components!.get("graph-shake")) components!.mount(graphButton(() => graph?.simulation.alpha(1).restart()));
+  if (!board.components.get("graph-shake")) board.components.mount(graphButton(() => graph?.simulation.alpha(1).restart()));
   frameAround(GRAPH_ID, "A force-directed graph", [GRAPH_ID, "graph-shake"], closeGraph);
   const b = scene.bounds(GRAPH_ID)!;
   reveal({ ...b, height: b.height + 50 });
@@ -1244,9 +693,9 @@ const graphDemo = (): void => {
 
 // Paint by numbers: a painting, or a picture of yours, vectorized into regions with shared borders.
 const showPaint = (source: PaintSource): void => {
-  if (components!.get(PAINT_ID)) components!.unmount(PAINT_ID);
+  if (board.components.get(PAINT_ID)) board.components.unmount(PAINT_ID);
   const t0 = performance.now();
-  components!.mount(paintComponent(source));
+  board.components.mount(paintComponent(source));
   frameAround(PAINT_ID, `Paint by numbers: ${source.name}`, [PAINT_ID], closePaint);
   log(`paint by numbers: ${source.name}, ${source.canvas.width}×${source.canvas.height}, vectorized and drawn in ${(performance.now() - t0).toFixed(0)} ms`);
   reveal(scene.bounds(PAINT_ID)!);
@@ -1275,31 +724,31 @@ stage.addEventListener("drop", (e) => {
 
 // A million rows: a table whose body records only the rows that show.
 const tableDemo = (): void => {
-  if (!table?.alive) table = new MillionRows(scene, router, { components: () => components!, render: () => render(), log, closed: refreshIcons });
+  if (!table?.alive) table = new MillionRows(scene, board.router, { components: () => board.components, render: () => render(), log, closed: refreshIcons });
   reveal(table.bounds);
 };
 
 // Ten million points: a chart whose plot draws a bar per pixel, a line or dots, by how many readings share a pixel.
 const pointsDemo = (): void => {
-  if (!points?.alive) points = new TenMillionPoints(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, closed: refreshIcons });
+  if (!points?.alive) points = new TenMillionPoints(scene, board.router, { components: () => board.components, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, closed: refreshIcons });
   reveal(points.bounds);
 };
 
 // Stars and planets: a galaxy made region by region as you look, from the whole of it down to a planet's face.
 const galaxyDemo = (): void => {
-  if (!galaxy?.alive) galaxy = new StarsAndPlanets(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, closed: refreshIcons, recorder: { ...recorderOptions, captureSource: false } });
+  if (!galaxy?.alive) galaxy = new StarsAndPlanets(scene, board.router, { components: () => board.components, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, closed: refreshIcons, recorder: { ...recorderOptions, captureSource: false } });
   reveal(galaxy.bounds);
 };
 
 // A world map of real data, from Natural Earth: tiles at four levels of detail, read as they come into view, and Wikipedia's articles about the places in view.
 const mapDemo = (): void => {
-  if (!worldMap?.alive) worldMap = new WorldMap(scene, router, { components: () => components!, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, closed: refreshIcons, recorder: { ...recorderOptions, captureSource: false }, reader: readerHost });
+  if (!worldMap?.alive) worldMap = new WorldMap(scene, board.router, { components: () => board.components, zoom: () => Math.hypot(view.a, view.b), render: () => render(), log, closed: refreshIcons, recorder: { ...recorderOptions, captureSource: false }, reader: readerHost });
   reveal(worldMap.bounds);
 };
 
 // Long documents of real text, read as books: laid out a section at a time as it comes into view and the rest between frames.
 const readerHost = () => ({
-  components: () => components!,
+  components: () => board.components,
   render: () => render(),
   log,
   toPage: (x: number, y: number) => {
@@ -1310,11 +759,11 @@ const readerHost = () => ({
   recorder: { ...recorderOptions, captureSource: false },
 });
 const bookDemo = (): void => {
-  if (!book?.alive) book = new Reader(scene, router, readerHost(), { ...warAndPeace, onClose: () => closeReader(book) });
+  if (!book?.alive) book = new Reader(scene, board.router, readerHost(), { ...warAndPeace, onClose: () => closeReader(book) });
   reveal(book.bounds);
 };
 const declarationDemo = (): void => {
-  if (!rights?.alive) rights = new Reader(scene, router, readerHost(), { ...declaration, onClose: () => closeReader(rights) });
+  if (!rights?.alive) rights = new Reader(scene, board.router, readerHost(), { ...declaration, onClose: () => closeReader(rights) });
   reveal(rights.bounds);
 };
 
@@ -1361,19 +810,7 @@ const WINDOW_OF: Record<string, string> = {
   book: BOOK_ID,
   declaration: DECLARATION_ID,
 };
-/** A drawing on the board as a document of its own: its group, the groups inside it and their ops. */
-const documentOf = (id: string): IRDocument => {
-  const all = scene.document.groups ?? [];
-  const inside = new Set([id]);
-  for (let grew = true; grew; ) {
-    grew = false;
-    for (const g of all) if (g.parent !== undefined && inside.has(g.parent) && !inside.has(g.id)) {
-      inside.add(g.id);
-      grew = true;
-    }
-  }
-  return { version: 1, groups: all.filter((g) => inside.has(g.id)), ops: scene.document.ops.filter((op) => op.group !== undefined && inside.has(op.group)) } as IRDocument;
-};
+const documentOf = (id: string): IRDocument => board.documentOf(id);
 /** Notes the board as it is now, and keeps it. */
 function remember(): void {
   if (!remembering) return;
@@ -1401,7 +838,7 @@ function remember(): void {
 /** Moves a window by (dx, dy): its frame, its drawing and its controls. */
 function moveWindowBy(id: string, dx: number, dy: number): void {
   for (const x of withWindows([id])) {
-    components!.move(x, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
+    board.components.move(x, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
     followMove(x, dx, dy);
   }
 }
@@ -1416,22 +853,9 @@ function placeWindow(key: string): void {
   reveal({ ...box, x: to.x, y: to.y });
 }
 /** Records a drawing into a group of its own on the board, as the drawing tools do. */
-function drawOnBoard(id: string, draw: (c: RecordingContext) => void, meta: Record<string, JsonValue> = {}): void {
-  const recorder = new RecordingContext(recorderOptions);
-  recorder.beginGroup({ id, meta: { source: "drawn", ...meta } });
-  draw(recorder);
-  recorder.endGroup();
-  const drawn = recorder.getSources();
-  const doc = recorder.getDocument();
-  scene.replaceGroup(id, doc).forEach((opId, i) => {
-    const source = drawn.get(doc.ops[i]!.id);
-    if (source !== undefined) sources.set(opId, source);
-  });
-}
+const drawOnBoard = (id: string, draw: (c: RecordingContext) => void, meta: Record<string, JsonValue> = {}): void => board.drawGroup(id, draw, meta);
 
 // Connectors: arrows that hold on to the things they join and are drawn again when those move (see the toolkit's connectors.ts).
-/** The connectors on the board, by group id, with where each was last drawn from and to, to tell when to draw it again. */
-const connectors = new Map<string, string>();
 /** The box of what a connector's end holds: an icon, content, a demo window or anything else on the board; null when it isn't there. */
 const boxOfKey = (key: string): Rect | null => {
   const at = key.indexOf(":");
@@ -1451,70 +875,18 @@ const boxOfKey = (key: string): Rect | null => {
 /** What a connector's end would hold at a point on the screen: an icon, content, a window or a drawing; null over empty board. */
 const keyAt = (screen: Point): string | null => {
   if (cards.hits(screen)) {
-    const icon = cards.scene.hitTest(router.toWorld(screen)).flatMap((h) => h.groups).find((g) => g.startsWith("feature-"));
+    const icon = cards.scene.hitTest(board.router.toWorld(screen)).flatMap((h) => h.groups).find((g) => g.startsWith("feature-"));
     return icon ? `icon:${icon.slice("feature-".length)}` : null;
   }
-  const hit = scene.hitTest(router.toWorld(screen), { tolerance: 4 / Math.hypot(view.a, view.b) })[0];
-  if (!hit) return null;
-  const outer = hit.groups.at(-1) ?? hit.id;
-  if (connectors.has(outer)) return null;
+  const outer = board.outerAt(screen);
+  if (outer === null || board.isConnector(outer)) return null;
   for (const [name, ids] of contentIds) if (ids.includes(outer)) return `content:${name}`;
   if (field.includes(outer)) return `content:${FIELD}`;
   const windows = withWindows([outer]);
   for (const [key, group] of Object.entries(WINDOW_OF)) if (windows.includes(group)) return `window:${key}`;
   return `board:${outer}`;
 };
-/** Draws a connector, from where its ends are now, into its group. */
-const drawConnector = (id: string, c: Connector): void => {
-  if (c.kind === "ring") {
-    const box = c.from.key ? boxOfKey(c.from.key) : null;
-    const b = box ?? { x: c.from.x - 75, y: c.from.y - 75, width: 150, height: 150 };
-    const kept: Connector = { ...c, from: { ...c.from, x: b.x + b.width / 2, y: b.y + b.height / 2 } };
-    drawOnBoard(id, (ctx) => drawRing(ctx, b, c), { connector: toMeta(kept) });
-    connectors.set(id, JSON.stringify(b));
-    return;
-  }
-  const { from, to } = route(c, boxOfKey);
-  const kept: Connector = { ...c, from: { ...c.from, x: from.x, y: from.y }, to: { ...(c.to ?? c.from), x: to.x, y: to.y } };
-  drawOnBoard(id, (ctx) => drawArrow(ctx, from, to, c), { connector: toMeta(kept) });
-  connectors.set(id, JSON.stringify([from, to]));
-};
-const connectorOf = (id: string): Connector | null => fromMeta(scene.getGroup(id)?.meta);
-/** Draws again every connector whose ends moved; forgets the ones deleted. */
-const reconnect = (): void => {
-  for (const [id, last] of connectors) {
-    const c = connectorOf(id);
-    if (!c) {
-      connectors.delete(id);
-      continue;
-    }
-    if (c.kind === "ring") {
-      const box = c.from.key ? boxOfKey(c.from.key) : null;
-      if (box && JSON.stringify(box) !== last) drawConnector(id, c);
-      continue;
-    }
-    const { from, to } = route(c, boxOfKey);
-    if (JSON.stringify([from, to]) !== last) drawConnector(id, c);
-  }
-};
-/** A connector dragged as a whole: its loose ends go with it, and the held ones stay on what they hold. */
-const movedConnector = (id: string, dx: number, dy: number): void => {
-  const c = connectorOf(id);
-  if (!c) return;
-  const shift = (e: Connector["from"]): Connector["from"] => (e.key ? e : { x: e.x + dx, y: e.y + dy });
-  drawConnector(id, { ...c, from: shift(c.from), ...(c.to ? { to: shift(c.to) } : {}) });
-};
-let connectorCount = 0;
-/** Puts a new arrow on the board from one end to the other. */
-const connect = (from: { key: string | null; point: Point }, to: { key: string | null; point: Point }): void => {
-  const id = `drawn-arrow-${Date.now().toString(36)}-${connectorCount++}`;
-  const end = (e: typeof from) => (e.key ? { key: e.key, x: e.point.x, y: e.point.y } : { x: e.point.x, y: e.point.y });
-  const c: Connector = { kind: "arrow", from: end(from), to: end(to), bend: 0.12, color: tools.style.stroke, seed: 1 + Math.floor(Math.random() * 1e6) };
-  drawConnector(id, c);
-  select([id]);
-  log(`arrow from ${from.key ?? "a point"} to ${to.key ?? "a point"}`);
-  remember();
-};
+const drawConnector = (id: string, c: Connector): void => board.drawConnector(id, c);
 
 /** Frames around demos drawn straight on the board, by frame id, with what each holds. */
 const frames = new Map<string, readonly string[]>();
@@ -1550,13 +922,13 @@ function openWindows(): FloorWindow[] {
 /** Puts a frame with a title bar and a close button around a demo and its controls, as they are now. */
 const frameAround = (id: string, title: string, held: readonly string[], close: () => void): void => {
   const frame = `${id}:window`;
-  components!.unmount(frame);
+  board.components.unmount(frame);
   frames.delete(frame);
   const there = held.filter((h) => scene.getGroup(h) !== undefined);
   const box = boxOf(there);
   if (!box) return;
   const pad = 16;
-  components!.mount(
+  board.components.mount(
     windowFrame({
       id: frame,
       title,
@@ -1571,7 +943,7 @@ const frameAround = (id: string, title: string, held: readonly string[], close: 
   frames.set(frame, there);
 };
 const unframe = (id: string): void => {
-  components!.unmount(`${id}:window`);
+  board.components.unmount(`${id}:window`);
   frames.delete(`${id}:window`);
 };
 
@@ -1584,12 +956,12 @@ const closeReader = (reader: Reader | null): void => {
 const closePelican = (): void => {
   unframe(PELICAN_ID);
   stopRiding();
-  components!.unmount("pelican-ride");
+  board.components.unmount("pelican-ride");
   if (scene.getGroup(PELICAN_ID)) scene.remove(PELICAN_ID);
 };
 const closePhysics = (): void => {
   unframe(PHYSICS_ID);
-  components!.unmount("physics-drop");
+  board.components.unmount("physics-drop");
   if (scene.getGroup(PHYSICS_ID)) scene.remove(PHYSICS_ID);
   sandbox = null;
 };
@@ -1597,12 +969,12 @@ const closeGraph = (): void => {
   unframe(GRAPH_ID);
   graph?.stop();
   graph = null;
-  components!.unmount("graph-shake");
+  board.components.unmount("graph-shake");
   if (scene.getGroup(GRAPH_ID)) scene.remove(GRAPH_ID);
 };
 const closeMorph = (): void => {
   unframe(MORPH_ID);
-  for (const spec of morphControls(morphTo, (id) => components?.get(id))) components!.unmount(spec.id);
+  for (const spec of morphControls(morphTo, (id) => board.components.get(id))) board.components.unmount(spec.id);
   if (scene.getGroup(MORPH_ID)) scene.remove(MORPH_ID);
 };
 /** The ten thousand shapes' outermost ops and groups, while they're on the board. */
@@ -1611,7 +983,7 @@ const fieldOpen = (): boolean => field.some((id) => scene.get(id) !== undefined 
 
 const closePaint = (): void => {
   unframe(PAINT_ID);
-  components!.unmount(PAINT_ID);
+  board.components.unmount(PAINT_ID);
 };
 
 // Every demo is an icon on the board, as on a desktop: pressing one opens its demo's window where the window lives and
@@ -1660,7 +1032,7 @@ const features: Feature[] = [
   { id: "physics", name: "Physics", glyph: "physics", ...iconAt("physics"), ...movable("physics"), ...toggle("physics", () => scene.getGroup(PHYSICS_ID) !== undefined, physicsDemo, closePhysics) },
   { id: "graph", name: "Graph", glyph: "graph", ...iconAt("graph"), ...movable("graph"), ...toggle("graph", () => scene.getGroup(GRAPH_ID) !== undefined, graphDemo, closeGraph) },
   { id: "morph", name: "Morph", glyph: "morph", ...iconAt("morph"), ...movable("morph"), ...toggle("morph", () => scene.getGroup(MORPH_ID) !== undefined, morphDemo, closeMorph) },
-  { id: "paint", name: "Paint by numbers", glyph: "paint", ...iconAt("paint"), ...movable("paint"), ...toggle("paint", () => components?.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), closePaint) },
+  { id: "paint", name: "Paint by numbers", glyph: "paint", ...iconAt("paint"), ...movable("paint"), ...toggle("paint", () => board.components.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), closePaint) },
   { id: "table", name: "A million rows", glyph: "table", ...iconAt("table"), ...movable("table"), ...toggle("table", () => table?.alive === true, tableDemo, () => table?.close()) },
   { id: "points", name: "Ten million points", glyph: "points", ...iconAt("points"), ...movable("points"), ...toggle("points", () => points?.alive === true, pointsDemo, () => points?.close()) },
   { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...iconAt("galaxy"), ...movable("galaxy"), ...toggle("galaxy", () => galaxy?.alive === true, galaxyDemo, () => galaxy?.close()) },
@@ -1723,7 +1095,7 @@ chrome = new Chrome(cards, {
     { name: "text", text: "Text", key: "T" },
     { name: "arrow", text: "Arrow", key: "A" },
   ],
-  onTool: (name) => useTool(name),
+  onTool: (name) => board.useTool(name),
   actions: [
     { text: "Play Pelican Ride", look: "accent", onClick: () => (window.top ?? window).location.assign("./game.html") },
     { text: "Drawings in 3D", onClick: () => (window.top ?? window).location.assign("./space.html") },
@@ -1731,7 +1103,7 @@ chrome = new Chrome(cards, {
     { text: "Vectorize image", onClick: vectorizeSelection, title: "select an image, such as the orange sticker, first" },
     { text: "Export SVG", onClick: exportSvg },
     { text: "Export JSON", onClick: () => download("board.json", "application/json", serializeDocument(scene.document)) },
-    { text: "Fit the board", onClick: () => setView(home()) },
+    { text: "Fit the board", onClick: () => setView(board.home()) },
     { text: "Export layout", onClick: () => download("layout.json", "application/json", JSON.stringify(layout, null, 1)), title: "where things are and what is drawn, as a file" },
     {
       text: "Reset layout",
@@ -1746,10 +1118,7 @@ chrome = new Chrome(cards, {
   ],
   style: tools.style,
   settings,
-  onLod: () => {
-    makeRenderer();
-    render();
-  },
+  onLod: () => board.resetRenderer(),
   devtools,
   pasteSvg,
 });
@@ -1777,8 +1146,7 @@ if (layout.drawings) {
   for (const d of DRAWINGS) drawOnBoard(d.id, d.draw);
   for (const { id, connector } of CONNECTORS) drawConnector(id, connector);
 }
-for (const g of scene.document.groups ?? []) if (g.parent === undefined && fromMeta(g.meta)) connectors.set(g.id, "");
-reconnect();
+board.adoptConnectors();
 remembering = true;
 render();
 initial = false;
@@ -1794,5 +1162,5 @@ const kept = ((): Matrix2D | null => {
     return null;
   }
 })();
-setView(kept ?? home());
+setView(kept ?? board.home());
 

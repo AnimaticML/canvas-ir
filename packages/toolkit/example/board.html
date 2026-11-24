@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Toolkit board example</title>
+    <style>
+      :root {
+        --accent: #2563eb;
+        --hover: #94a3b8;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #f8fafc;
+        font: 14px system-ui, sans-serif;
+        color: #0f172a;
+      }
+      header {
+        height: 40px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 0 16px;
+      }
+      #stage {
+        position: fixed;
+        inset: 40px 0 0 0;
+        overflow: hidden;
+      }
+      #stage canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+      #cards,
+      #overlay {
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>Toolkit board</strong>
+      <span>Drag shapes, draw with the tools (V P R O T A), join them with arrows, Delete, Ctrl+Z.</span>
+      <a href="./index.html">Cards example</a>
+    </header>
+    <div id="stage"><canvas id="board"></canvas><canvas id="cards"></canvas><canvas id="overlay"></canvas></div>
+    <script type="module" src="./board-main.ts"></script>
+  </body>
+</html>
