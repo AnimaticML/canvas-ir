@@ -9,7 +9,8 @@
   },
   "scripts": {
     "example": "bun example/index.html",
-    "check": "bun run example/check.ts"
+    "check": "bun run example/check.ts",
+    "check:wheel": "bun run example/check-wheel.ts"
   },
   "dependencies": {
     "canvas-ir": "workspace:*"

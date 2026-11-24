@@ -33,7 +33,7 @@ import {
 } from "canvas-ir";
 import { vectorize } from "@canvas-ir/vectorize";
 import { LiveText } from "@canvas-ir/text";
-import { Gestures, Viewport, wheelPixels, wheelZoom, type ToolName, Tools, windowFrame, type Connector, drawArrow, drawRing, fromMeta, route, toMeta, CardLayer, textSink } from "@canvas-ir/toolkit";
+import { Gestures, Viewport, WheelGesture, wheelPixels, wheelZoom, type ToolName, Tools, windowFrame, type Connector, drawArrow, drawRing, fromMeta, route, toMeta, CardLayer, textSink } from "@canvas-ir/toolkit";
 import { datumAt } from "./charts";
 import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
@@ -805,19 +805,22 @@ canvas.addEventListener("pointerleave", (e) => {
   tooltip = null;
   render();
 });
+const wheelGesture = new WheelGesture();
 canvas.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault();
     const p = point(e);
-    // A card or anything on the board that scrolls (the million rows) keeps the wheel; anywhere else it zooms the board.
+    // A card or anything on the board that scrolls (the million rows) keeps the wheel; elsewhere the board handles pan and zoom.
     const { x: deltaX, y: deltaY } = wheelPixels(e, canvas.clientHeight);
     const input = { ...p, deltaX, deltaY, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
     if (cards.hits(p) && cards.wheel(input)) return;
     wheelFree = false;
     router.wheel(input);
     if (!wheelFree) return;
-    viewport.zoomAt(wheelZoom(deltaY), p);
+    if (wheelGesture.push({ deltaX, deltaY, timeStamp: e.timeStamp, ctrlKey: e.ctrlKey }) === "zoom") {
+      viewport.zoomAt(wheelZoom(deltaY), p);
+    } else viewport.panBy(-deltaX, -deltaY);
     viewChanged();
   },
   { passive: false },

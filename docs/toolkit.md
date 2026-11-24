@@ -33,7 +33,7 @@ It came out in two steps. The view and input mechanisms, in all three apps (five
 ### View, gestures, canvas host and actions
 
 - **`Viewport`** is a uniform zoom and a translation, with `matrix` for a router or the accessibility layer and `device(ratio)` for a renderer. It has `toWorld`/`toScreen`, `panBy`, `zoomAt(factor, anchor)`, `zoomTo`, `fit`, `setMatrix` for hosts that keep a matrix, and `onChange`. Zoom limits and a `clamp(view)` are applied on every change, which covers Painter's bounds, Harmonica's limits and centering at the least zoom. It is pure, with no DOM.
-- **`wheelZoom(dy)`** and **`wheelPixels(event, pageHeight)`** turn a wheel into a factor, from any device's units.
+- **`wheelPixels(event, pageHeight)`** normalizes wheel deltas. **`WheelGesture`** chooses pan or zoom on the first event and keeps that choice until 100 ms of idle time or a Ctrl modifier change. Unknown input pans. Learned vertical notch multiples and Ctrl+wheel zoom through **`wheelZoom(dy)`**.
 - **`Gestures`** takes pointer down, move, up and cancel by id and reports `press`, `hover`, `dragStart`/`drag`/`dragEnd` (with `delta` and `total`), `tap`, `pinchStart`/`pinch`/`pinchEnd` (with `scale`, `center`, `pan`) and `cancel`. It enforces the rules each app wrote by hand:
   - a slop before a drag (6 px by default);
   - a second finger cancels the press and starts a pinch;
@@ -91,7 +91,7 @@ These moved from the playground unchanged in behavior, and the playground import
 ### In the playground
 
 The playground imports the cards, window parts, connectors, tools and controls from the toolkit. Its board in `main.ts` keeps its view in a `Viewport`:
-- the wheel zooms through `wheelZoom`/`wheelPixels`;
+- wheel bursts pan or zoom through `WheelGesture`, with zoom anchored at the pointer;
 - a drag on empty board pans with `panBy`;
 - the matrix arithmetic it replaces is gone.
 

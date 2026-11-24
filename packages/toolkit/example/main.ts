@@ -3,7 +3,7 @@
 // accessibility mirror reading and pressing the same buttons. Its document is a plain object with its own undo: the
 // toolkit decides what the pointers did and draws its parts, and this page decides what that means and keeps it.
 import { AccessibilityLayer, RecordingContext, Renderer, Scene, type Point, type Rect } from "canvas-ir";
-import { Actions, CardLayer, Gestures, Viewport, bindGestures, button, drawArrow, mountCanvas, route, slider, wheelZoom } from "@canvas-ir/toolkit";
+import { Actions, CardLayer, Gestures, Viewport, WheelGesture, bindGestures, button, drawArrow, mountCanvas, route, slider, wheelZoom } from "@canvas-ir/toolkit";
 
 interface Card {
   readonly id: string;
@@ -250,12 +250,14 @@ const gestures = new Gestures({
     canvas.style.cursor = cardOf(g) ? "move" : g.some((x) => actions.has(x)) ? "pointer" : "grab";
   },
 });
+const wheelGesture = new WheelGesture();
 bindGestures(canvas, gestures, {
   // Presses and hovers over the controls card go to it; the rest are the board's.
   above: layer,
   wheel: (input) => {
     if (layer.hits(input.point) && layer.wheel({ x: input.point.x, y: input.point.y, deltaX: input.deltaX, deltaY: input.deltaY, ctrlKey: input.ctrlKey, metaKey: input.metaKey })) return;
-    viewport.zoomAt(wheelZoom(input.deltaY), input.point);
+    if (wheelGesture.push(input) === "zoom") viewport.zoomAt(wheelZoom(input.deltaY), input.point);
+    else viewport.panBy(-input.deltaX, -input.deltaY);
   },
 });
 window.addEventListener("keydown", (e) => {

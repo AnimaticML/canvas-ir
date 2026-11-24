@@ -7,3 +7,4 @@ export * from "./cards";
 export * from "./window";
 export * from "./connectors";
 export * from "./tools";
+export { classifyWheel, WheelGesture, type WheelAction, type WheelSample, type WheelDelta, type WheelSource } from "./wheel";

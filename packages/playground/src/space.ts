@@ -534,7 +534,7 @@ export const startSpace = (host: SpaceHost): void => {
     const zoom = Math.log(now.d / pinch.d);
     if (pinch.screen) {
       // As the playground's wheel zooms: by exp(-deltaY * 0.0015) about the point under it.
-      playground.forward(new WheelEvent("wheel", { deltaY: -zoom / 0.0015, deltaMode: 0 }), now.c);
+      playground.forward(new WheelEvent("wheel", { deltaY: -zoom / 0.0015, deltaMode: 0, ctrlKey: true }), now.c);
     } else if (selected) {
       // With something selected: a pinch moves in and out toward it, a twist turns a selected shape, sliding orbits it.
       dolly(zoom * 3);

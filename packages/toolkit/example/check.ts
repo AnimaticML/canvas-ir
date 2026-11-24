@@ -72,8 +72,16 @@ await page.mouse.up();
 let after = await state();
 expect(after.view.x === before.view.x - 50 && after.view.y === before.view.y - 30 && after.history === before.history, "dragging empty board pans and changes nothing else");
 
-// The wheel zooms around the pointer: the world point under it stays put.
+// The first ambiguous burst pans immediately, then the learned wheel zooms around the pointer.
 const anchor = { x: 450, y: 300 };
+const beforeWheel = after.view;
+await page.evaluate(({ x, y }) => {
+  const board = document.getElementById("board")!;
+  for (let i = 0; i < 3; i++) board.dispatchEvent(new WheelEvent("wheel", { clientX: x, clientY: y, deltaY: -100 }));
+}, anchor);
+after = await state();
+expect(after.view.zoom === beforeWheel.zoom && after.view.y === beforeWheel.y + 300, "the ambiguous wheel burst pans immediately");
+await page.waitForTimeout(120);
 const worldBefore = { x: (anchor.x - after.view.x) / after.view.zoom, y: (anchor.y - 40 - after.view.y) / after.view.zoom };
 await page.mouse.move(anchor.x, anchor.y);
 await page.mouse.wheel(0, -300);

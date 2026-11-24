@@ -85,6 +85,7 @@ export interface WheelInput {
   readonly point: Point;
   readonly deltaX: number;
   readonly deltaY: number;
+  readonly timeStamp: number;
   readonly ctrlKey: boolean;
   readonly shiftKey: boolean;
   readonly altKey: boolean;
@@ -183,7 +184,7 @@ export const bindGestures = (element: HTMLElement, gestures: Gestures, options: 
   const wheel = (e: WheelEvent): void => {
     if (!options.wheel) return;
     const d = wheelPixels(e, element.clientHeight);
-    const used = options.wheel({ point: at(e), deltaX: d.x, deltaY: d.y, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey });
+    const used = options.wheel({ point: at(e), deltaX: d.x, deltaY: d.y, timeStamp: e.timeStamp, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey });
     if (used !== false) e.preventDefault();
   };
   element.addEventListener("pointerdown", down);
