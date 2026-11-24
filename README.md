@@ -21,8 +21,9 @@ to be established by the worked examples.
 - [Toolkit extraction and an independent consumer example](docs/proposal-world-runtime-toolkit.md).
 
 These three topics own separate responsibilities and can progress independently.
-Toolkit work starts from existing Playground functionality; a standalone test
-application can validate its public API without a second production consumer.
+Toolkit compares existing Playground, Harmonica and ML Painter implementations;
+the handoff names source files and repeated mechanisms. A standalone test
+application provides an additional check of the extracted public API.
 
 Each handoff links the full seven-document series across Canvas IR, Video, Codec
 and Shell. Find local files with `rg --files | rg '(^|/)proposal-world-runtime-'`.
