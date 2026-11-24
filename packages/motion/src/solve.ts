@@ -30,6 +30,12 @@ export interface SolveOptions {
    * the two places that fit. The tracker's 3D points are good across the image and poor in depth. Default true.
    */
   readonly lift?: boolean;
+  /**
+   * Whether a standing person's feet are laid on the floor, where the setup has one: a foot whose ankle is as low as
+   * the lower of the two is taken as planted, flat as in the rest pose, turned the way the tracker saw it point.
+   * The tracker's feet point steeply down at the camera, and a planted foot can't. Default true.
+   */
+  readonly floor?: boolean;
   /** A learned correction of the tracker's 3D points, applied before anything else (see correct.ts). */
   readonly correction?: Correction;
 }
@@ -145,6 +151,9 @@ export const boneFrames = (j: Joints, hints: FrameHints = {}): Record<BoneName, 
   };
 };
 
+/** How far above the lower ankle an ankle is taken as lifted off the floor, in meters. */
+const FOOT_LIFTED = 0.08;
+
 /** The rest pose's frames. */
 export const REST_FRAMES = boneFrames(REST);
 
@@ -174,6 +183,7 @@ export class Solver {
   private readonly poseFilter: PointsFilter | null;
   private readonly imageFilter: PointsFilter | null;
   private readonly lift: boolean;
+  private readonly floor: boolean;
   private readonly correction: Correction | undefined;
   private readonly rootFilter: PointsFilter | null;
   private readonly handFilters: { left: PointsFilter | null; right: PointsFilter | null };
@@ -192,6 +202,7 @@ export class Solver {
     this.poseFilter = f && new PointsFilter(f);
     this.imageFilter = f && new PointsFilter(f);
     this.lift = options.lift ?? true;
+    this.floor = (options.floor ?? true) && this.setup.ground === "floor" && this.setup.stance === "standing";
     this.correction = options.correction;
     this.rootFilter = f && new PointsFilter(f);
     this.handFilters = { left: f && new PointsFilter(f), right: f && new PointsFilter(f) };
@@ -414,6 +425,27 @@ export class Solver {
         lift(`${s}Shin`, j[`${s}Knee`], L("Knee"), L("Ankle"), boneLength(p, `${s}Shin`));
       }
       forward();
+    }
+
+    // Planted feet: on a floor, a foot as low as the lower one lies flat, as in the rest pose, pointing where it was seen to.
+    if (this.floor) {
+      const low = Math.min(j.leftAnkle.y, j.rightAnkle.y);
+      const pitch = normalize(sub(REST.leftToe, REST.leftAnkle));
+      let moved = false;
+      for (const s of ["left", "right"] as const) {
+        const d = dirs[`${s}Foot`];
+        if (d.source !== "seen" || j[`${s}Ankle`].y > low + FOOT_LIFTED) continue;
+        const heel = W(P[`${s}Heel`]);
+        const tip = W(P[`${s}FootIndex`]);
+        const sole = sub(tip, heel);
+        const heading = normalize(v(sole.x, 0, sole.z), normalize(v(d.dir.x, 0, d.dir.z), v(0, 0, 1)));
+        const k = Math.hypot(pitch.x, pitch.z);
+        const dir = v(heading.x * k, pitch.y, heading.z * k);
+        dirs[`${s}Foot`] = { ...d, dir };
+        this.last.set(`${s}Foot`, { dir, t, seen: true });
+        moved = true;
+      }
+      if (moved) forward();
     }
 
     // The hands' 21 points, hung from the wrists at this person's hand size.

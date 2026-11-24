@@ -176,4 +176,27 @@ describe("random movements", () => {
     expect(squats).toBeGreaterThan(20);
     expect(lifts).toBeGreaterThan(20);
   });
+
+  test("a standing foot on the floor lies flat, and a lifted one keeps the way it was seen", () => {
+    const flat = normalize(sub(restPose().leftToe, restPose().leftAnkle)).y;
+    let planted = 0;
+    let lifted = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const { take } = synthesize(randomScript(seed, "phone-stand"), { fps: 4 });
+      for (const b of solveTake(take)) {
+        const j = b.joints;
+        const low = Math.min(j.leftAnkle.p.y, j.rightAnkle.p.y);
+        for (const s of ["left", "right"] as const) {
+          if (j[`${s}Toe`].source !== "seen") continue;
+          const y = rotate(b.bones[`${s}Foot`], v(0, 1, 0)).y;
+          if (j[`${s}Ankle`].p.y < low + 0.01) {
+            expect(Math.abs(y - flat)).toBeLessThan(1e-6);
+            planted++;
+          } else if (j[`${s}Ankle`].p.y > low + 0.2 && Math.abs(y - flat) > 0.05) lifted++;
+        }
+      }
+    }
+    expect(planted).toBeGreaterThan(400);
+    expect(lifted).toBeGreaterThan(8);
+  });
 });
