@@ -183,6 +183,7 @@ const linkAfter = (await more()).link!;
 expect(linkAfter.y + linkAfter.height > linkBefore.y + linkBefore.height + 40, "a connector follows the card it holds");
 
 // The board example: a toolkit Board with a document of its own.
+await page.setViewportSize({ width: 1400, height: 800 });
 await page.goto(`http://localhost:${server.port}/board.html`);
 await page.waitForFunction(() => "boardExample" in window);
 await page.waitForTimeout(100);
@@ -193,8 +194,8 @@ const b = (): Promise<B> =>
     return { changes: [...e.changes], history: e.history.length, groups: e.doc.map((d: any) => d.groups.find((g: any) => g.parent === undefined).id), tool: e.board.tools.current, zoom: e.board.viewport.zoom };
   });
 const box = (id: string) => page.evaluate((id) => (window as any).boardExample.board.scene.bounds(id), id);
-// The view is (240, 20) at zoom 1, under a 40 px header.
-const at = (x: number, y: number) => ({ x: x + 240, y: y + 60 });
+// The view is (700, 20) at zoom 1, under a 40 px header.
+const at = (x: number, y: number) => ({ x: x + 700, y: y + 60 });
 const drag = async (from: { x: number; y: number }, by: { x: number; y: number }, ctrl = false) => {
   if (ctrl) await page.keyboard.down("Control");
   await page.mouse.move(from.x, from.y);
@@ -217,14 +218,17 @@ await page.waitForTimeout(50);
 idea1 = await box("idea");
 expect(Math.abs(idea1.x - idea0.x) < 0.01 && Math.abs(idea1.y - idea0.y) < 0.01 && JSON.stringify(await box("idea-sketch")) === JSON.stringify(link0), "board: undo loads the last document back, arrows and all");
 // A tool from the card, then a rectangle on empty board.
-const tb = await page.evaluate(() => (window as any).boardExample.board.cards.scene.bounds("card-tools:rect"));
-await page.mouse.click(tb.x + 240 + tb.width / 2, tb.y + 60 + tb.height / 2);
+const tb = await page.evaluate(() => (window as any).boardExample.board.cards.scene.bounds("card-toolbar:tool-rect"));
+await page.mouse.click(tb.x + 700 + tb.width / 2, tb.y + 60 + tb.height / 2);
 bs = await b();
-expect(bs.tool === "rect", "board: a button on the tools card picks a tool");
+expect(bs.tool === "rect", "board: a button on the toolkit's toolbar picks a tool");
 await drag(at(150, 330), { x: 120, y: 70 });
 bs = await b();
 const rect = bs.groups.find((g) => g.startsWith("drawn-rect"));
 expect(!!rect && bs.changes.at(-1) === "drawn", "board: the rectangle tool draws, and the page commits it");
+await page.waitForTimeout(300);
+const inspected = await page.evaluate(() => document.querySelector('[aria-label="Selection"]')?.textContent ?? "");
+expect(inspected.includes(rect!), "board: the inspector shows what was drawn, selected");
 // An arrow from the new rectangle to the round shape holds on to both.
 await page.keyboard.press("a");
 const r = await box(rect!);

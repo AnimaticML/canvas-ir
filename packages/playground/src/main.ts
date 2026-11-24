@@ -2,14 +2,12 @@
 // and made interactive through the scene and the event router.
 import { Canvg } from "canvg";
 import {
-  type AccessibleNode,
   EmbedLayer,
   type Matrix2D,
   RecordingContext,
   type RecordingContextOptions,
   type RouterEvent,
   Scene,
-  type SnapKind,
   applyToPoint,
   replayDocument,
   serializeDocument,
@@ -27,7 +25,7 @@ import {
 } from "canvas-ir";
 import { vectorize } from "@canvas-ir/vectorize";
 import { LiveText } from "@canvas-ir/text";
-import { Board, CardLayer, type Connector, textSink, windowFrame } from "@canvas-ir/toolkit";
+import { Board, BoardFeed, CardLayer, type Connector, TOOLS, snapControls, snapSettings, textSink, windowFrame } from "@canvas-ir/toolkit";
 import { datumAt } from "./charts";
 import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
@@ -53,9 +51,7 @@ const canvas = document.getElementById("board") as HTMLCanvasElement;
 const cardCanvas = document.getElementById("cards") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLCanvasElement;
 /** What the inspector's controls set. */
-const settings: Settings = { snapOn: true, snapRadius: 8, snapKinds: new Set(["points", "bounds", "path"]), snapText: false, lod: true };
-/** The playground and inspector cards; made once the board's parts exist. */
-let chrome: Chrome | null = null;
+const settings: Settings = { snap: snapControls(), lod: true };
 
 // Images seen while recording, by the src the IR stores, so replay draws the same objects.
 const images = new Map<string, CanvasImageSource>();
@@ -94,16 +90,6 @@ const cards = new CardLayer(cardCanvas, stage, {
   },
   onFocus: () => board.keysToCardsLayer(),
 });
-// What screen readers read and Tab reaches: a DOM mirror of the board's roles and text, shown in the inspector.
-const outlineOf = (nodes: readonly AccessibleNode[], depth = 0): string[] =>
-  nodes.flatMap((n) => [`${"  ".repeat(depth)}${n.role}${n.label ? ` "${n.label.length > 48 ? `${n.label.slice(0, 47)}…` : n.label}"` : ""}${n.value !== undefined ? ` = ${n.value}` : ""}`, ...outlineOf(n.children, depth + 1)]);
-let a11yText = "";
-const KIND_GROUPS: Record<string, readonly SnapKind[]> = {
-  points: ["vertex", "intersection", "center", "midpoint", "extreme", "baseline"],
-  bounds: ["bounds"],
-  path: ["path"],
-};
-const snapKinds = (): SnapKind[] => [...settings.snapKinds].flatMap((k) => KIND_GROUPS[k] ?? []);
 // The board (the toolkit's): picking, outlines, dragging with snapping, the lasso, the tools, connectors, the cards'
 // pointers, pinch and wheel zoom, and the frame loop. What is on it, and what a change means, is this page's.
 const board: Board = new Board({
@@ -113,7 +99,7 @@ const board: Board = new Board({
   cards,
   recorder: recorderOptions,
   renderer: () => ({ images: (src) => images.get(src), ...(settings.lod ? {} : { lod: false }) }),
-  snap: () => ({ on: settings.snapOn, radius: settings.snapRadius, kinds: snapKinds(), text: settings.snapText }),
+  snap: () => snapSettings(settings.snap),
   hooks: {
     bound: (s, r) => {
       devtools.attach(s);
@@ -129,8 +115,6 @@ const board: Board = new Board({
     beforeDraw: () => worldMap?.flush(),
     // While devtools steps through the ops, it draws the board itself.
     paint: (c, device) => devtools.drawBoard(c, device),
-    drawn: (stats, ms) =>
-      chrome?.setText("render-stats", `${stats.mode} redraw: ${stats.ops} of ${scene.document.ops.length} ops in ${ms.toFixed(1)} ms${stats.rects.length > 0 ? `, ${stats.rects.length} rect${stats.rects.length > 1 ? "s" : ""}` : ""}`),
     overlay: (c, device, ui) => devtools.preview(c, device, ui),
     viewChanged: (next) => {
       view = next;
@@ -171,7 +155,9 @@ const board: Board = new Board({
       liveTexts = liveTexts.filter((live) => scene.getGroup(parentOf(live)));
       for (const live of liveTexts) live.update();
     },
-    selected: () => showSelection(),
+    selected: (ids) => {
+      if (ids.length === 1) devtools.show(ids[0]!);
+    },
     // Over an embed, the pointer goes to its element (a form, a WebGL view); with Alt held, the board keeps it, to drag the embed.
     enter: (e) => {
       if (e.op?.kind === "embed" && !board.dragActive && !board.tools.drawing && !("altKey" in e.input && e.input.altKey)) embeds.passThrough(e.op.id);
@@ -180,21 +166,16 @@ const board: Board = new Board({
     keyAt: (screen) => keyAt(screen),
     boxOf: (key) => boxOfKey(key),
     recorded: (opId, source) => sources.set(opId, source),
-    tool: (name) => chrome?.setTool(name),
-    mirror: (tree) => {
-      a11yText = outlineOf(tree).join("\n");
-      chrome?.setText("a11y", a11yText);
-    },
-    log: (line) => log(line),
   },
 });
+// What the inspector shows of the board: the selection, the last redraw, the accessibility tree and the log.
+const feed = new BoardFeed(board);
 let scene = board.scene;
 /** Whether a physics body is held, so the simulation keeps running while it is. */
 let holding = false;
 let liveTexts: LiveText[] = [];
 /** The board's view, kept beside it for the many places that read one. */
 let view: Matrix2D = board.view;
-const tools = board.tools;
 // HTML and WebGL elements of embed ops, beneath the board.
 const embeds = new EmbedLayer(scene, stage, canvas, { create: createEmbed, destroy: destroyEmbed });
 const render = (): void => board.render();
@@ -210,30 +191,7 @@ let book: Reader | null = null;
 let rights: Reader | null = null;
 /** The million-row table, once added. */
 let table: MillionRows | null = null;
-let logLines: string[] = [];
-const log = (line: string): void => {
-  logLines = [line, ...logLines].slice(0, 200);
-  chrome?.setText("log", logLines.join("\n"));
-};
-
-const describe = (id: string): string => {
-  const group = scene.getGroup(id);
-  const lines: string[] = [];
-  if (group) {
-    lines.push(`group ${id}`);
-    if (group.meta) lines.push(`meta ${JSON.stringify(group.meta)}`);
-    lines.push(`${scene.groupOps(id).length} ops`);
-  } else {
-    const op = scene.get(id)!;
-    lines.push(`${op.kind} op ${id}`);
-    if (op.kind === "text") lines.push(`"${op.text}"`);
-  }
-  const chain = scene.groupChain(id);
-  if (chain.length > 0) lines.push(`inside ${chain.join(" < ")}`);
-  const b = scene.bounds(id);
-  if (b) lines.push(`bounds ${b.x.toFixed(1)}, ${b.y.toFixed(1)}, ${b.width.toFixed(1)} × ${b.height.toFixed(1)}`);
-  return lines.join("\n");
-};
+const log = (line: string): void => feed.log(line);
 
 const parentOf = (live: LiveText): string => (live.settings as LiveSpec).parent;
 
@@ -328,7 +286,7 @@ floorHost.canvasIrFloor = {
   windows: () => openWindows(),
   moveWindow: (id, dx, dy) => {
     moveWindowBy(id, dx, dy);
-    showSelection();
+    board.select(board.selected);
     render();
     remember();
   },
@@ -388,19 +346,6 @@ floorHost.canvasIrFloor = {
     render();
   },
   onFootprint: null,
-};
-
-const showSelection = (): void => {
-  const selected = board.selected;
-  chrome?.setText(
-    "selection",
-    selected.length === 0
-      ? "Click something on the board."
-      : selected.length === 1
-        ? describe(selected[0]!)
-        : `${selected.length} objects\n${selected.join(", ")}`,
-  );
-  if (selected.length === 1) devtools.show(selected[0]!);
 };
 
 const devtools = new Devtools({
@@ -553,7 +498,7 @@ const vectorizeSelection = (): void => {
     log(`vectorized ${op.id}: ${result.palette.length} colors, ${result.rings} rings, ${result.points} points`);
   }
   for (const live of liveTexts) live.update();
-  showSelection();
+  board.select(board.selected);
   render();
 };
 
@@ -1086,16 +1031,10 @@ if (to3dButton && window === window.top) {
 }
 
 // The controls: the playground and inspector cards.
-chrome = new Chrome(cards, {
-  tools: [
-    { name: "select", text: "Select", key: "V" },
-    { name: "pen", text: "Pen", key: "P" },
-    { name: "rect", text: "Rectangle", key: "R" },
-    { name: "ellipse", text: "Ellipse", key: "O" },
-    { name: "text", text: "Text", key: "T" },
-    { name: "arrow", text: "Arrow", key: "A" },
-  ],
-  onTool: (name) => board.useTool(name),
+new Chrome(cards, {
+  board,
+  feed,
+  tools: TOOLS,
   actions: [
     { text: "Play Pelican Ride", look: "accent", onClick: () => (window.top ?? window).location.assign("./game.html") },
     { text: "Drawings in 3D", onClick: () => (window.top ?? window).location.assign("./space.html") },
@@ -1116,15 +1055,11 @@ chrome = new Chrome(cards, {
       title: "forget what was moved, drawn or deleted",
     },
   ],
-  style: tools.style,
   settings,
   onLod: () => board.resetRenderer(),
   devtools,
   pasteSvg,
 });
-chrome.setText("log", logLines.join("\n"));
-chrome.setText("a11y", a11yText);
-showSelection();
 
 // The content goes where it was last put, or to its place in the collage; then the drawings on it, the ones made here
 // last time or the collage's own notes and arrows.

@@ -28,10 +28,11 @@ All three already use CanvasIR's `Scene`, `Renderer`, `EventRouter` and `Accessi
 
 ## What the toolkit holds
 
-It came out in three steps:
+It came out in four steps:
 1. The view and input mechanisms, in all three apps (five copies), came first.
 2. The playground's reusable board UI came out whole: cards, window parts, connectors, drawing tools and controls, which only it had built in full.
 3. The board itself, which wires them together, came out of the playground's `main.ts`.
+4. Its toolbar and inspector came out of `ui/chrome.ts`, as panels any board can have.
 
 ### View, gestures, canvas host and actions
 
@@ -101,6 +102,18 @@ What is on it, and what a change means, stays the host's, through `BoardHooks`:
 
 The playground's `main.ts` is now a host of a `Board`. It went from 1,799 lines to 1,184, keeping only its content: the demos, the collage, the saved layout, its keys for connector ends, and the 3D hosts.
 
+### Toolbars and inspectors
+
+- **`Panel`** (`panel.ts`) is a card of controls described as a list of items, laid out down the card. The items are headings, rows of buttons that wrap, full-width buttons, swatches, sliders, toggles, text boxes and fields, and custom components. Each control reads its value through a function. `refresh()` sets what changed, and `rebuild()` builds the panel again when its list of items changes.
+- **Board controls** (`inspector.ts`) are panel items for a board:
+  - `toolItems` gives the tool buttons, with the current tool shown as on;
+  - `actionItems` gives the host's buttons;
+  - `styleItems` sets the fill, stroke and width the tools draw with;
+  - `snapItems` sets a `SnapControls` object, which `snapSettings()` turns into what the board reads;
+  - `selectionItems`, `renderItems`, `mirrorItems` and `logItems` show the selection, the last redraw, the accessibility tree and a log.
+- **`BoardFeed`** keeps that text from what the board does, through `board.on(...)` (the board's events: selected, drawn, mirror, log, tool and changed). It refreshes every panel attached to it.
+- **`boardPanels(board, layer, options)`** puts a toolbar and an inspector made of these on a board as they come. A host that wants its own sections, as the playground does, builds its panels from the same items.
+
 ### The host contract
 
 | The toolkit | The host |
@@ -137,7 +150,7 @@ The board also gained two-finger pinch, through `Gestures` fed beside its router
 
 Its document is a plain object with a history. A drag previews as it goes and commits once, and a slider's run of changes is one step.
 
-`packages/toolkit/example/board.html` is a `Board` with a document of its own: shapes joined by arrows, a tools card, and an undo history of the board's documents. Every change the board reports is one step, and undo loads the last document back, arrows and all.
+`packages/toolkit/example/board.html` is a `Board` with a document of its own: shapes joined by arrows, the toolkit's toolbar and inspector (`boardPanels`, with Undo among its actions), and an undo history of the board's documents. Every change the board reports is one step, and undo loads the last document back, arrows and all.
 
 - Run them with `bun run --cwd packages/toolkit example`.
 - `bun run --cwd packages/toolkit check` builds both, opens them in Chromium and drives each of those interactions, including touch through pointer events. It runs in CI.
@@ -164,11 +177,11 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 ## What stays in the playground, for now
 
 - **Its content:** the demos, the collage, the samples added to the board, the saved layout, and the keys it gives connector ends (icons, content, windows).
-- **Its own cards and icons:** `ui/chrome.ts` (the toolbar and inspector cards, tied to its devtools and settings) and `ui/features.ts` (the demo icons).
+- **Its own panel sections:** `ui/chrome.ts` builds the playground's toolbar and inspector from the toolkit's panels and board controls. It adds only the devtools section, pasting SVG, the level-of-detail toggle, its hints and its actions.
+- **Its demo icons:** `ui/features.ts`.
 - **Its 3D hosts:** the floor host for the room in 3D, and the capture of a part of the page for a 3D screen, which it sets on the board.
 
 ## Next
 
-1. **Inspector and toolbar cards.** Generalize `ui/chrome.ts` into cards built from what the host lists, such as tools, styles, snap settings and the selection's properties, so a board gets a toolbar and an inspector without writing them.
-2. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
-3. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
+1. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
+2. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.

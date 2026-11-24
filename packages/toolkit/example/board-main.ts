@@ -3,7 +3,7 @@
 // one per drawing, and an undo history of those lists. Each change the board reports is committed here; undo loads the
 // last list back onto the board.
 import type { IRDocument } from "canvas-ir";
-import { Board, CardLayer, button, type ToolName } from "@canvas-ir/toolkit";
+import { Board, CardLayer, boardPanels, snapControls, snapSettings } from "@canvas-ir/toolkit";
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
@@ -31,14 +31,16 @@ const undo = (): void => {
   board.load(doc);
 };
 
+// What the snapping controls in the inspector set, and the board reads.
+const snap = snapControls();
 const board: Board = new Board({
   stage,
   canvas,
   overlay: document.getElementById("overlay") as HTMLCanvasElement,
   cards,
+  snap: () => snapSettings(snap),
   hooks: {
     changed: ({ kind }) => commit(kind),
-    tool: (name) => toolbar.rebuild(),
   },
 });
 
@@ -63,31 +65,10 @@ arrow("idea-sketch", "idea", "sketch");
 arrow("idea-shot", "idea", "shot");
 doc = board.documents();
 board.adoptConnectors();
-board.setView({ a: 1, b: 0, c: 0, d: 1, e: 240, f: 20 });
+board.setView({ a: 1, b: 0, c: 0, d: 1, e: 700, f: 20 });
 
-// The tools and undo, on a card over the board.
-const TOOLS: [ToolName, string][] = [
-  ["select", "Select"],
-  ["pen", "Pen"],
-  ["rect", "Rectangle"],
-  ["ellipse", "Ellipse"],
-  ["text", "Text"],
-  ["arrow", "Arrow"],
-];
-const toolbar = cards.card({
-  id: "tools",
-  title: "Tools",
-  x: -200,
-  y: 40,
-  width: 170,
-  build: (card, width) => {
-    TOOLS.forEach(([name, text], i) =>
-      card.mount(button({ id: name, panel: card, box: { x: 12, y: 10 + i * 34, w: width - 24, h: 28 }, text, active: board.tools.current === name, onClick: () => board.useTool(name) })),
-    );
-    card.mount(button({ id: "undo", panel: card, box: { x: 12, y: 10 + TOOLS.length * 34 + 6, w: width - 24, h: 28 }, text: "Undo", look: "primary", onClick: undo }));
-    return 10 + TOOLS.length * 34 + 46;
-  },
-});
+// The toolkit's toolbar and inspector, with this page's undo among the toolbar's actions.
+boardPanels(board, cards, { x: -660, y: 0, snap, height: 560, actions: [{ text: "Undo", look: "primary", onClick: undo }] });
 window.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "z") undo();
 });

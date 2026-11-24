@@ -110,6 +110,16 @@ export interface BoardHooks {
   log?(line: string): void;
 }
 
+/** What anyone on the page can listen for, besides the host's hooks: an inspector card, a log. */
+export interface BoardEvents {
+  selected: [ids: readonly string[]];
+  drawn: [stats: RenderStats, ms: number];
+  mirror: [tree: readonly AccessibleNode[]];
+  log: [line: string];
+  tool: [name: ToolName];
+  changed: [what: { readonly kind: "moved" | "drawn" | "connected" | "removed"; readonly ids: readonly string[] }];
+}
+
 export interface BoardOptions {
   /** What the canvases fill, and where the mirror and the text tool's field go. */
   readonly stage: HTMLElement;
@@ -165,6 +175,7 @@ export class Board {
   private readonly connectors = new Map<string, string>();
   private connectorCount = 0;
 
+  private readonly listeners = new Map<keyof BoardEvents, Set<unknown>>();
   private frame = 0;
   private viewKey = "";
   private stepped = false;
@@ -205,7 +216,7 @@ export class Board {
         this.router.pointerDown({ x: p.x, y: p.y, button: 0 });
         this.router.pointerUp({ x: p.x, y: p.y, button: 0 });
       },
-      onChange: (tree) => this.hooks.mirror?.(tree),
+      onChange: (tree) => this.emit("mirror", tree),
     });
     this.tools = new Tools({
       scene: () => this.scene,
@@ -223,12 +234,12 @@ export class Board {
       commit: (id, draw) => {
         this.drawGroup(id, draw);
         this.select([id]);
-        this.hooks.changed?.({ kind: "drawn", ids: [id] });
+        this.emit("changed", { kind: "drawn", ids: [id] });
       },
       recorder: options.recorder ?? {},
       stage: options.stage,
       redraw: () => this.render(),
-      log: (line) => this.hooks.log?.(line),
+      log: (line) => this.emit("log", line),
     });
     // Two fingers on the board pinch it: the press the first began is let go, and the board zooms and pans with them.
     this.fingers = new Gestures({
@@ -262,6 +273,41 @@ export class Board {
   /** Whether things on the board are being dragged. */
   get dragActive(): boolean {
     return this.dragging !== null;
+  }
+
+  /** Listens for something the board does; returns what stops listening. */
+  on<K extends keyof BoardEvents>(name: K, listener: (...args: BoardEvents[K]) => void): () => void {
+    let set = this.listeners.get(name);
+    if (!set) this.listeners.set(name, (set = new Set()));
+    set.add(listener);
+    return () => set.delete(listener);
+  }
+
+  private emit<K extends keyof BoardEvents>(name: K, ...args: BoardEvents[K]): void {
+    (this.hooks[name] as ((...a: BoardEvents[K]) => void) | undefined)?.(...args);
+    for (const l of this.listeners.get(name) ?? []) (l as (...a: BoardEvents[K]) => void)(...args);
+  }
+
+  /** What a thing on the board is, for an inspector: its kind, meta, op count, parents and bounds. */
+  describe(id: string): string {
+    const scene = this.scene;
+    const group = scene.getGroup(id);
+    const lines: string[] = [];
+    if (group) {
+      lines.push(`group ${id}`);
+      if (group.meta) lines.push(`meta ${JSON.stringify(group.meta)}`);
+      lines.push(`${scene.groupOps(id).length} ops`);
+    } else {
+      const op = scene.get(id);
+      if (!op) return `${id} is not on the board`;
+      lines.push(`${op.kind} op ${id}`);
+      if (op.kind === "text") lines.push(`"${op.text}"`);
+    }
+    const chain = scene.groupChain(id);
+    if (chain.length > 0) lines.push(`inside ${chain.join(" < ")}`);
+    const b = scene.bounds(id);
+    if (b) lines.push(`bounds ${b.x.toFixed(1)}, ${b.y.toFixed(1)}, ${b.width.toFixed(1)} × ${b.height.toFixed(1)}`);
+    return lines.join("\n");
   }
 
   // ---- The scene ----
@@ -338,7 +384,7 @@ export class Board {
     this.connectors.clear();
     this.setScene(scene);
     this.adoptConnectors();
-    this.hooks.selected?.(this.selection);
+    this.emit("selected", this.selection);
   }
 
   exists(id: string): boolean {
@@ -349,7 +395,7 @@ export class Board {
 
   select(ids: readonly string[]): void {
     this.selection = [...ids];
-    this.hooks.selected?.(this.selection);
+    this.emit("selected", this.selection);
     this.render();
   }
 
@@ -361,7 +407,7 @@ export class Board {
     this.hover = null;
     this.hooks.removed?.(ids);
     this.select(this.selection.filter((id) => this.exists(id)));
-    this.hooks.changed?.({ kind: "removed", ids });
+    this.emit("changed", { kind: "removed", ids });
   }
 
   /** Moves things by (dx, dy), with what moves with them. */
@@ -378,7 +424,7 @@ export class Board {
   useTool(name: ToolName): void {
     this.tools.cancel();
     this.tools.current = name;
-    this.hooks.tool?.(name);
+    this.emit("tool", name);
     this.options.canvas.style.cursor = this.cursor();
     this.render();
   }
@@ -417,8 +463,8 @@ export class Board {
     const end = (e: typeof from) => (e.key ? { key: e.key, x: e.point.x, y: e.point.y } : { x: e.point.x, y: e.point.y });
     this.drawConnector(id, { kind: "arrow", from: end(from), to: end(to), bend: 0.12, color: this.tools.style.stroke, seed: 1 + Math.floor(Math.random() * 1e6) });
     this.select([id]);
-    this.hooks.log?.(`arrow from ${from.key ?? "a point"} to ${to.key ?? "a point"}`);
-    this.hooks.changed?.({ kind: "connected", ids: [id] });
+    this.emit("log", `arrow from ${from.key ?? "a point"} to ${to.key ?? "a point"}`);
+    this.emit("changed", { kind: "connected", ids: [id] });
   }
 
   /** What an arrow's end would hold at a screen point: the host's key, or the outermost group under it; null over empty board. */
@@ -561,7 +607,7 @@ export class Board {
       this.renderer.invalidate();
     }
     const stats = this.stepped ? ({ mode: "idle", ops: 0, rects: [] } as const) : this.renderer.render();
-    if (stats.mode !== "idle") this.hooks.drawn?.(stats, performance.now() - start);
+    if (stats.mode !== "idle") this.emit("drawn", stats, performance.now() - start);
     this.drawOverlay(device, ui, dpr, part);
   }
 
@@ -734,7 +780,7 @@ export class Board {
       const sel = this.selection;
       if (shift(e)) this.select(id === null ? sel : sel.includes(id) ? sel.filter((s) => s !== id) : [...sel, id]);
       else this.select(id === null ? [] : [id]);
-      this.hooks.log?.(`click ${e.target ?? "empty space"}${e.path.length > 1 ? ` in ${e.path.slice(1).join(" < ")}` : ""}`);
+      this.emit("log", `click ${e.target ?? "empty space"}${e.path.length > 1 ? ` in ${e.path.slice(1).join(" < ")}` : ""}`);
     });
     router.on("*", "dragstart", (e) => {
       const grab = this.hooks.grab?.(e) ?? null;
@@ -760,7 +806,7 @@ export class Board {
       this.dragging = { ids, anchors, moved: { x: 0, y: 0 } };
       // What is below and above the dragged things is cached, so each frame draws two bitmaps and them.
       this.renderer.lift(ids);
-      this.hooks.log?.(`drag ${ids.join(", ")}`);
+      this.emit("log", `drag ${ids.join(", ")}`);
     });
     router.on("*", "drag", (e) => {
       if (this.grabbed) {
@@ -769,7 +815,7 @@ export class Board {
       }
       if (this.dragging) {
         this.dragTo(e.total!, snapping(e));
-        this.hooks.selected?.(this.selection);
+        this.emit("selected", this.selection);
       } else if (this.lasso) {
         this.lasso.push(router.toWorld(e.screen));
       } else if (this.panFrom) {
@@ -789,12 +835,12 @@ export class Board {
         const picked = new Set<string>();
         for (const opId of scene.queryPolygon(this.lasso)) picked.add(scene.groupChain(opId).at(-1) ?? opId);
         this.select([...picked]);
-        this.hooks.log?.(`lasso picked ${picked.size}`);
+        this.emit("log", `lasso picked ${picked.size}`);
       }
       const drag = this.dragging;
       if (drag && (drag.moved.x !== 0 || drag.moved.y !== 0)) {
         for (const id of drag.ids) if (this.connectors.has(id)) this.movedConnector(id, drag.moved.x, drag.moved.y);
-        this.hooks.changed?.({ kind: "moved", ids: drag.ids });
+        this.emit("changed", { kind: "moved", ids: drag.ids });
       }
       this.dragging = null;
       this.renderer.drop();
@@ -806,7 +852,7 @@ export class Board {
     router.on("*", "keydown", (e) => {
       const key = (e.input as { key: string }).key;
       if ((key === "Delete" || key === "Backspace") && this.selection.length > 0) {
-        this.hooks.log?.(`remove ${this.selection.join(", ")}`);
+        this.emit("log", `remove ${this.selection.join(", ")}`);
         this.remove(this.selection);
       }
     });
