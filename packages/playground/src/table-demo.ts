@@ -4,7 +4,7 @@
 // made from its row number, and sorting keeps an order of row numbers. Cells
 // are selected as a spreadsheet's are, and copied as tab-separated text.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RouterEvent, type Scene, VirtualGroup } from "canvas-ir";
-import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
+import { TITLE_LEFT, closeBox, drawClose, inBox } from "@canvas-ir/toolkit";
 import { origin } from "./collage";
 
 export const TABLE_ID = "million-rows";

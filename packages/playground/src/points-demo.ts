@@ -6,7 +6,7 @@
 // hover. The wheel over the chart zooms its time axis and a drag pans it;
 // zooming the board changes the detail too.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type Rect, type Scene, VirtualGroup } from "canvas-ir";
-import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
+import { TITLE_LEFT, closeBox, drawClose, inBox } from "@canvas-ir/toolkit";
 import { WheelGesture } from "./wheel";
 import { origin } from "./collage";
 

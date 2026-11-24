@@ -4,9 +4,7 @@
 // drawing style, selection, snapping, rendering, accessibility, devtools,
 // pasting SVG and the event log.
 import type { Devtools } from "../devtools";
-import type { ToolName } from "../tools";
-import type { Card, CardLayer } from "./cards";
-import { type ButtonLook, FONT, type TextBoxState, button, buttonWidth, section, slider, swatches, textBox, textField, toggle } from "./kit";
+import { type ToolName, type Card, type CardLayer, type ButtonLook, FONT, type TextBoxState, button, buttonWidth, section, slider, swatches, textBox, textField, toggle } from "@canvas-ir/toolkit";
 
 export interface Action {
   readonly text: string;

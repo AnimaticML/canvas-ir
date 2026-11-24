@@ -1,12 +1,11 @@
 # Toolkit
 
-`@canvas-ir/toolkit` (`packages/toolkit`) holds the editor and interaction mechanisms that apps built on CanvasIR were each writing for themselves. It follows [the toolkit proposal](proposal-world-runtime-toolkit.md). This page records:
+`@canvas-ir/toolkit` (`packages/toolkit`) holds the editor and interaction mechanisms that apps built on CanvasIR were each writing for themselves, taken out of the playground so the next app starts from them. It follows [the toolkit proposal](proposal-world-runtime-toolkit.md). This page records:
 
-- the comparison of the three apps that do this today;
-- what the first slice extracts;
-- the host contract;
-- how Harmonica and ML Painter would take it up;
-- what stays local, and the slices to come.
+- the comparison of the playground with two apps that do the same things, Harmonica and ML Painter;
+- what the toolkit holds, and its host contract;
+- how those two apps would use it, as examples of usage;
+- what stays in the playground, and what to take out next.
 
 The toolkit decides what the pointers did, how the view moves and when to draw. The app decides what that means, keeps its document and history, and draws its own content. The toolkit has no document model, undo stack or collaboration.
 
@@ -27,9 +26,11 @@ These were checked against Playground at `a174b16`, Harmonica at [`5bad403`](htt
 
 All three already use CanvasIR's `Scene`, `Renderer`, `EventRouter` and `AccessibilityLayer`. What they repeat is the wiring around those, not the primitives themselves.
 
-## The first slice: view, gestures, host, actions
+## What the toolkit holds
 
-The order follows the evidence. The view and input mechanisms are in all three apps (five copies), so they come first.
+It came out in two steps. The view and input mechanisms, in all three apps (five copies), came first. The second step took the playground's reusable board UI out whole: cards, window parts, connectors, drawing tools and controls, which only it had built in full.
+
+### View, gestures, canvas host and actions
 
 - **`Viewport`** is a uniform zoom and a translation, with `matrix` for a router or the accessibility layer and `device(ratio)` for a renderer. It has `toWorld`/`toScreen`, `panBy`, `zoomAt(factor, anchor)`, `zoomTo`, `fit`, `setMatrix` for hosts that keep a matrix, and `onChange`. Zoom limits and a `clamp(view)` are applied on every change, which covers Painter's bounds, Harmonica's limits and centering at the least zoom. It is pure, with no DOM.
 - **`wheelZoom(dy)`** and **`wheelPixels(event, pageHeight)`** turn a wheel into a factor, from any device's units.
@@ -44,6 +45,36 @@ The order follows the evidence. The view and input mechanisms are in all three a
 - **`mountCanvas(canvas, { draw, maxPixelRatio, measure })`** keeps a canvas at its laid-out size in device pixels and draws at most once a frame (`schedule`, `flush`, `dispose`). It also redraws on resize.
 - **`Actions`** keeps what a board's controls do by id. A tap's hit path, Enter on the mirror and an agent's call all run the same function, and `list()` says what can be done.
 
+### Cards, windows, connectors, tools and controls
+
+These moved from the playground unchanged in behavior, and the playground imports them from the toolkit.
+
+- **`CardLayer` and `Card`** (`cards.ts`): titled cards of widgets in a scene of their own over the board, drawn with the board's view, so they pan and zoom with it but stay out of its drawing and exports. Each card has:
+  - a frame that drags it;
+  - content that scrolls with the wheel, clipped;
+  - its own router and accessibility mirror.
+
+  New with the move:
+  - `CardOptions.onMove(x, y)` is called once when a drag of the frame ends, so a host that keeps card positions in its document commits them there.
+  - `card.moveTo(x, y)` and `card.position` let the host put a card back on undo.
+  - `CardLayer` is a `PointerLayer`, so `bindGestures(canvas, gestures, { above: layer })` sends presses and hovers over a card to the cards and the rest to the board's gestures. The playground's `main.ts` still routes them by hand.
+- **Window parts** (`window.ts`):
+  - the close button (`closeBox`, `drawClose`, `inBox`, `TITLE_LEFT`), which every demo window shares;
+  - `windowFrame()`, a title bar and border around content drawn straight on the board.
+- **Connectors** (`connectors.ts`): arrows whose ends hold on to what they join, by a key the host resolves to a box, or stay loose.
+  - `route()` places each end on its box's edge, facing along the bow.
+  - `drawArrow()` and `drawRing()` draw them with a repeatable hand-drawn wobble.
+  - `toMeta()` and `fromMeta()` keep a connector in its group's meta, so it is saved like any drawing.
+
+  What the keys mean, and when to draw again, is the host's.
+- **Drawing tools** (`tools.ts`): pen, rectangle, ellipse, text and arrow, behind a `ToolHost`. The host says:
+  - how to snap;
+  - what a key at a point is, and its box;
+  - how to commit a recorded group, and how to connect two ends.
+
+  The tools draw previews and record the new drawing.
+- **Controls** (`controls.ts`): button, toggle, slider, swatches, text box and field, section headings, the palette, and the text sink (one hidden textarea that takes typing for every text field). They mount on a `Surface`, which a card is.
+
 ### The host contract
 
 | The toolkit | The host |
@@ -53,10 +84,13 @@ The order follows the evidence. The view and input mechanisms are in all three a
 | Calls `cancel` when a press is abandoned. | Puts back any preview, and commits nothing. |
 | Calls `dragEnd` once. | Decides whether a drag commits once at the end (the example) or as it goes (Harmonica's Codec moves), and records that in its own history. |
 | Runs an action by id. | Registers the actions, and what they change in its document. |
+| A card's widget calls back; a card's frame ends a drag (`onMove`). | Commits what the widget means, or the card's new place, and calls `moveTo` to put a card back. |
+| A connector asks for the box of a key. | Says what the key is and where it is, and records connectors in its drawing. |
+| A tool records a drawing and asks the host to commit it. | Puts it in its scene and its history. |
 
 ### In the playground
 
-The board in `main.ts` now keeps its view in a `Viewport`:
+The playground imports the cards, window parts, connectors, tools and controls from the toolkit. Its board in `main.ts` keeps its view in a `Viewport`:
 - the wheel zooms through `wheelZoom`/`wheelPixels`;
 - a drag on empty board pans with `panBy`;
 - the matrix arithmetic it replaces is gone.
@@ -68,22 +102,24 @@ The board also gained two-finger pinch, through `Gestures` fed beside its router
 `packages/toolkit/example` is a separate page with its own state that imports only the public `canvas-ir` and `@canvas-ir/toolkit` exports. It has:
 - cards with title bars to drag;
 - a button on each, pressed by pointer or by Enter on the mirror;
-- arrows between the cards;
+- connectors between the cards that follow them as they move;
+- a controls card over the board, whose button adds a card and whose slider bends every connector, dragged by its frame;
 - pan, wheel zoom and pinch;
 - Escape and a second finger to cancel a drag;
-- undo of its own.
+- undo of its own, which also puts the controls card back.
 
-Its document is a plain object with a history. A drag previews as it goes and commits once.
+Its document is a plain object with a history. A drag previews as it goes and commits once, and a slider's run of changes is one step.
 
 - Run it with `bun run --cwd packages/toolkit example`.
 - `bun run --cwd packages/toolkit check` builds it, opens it in Chromium and drives each of those interactions, including touch through pointer events. It runs in CI.
 
-## Taking it up in Harmonica and ML Painter
+## Usage in Harmonica and ML Painter
 
-Neither app is migrated in this slice. Both vendor CanvasIR (`vendor/canvas-ir/packages/core`, or a workspace link), so each would vendor `packages/toolkit` beside it. The changes are local to each app's input code:
+These two apps are here as concrete examples of what the toolkit has to serve, not as work to do in their repositories. In each, using it would be local to the app's input code:
 
 - **Harmonica**:
   - Replace `camera`, `toWorld` and the wheel handler with a `Viewport({ minZoom: 0.45, maxZoom: 2.4 })`, and keep the scene, renderer, router and accessibility layer across view changes. A pan or zoom then calls `renderer.setView` and redraws, instead of re-recording the whole board. Zoom also follows the pointer.
+  - Card frames and connectors: `Card`'s frame with `onMove` (or a drag preview committed per move), and `route()` with its own drawing in place of `drawConnectorArrow()`.
   - `Gestures` replaces `dragState`:
     - `press` hit tests for a note, a title bar or empty board;
     - `drag` calls `collabDoc.moveBoardCard` or `viewport.panBy`;
@@ -96,16 +132,22 @@ Neither app is migrated in this slice. Both vendor CanvasIR (`vendor/canvas-ir/p
   - In `main.ts`, `scaleCanvas()`/`clampPan()` become a viewport whose clamp centers at the least zoom. `Gestures` handles the pinch and the post-pinch finger, while the drag targets (palette wheel, dock, corners, artwork) stay Painter's.
   - `mountCanvas({ maxPixelRatio: 2 })` replaces the three resize and frame loops. `Actions` replaces both action maps.
 
-## What stays local, for now
+## What stays in the playground, for now
 
-- **The playground's own frame loop.** It draws a part of the page for the 3D host's capture and three canvases, which `mountCanvas` doesn't do. Its pointer routing between the cards and the board also stays, and its board drags still go through `EventRouter`.
-- **Each app's drawing, styles, palettes and drag targets,** and Harmonica's notation and Codec operations.
-- **Harmonica's React HUD and panels,** which are DOM and not candidates.
+- **The board itself, in `main.ts`.** This is the largest piece left. It wires the scene, router, tools, cards, connectors, selection and dragging, snapping, tooltips, the frame loop for three canvases and the 3D host's capture, and the saved layout. Its pointer routing between the cards and the board is the hand-written form of `bindGestures({ above })`.
+- **The playground's own cards and icons:** `ui/chrome.ts` (the toolbar and inspector cards, tied to its devtools and tools) and `ui/features.ts` (the demo icons).
+- **The demos, and their content.**
 
-## Next slices
+## Next
 
-1. **Card frames and dragging.** `ui/cards.ts` and `ui/window.ts` against Harmonica's frames and title-bar drags. This is a frame, a title bar and a drag that calls the host to move.
-2. **Connectors.** Playground's `connectors.ts` against Harmonica's `drawConnectorArrow`. The edge geometry may belong in core, and the drawing and styles in the toolkit.
-3. **Drawing tools and `ToolHost`,** with preview, snap, commit and cancel, on top of `Gestures`.
-4. **Controls from `ui/kit.ts`.** These are the knob, slider, button and text input, and the `Surface` contract.
-5. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
+1. **A board.** Take out of `main.ts` what any board needs, behind a host contract like `ToolHost`'s:
+   - the scene, router and accessibility mirror kept in step with a `Viewport`;
+   - selection, hover outlines and dragging of drawn things, with snapping;
+   - the arrow tool's keys and boxes, and connectors drawn again when what they hold moves;
+   - the cards' layer and the pointer routing between it and the board;
+   - the frame loop.
+
+   The saved layout, the demos and the collage stay the playground's. The example would then be a board with a document of its own.
+2. **Inspector and toolbar cards.** Generalize `ui/chrome.ts` into cards built from what the host lists, such as tools, styles and the selection's properties.
+3. **Desktop icons and windows.** `ui/features.ts`'s icons and the demo windows' frames, as one launcher-and-window mechanism.
+4. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.

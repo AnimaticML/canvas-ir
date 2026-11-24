@@ -29,10 +29,11 @@ import {
   type IRDocument,
   type JsonValue,
   parseDocument,
+  type Rect,
 } from "canvas-ir";
 import { vectorize } from "@canvas-ir/vectorize";
 import { LiveText } from "@canvas-ir/text";
-import { Gestures, Viewport, wheelPixels, wheelZoom } from "@canvas-ir/toolkit";
+import { Gestures, Viewport, wheelPixels, wheelZoom, type ToolName, Tools, windowFrame, type Connector, drawArrow, drawRing, fromMeta, route, toMeta, CardLayer, textSink } from "@canvas-ir/toolkit";
 import { datumAt } from "./charts";
 import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
@@ -48,15 +49,10 @@ import { MAP_AT, MAP_ID, WorldMap } from "./map-demo";
 import { BOOK_AT, BOOK_ID, warAndPeace } from "./book-demo";
 import { DECLARATION_AT, DECLARATION_ID, declaration } from "./declaration-demo";
 import { Reader } from "./reader";
-import { type ToolName, Tools } from "./tools";
 import { type ControlHooks, type LiveSpec, type Sample, samples } from "./samples";
 import { Chrome, type Settings } from "./ui/chrome";
 import { type Feature, featureIcon } from "./ui/features";
-import { windowFrame } from "./ui/window";
 import { CONNECTORS, CONTENT as CONTENT_AT, DRAWINGS, ICONS, WINDOWS, origin } from "./collage";
-import { type Box as ConnectorBox, type Connector, drawArrow, drawRing, fromMeta, route, toMeta } from "./connectors";
-import { CardLayer } from "./ui/cards";
-import { textSink } from "./ui/kit";
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
@@ -1430,11 +1426,11 @@ function drawOnBoard(id: string, draw: (c: RecordingContext) => void, meta: Reco
   });
 }
 
-// Connectors: arrows that hold on to the things they join and are drawn again when those move (see connectors.ts).
+// Connectors: arrows that hold on to the things they join and are drawn again when those move (see the toolkit's connectors.ts).
 /** The connectors on the board, by group id, with where each was last drawn from and to, to tell when to draw it again. */
 const connectors = new Map<string, string>();
 /** The box of what a connector's end holds: an icon, content, a demo window or anything else on the board; null when it isn't there. */
-const boxOfKey = (key: string): ConnectorBox | null => {
+const boxOfKey = (key: string): Rect | null => {
   const at = key.indexOf(":");
   const kind = key.slice(0, at);
   const id = key.slice(at + 1);

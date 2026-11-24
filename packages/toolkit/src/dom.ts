@@ -91,6 +91,21 @@ export interface WheelInput {
   readonly metaKey: boolean;
 }
 
+/**
+ * Something drawn over the board that takes its own pointers, such as a layer of cards: a press on it, and a pointer
+ * hovering over it, go to it instead of the gestures. `CardLayer` is one.
+ */
+export interface PointerLayer {
+  /** Whether it has something under a point, in the element's CSS pixels. */
+  hits(point: Point): boolean;
+  down(point: Point, e: PointerEvent): void;
+  move(point: Point, e: PointerEvent): void;
+  up(point: Point, e: PointerEvent): void;
+  cancel(): void;
+  /** The pointer moved off it, onto the board or out of the element. */
+  leave(point: Point): void;
+}
+
 export interface BindOptions {
   /** Keep a pointer that pressed here while it moves elsewhere. Default true. */
   readonly capture?: boolean;
@@ -100,6 +115,8 @@ export interface BindOptions {
   readonly leave?: () => void;
   /** Every pointer event before the gestures see it, for hosts that also feed an EventRouter its modifier keys. */
   readonly raw?: (e: PointerEvent, point: Point) => void;
+  /** A layer over the board that takes the presses and hovers over what it has; the board's gestures get the rest. */
+  readonly above?: PointerLayer;
 }
 
 /** Feeds an element's pointer and wheel events to gestures, in the element's CSS pixels. Returns what unbinds them. */
@@ -108,6 +125,10 @@ export const bindGestures = (element: HTMLElement, gestures: Gestures, options: 
     const r = element.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
+  const above = options.above;
+  // Pointers pressed on the layer above, which it keeps until they are up; and whether a pointer hovers over it.
+  const claimed = new Set<number>();
+  let over = false;
   const down = (e: PointerEvent): void => {
     if (options.capture !== false) {
       // A pointer a host page forwards (an embedding page showing this on a 3D panel) can't be captured.
@@ -117,23 +138,46 @@ export const bindGestures = (element: HTMLElement, gestures: Gestures, options: 
     }
     const p = at(e);
     options.raw?.(e, p);
+    if (above && gestures.active === 0 && above.hits(p)) {
+      claimed.add(e.pointerId);
+      above.down(p, e);
+      return;
+    }
     gestures.down(e.pointerId, p);
   };
   const move = (e: PointerEvent): void => {
     const p = at(e);
     options.raw?.(e, p);
+    if (claimed.has(e.pointerId)) return above!.move(p, e);
+    if (above && gestures.active === 0) {
+      const hit = above.hits(p);
+      if (hit) {
+        over = true;
+        return above.move(p, e);
+      }
+      if (over) {
+        over = false;
+        above.leave(p);
+      }
+    }
     gestures.move(e.pointerId, p);
   };
   const up = (e: PointerEvent): void => {
     const p = at(e);
     options.raw?.(e, p);
+    if (claimed.delete(e.pointerId)) return above!.up(p, e);
     gestures.up(e.pointerId, p);
   };
   const cancel = (e: PointerEvent): void => {
     options.raw?.(e, at(e));
+    if (claimed.delete(e.pointerId)) return above!.cancel();
     gestures.cancel(e.pointerId);
   };
-  const leave = (): void => {
+  const leave = (e: PointerEvent): void => {
+    if (over && claimed.size === 0) {
+      over = false;
+      above!.leave(at(e));
+    }
     if (gestures.active === 0) options.leave?.();
   };
   const wheel = (e: WheelEvent): void => {

@@ -2,12 +2,12 @@
 // gathered by what they have to do with each other rather than lined up on a grid. Reading in one corner, drawing and
 // animation in another, data in a lab, the map and the stars out there, the toys in a box; and in the middle, drawn
 // with the board's own pen and text, a day at this desk: what to open when, with arrows to the icons that hold on to
-// what they join (see connectors.ts).
+// what they join (see the toolkit's connectors.ts).
 //
 // These are the places things start in. Whatever is moved, drawn or deleted on the board is remembered over them
 // (see `Layout` in main.ts), so this is only the first arrangement.
 import type { RecordingContext } from "canvas-ir";
-import type { Connector } from "./connectors";
+import type { Connector } from "@canvas-ir/toolkit";
 
 export interface Place {
   readonly x: number;

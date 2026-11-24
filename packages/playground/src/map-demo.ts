@@ -10,9 +10,8 @@
 // time, and pins them; a click on a pin reads its article in a panel over
 // the map's right side, whose links open more articles and fly to them.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
-import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
+import { TITLE_LEFT, closeBox, drawClose, inBox, fit } from "@canvas-ir/toolkit";
 import worldUrl from "./map/world.bin" with { type: "file" };
-import { fit } from "./ui/kit";
 import { WheelGesture } from "./wheel";
 import { Reader, type ReaderHost, type ReaderSpec } from "./reader";
 import { type Pin, article, articlesIn, titleNear, titleOf } from "./wiki";

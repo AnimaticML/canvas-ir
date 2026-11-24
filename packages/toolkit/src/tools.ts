@@ -4,7 +4,7 @@
 // board like a drag does. Text is typed into the hidden textarea every text
 // field shares and drawn on the overlay as it is typed. An arrow is drawn from one
 // thing to another and holds on to both (the board draws it; see connectors.ts).
-import { textSink } from "./ui/kit";
+import { textSink } from "./controls";
 import { RecordingContext, type Matrix2D, type Point, type RecordingContextOptions, type Scene, applyToPoint, fitCurve, simplifyPolyline, traceCurve } from "canvas-ir";
 
 export type ToolName = "select" | "pen" | "rect" | "ellipse" | "text" | "arrow";

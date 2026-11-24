@@ -1,6 +1,6 @@
 // Builds the example, opens it in Chromium and drives it as a person would: drags a card, presses buttons with the
 // pointer and with the keyboard on the accessibility mirror, pans, zooms with the wheel and with two fingers, lets a
-// second finger cancel a drag, and undoes. Run with `bun run --cwd packages/toolkit check`.
+// second finger cancel a drag, undoes, and uses the controls card over the board. Run with `bun run --cwd packages/toolkit check`.
 import { chromium } from "playwright-core";
 
 const out = new URL("./dist/", import.meta.url).pathname;
@@ -117,6 +117,62 @@ await page.keyboard.press("Control+z");
 await page.keyboard.press("Control+z");
 s = await card("sketch");
 expect(s.x === 300 && s.y === 30 && (await state()).history === 0, "undo steps back through the application's own history");
+
+// The controls card: a layer over the board whose widgets call back into the page, which commits.
+type More = { cards: number; bend: number; controls: { x: number; y: number }; at: { x: number; y: number }; link: { x: number; y: number; width: number; height: number } | null };
+const more = (): Promise<More> =>
+  page.evaluate(() => {
+    const e = (window as any).example;
+    return { cards: e.doc.cards.length, bend: e.doc.bend, controls: e.doc.controls, at: e.controls.position, link: e.scene.bounds("board/link:idea-sketch") };
+  });
+const click = async (x: number, y: number) => {
+  const q = await screen(x, y);
+  await page.mouse.click(q.x, q.y);
+};
+// Back to where the view started, so the card is on screen.
+await page.evaluate(() => (window as any).example.viewport.set({ zoom: 1, x: 40, y: 40 }));
+await page.waitForTimeout(50);
+let m = await more();
+const h1 = (await state()).history;
+// "Add a card" is 12 px into the card's content, under its 38 px title.
+await click(m.controls.x + 110, m.controls.y + 38 + 27);
+let m2 = await more();
+expect(m2.cards === m.cards + 1 && (await state()).history === h1 + 1, "a button on the controls card adds a card through the page's commit");
+
+// Dragging the bend slider across is one step to undo, and the connectors are drawn again bowed the other way.
+const track = { x0: m.controls.x + 12 + 72, x1: m.controls.x + 12 + 196 - 52 };
+let q = await screen(track.x0 + 2, m.controls.y + 38 + 68);
+await page.mouse.move(q.x, q.y);
+await page.mouse.down();
+const end = await screen(track.x1 + 20, m.controls.y + 38 + 68);
+await page.mouse.move(end.x, end.y, { steps: 6 });
+await page.mouse.up();
+m2 = await more();
+expect(m2.bend === 0.5 && (await state()).history === h1 + 2, "the bend slider sets the document's bend, as one step");
+expect(JSON.stringify(m2.link) !== JSON.stringify(m.link), "the connectors are drawn again for the new bend");
+
+// The card's frame drags it over the board; the move is committed when the drag ends, and undo puts it back.
+q = await screen(m.controls.x + 60, m.controls.y + 18);
+await page.mouse.move(q.x, q.y);
+await page.mouse.down();
+await page.mouse.move(q.x + 60, q.y + 40, { steps: 5 });
+await page.mouse.up();
+m2 = await more();
+expect(m2.controls.x > m.controls.x + 20 && m2.at.x === m2.controls.x && (await state()).history === h1 + 3, "dragging the controls card commits its new place once");
+await page.keyboard.press("Control+z");
+m2 = await more();
+expect(m2.controls.x === m.controls.x && m2.at.x === m.controls.x && m2.at.y === m.controls.y, "undo puts the controls card back");
+
+// A connector holds on to the cards it joins: when a card moves, the arrow is drawn edge to edge again.
+const linkBefore = (await more()).link!;
+const sk = await card("sketch");
+q = await screen(sk.x + 60, sk.y + 14);
+await page.mouse.move(q.x, q.y);
+await page.mouse.down();
+await page.mouse.move(q.x, q.y + 120, { steps: 5 });
+await page.mouse.up();
+const linkAfter = (await more()).link!;
+expect(linkAfter.y + linkAfter.height > linkBefore.y + linkBefore.height + 40, "a connector follows the card it holds");
 
 expect(errors.length === 0, `no page errors${errors.length ? `: ${errors.join("; ")}` : ""}`);
 await browser.close();

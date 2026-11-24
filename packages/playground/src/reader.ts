@@ -10,8 +10,7 @@
 // with the text package's selection rects and copied as plain text.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Scene, VirtualGroup } from "canvas-ir";
 import { type Block, type Direction, type Inline, type TextLayout, type TextPosition, canvasMeasurer, layoutText, positionAtPoint, selectionRects } from "@canvas-ir/text";
-import { fit, textSink } from "./ui/kit";
-import { TITLE_LEFT, closeBox, drawClose } from "./ui/window";
+import { fit, textSink, TITLE_LEFT, closeBox, drawClose } from "@canvas-ir/toolkit";
 
 const TITLE = 46;
 const STATUS = 28;

@@ -1,9 +1,9 @@
-// A small board built only from public imports: cards with title bars to drag, a button on each, arrows between them,
-// panned and zoomed by mouse, wheel, trackpad or two fingers, with the accessibility mirror reading and pressing the
-// same buttons. Its document is a plain object with its own undo: the toolkit decides what the pointers did, and this
-// page decides what that means and keeps it, as Harmonica's Codec document or Painter's state would.
-import { AccessibilityLayer, RecordingContext, Renderer, Scene, type Point } from "canvas-ir";
-import { Actions, Gestures, Viewport, bindGestures, mountCanvas, wheelZoom } from "@canvas-ir/toolkit";
+// A small board built only from public imports: cards with title bars to drag, a button on each, connectors between
+// them, and a card of controls over the board, panned and zoomed by mouse, wheel, trackpad or two fingers, with the
+// accessibility mirror reading and pressing the same buttons. Its document is a plain object with its own undo: the
+// toolkit decides what the pointers did and draws its parts, and this page decides what that means and keeps it.
+import { AccessibilityLayer, RecordingContext, Renderer, Scene, type Point, type Rect } from "canvas-ir";
+import { Actions, CardLayer, Gestures, Viewport, bindGestures, button, drawArrow, mountCanvas, route, slider, wheelZoom } from "@canvas-ir/toolkit";
 
 interface Card {
   readonly id: string;
@@ -15,6 +15,10 @@ interface Card {
 interface Doc {
   readonly cards: readonly Card[];
   readonly links: readonly { readonly from: string; readonly to: string }[];
+  /** How far every connector bows, set from the controls card. */
+  readonly bend: number;
+  /** Where the controls card is: moving it is an edit like any other, so undo puts it back. */
+  readonly controls: Point;
 }
 
 const W = 180;
@@ -32,15 +36,21 @@ let doc: Doc = {
     { from: "idea", to: "sketch" },
     { from: "idea", to: "shot" },
   ],
+  bend: 0.15,
+  controls: { x: 40, y: 260 },
 };
 const history: Doc[] = [];
-const commit = (next: Doc): void => {
-  history.push(doc);
+/** What the last commit changed, so a slider's run of changes is one step to undo. */
+let lastKind: string | null = null;
+const commit = (next: Doc, kind: string | null = null): void => {
+  if (kind === null || kind !== lastKind) history.push(doc);
+  lastKind = kind;
   doc = next;
   draw(doc);
 };
 const undo = (): void => {
   const was = history.pop();
+  lastKind = null;
   if (was) {
     doc = was;
     draw(doc);
@@ -58,21 +68,13 @@ const record = (d: Doc) => {
     const b = byId.get(link.to);
     if (!a || !b) continue;
     ctx.beginGroup({ id: `link:${link.from}-${link.to}`, meta: { role: "img", label: `${a.title} leads to ${b.title}` } });
-    const from = { x: a.x + W, y: a.y + H / 2 };
-    const to = { x: b.x, y: b.y + H / 2 };
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.bezierCurveTo(from.x + 50, from.y, to.x - 50, to.y, to.x, to.y);
-    ctx.strokeStyle = "#7a8aa0";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(to.x, to.y);
-    ctx.lineTo(to.x - 10, to.y - 5);
-    ctx.lineTo(to.x - 10, to.y + 5);
-    ctx.closePath();
-    ctx.fillStyle = "#7a8aa0";
-    ctx.fill();
+    // Each end holds on to its card, so the arrow follows a card as it is dragged, edge to edge.
+    const connector = { kind: "arrow", from: { key: a.id, x: a.x, y: a.y }, to: { key: b.id, x: b.x, y: b.y }, bend: d.bend, color: "#7a8aa0", seed: 7 } as const;
+    const ends = route(connector, (key) => {
+      const c = byId.get(key);
+      return c ? ({ x: c.x, y: c.y, width: W, height: H } satisfies Rect) : null;
+    });
+    drawArrow(ctx, ends.from, ends.to, connector);
     ctx.endGroup();
   }
   for (const c of d.cards) {
@@ -112,6 +114,7 @@ const record = (d: Doc) => {
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
+const cardCanvas = document.getElementById("cards") as HTMLCanvasElement;
 // Recorded through replaceGroup from the start, so the ids are the same ("board/card:…") before and after a change.
 const scene = new Scene({ version: 1, ops: [] });
 scene.replaceGroup("board", record(doc));
@@ -131,9 +134,61 @@ const bindActions = (d: Doc): void => {
 };
 const a11y = new AccessibilityLayer(scene, stage, { onActivate: (id) => actions.run(id) });
 
+// A card of controls over the board, on a layer of its own: it pans and zooms with the board but isn't in its drawing.
+// Its widgets call back into this page, which commits; dragging its frame moves it, committed when the drag ends.
+const layer = new CardLayer(cardCanvas, stage, {
+  recorder: {},
+  onCursor: (cursor) => (canvas.style.cursor = cursor ?? ""),
+  onFocus: () => {},
+});
+let added = 0;
+const controls = layer.card({
+  id: "controls",
+  title: "Controls",
+  x: doc.controls.x,
+  y: doc.controls.y,
+  width: 220,
+  build: (card, width) => {
+    card.mount(
+      button({
+        id: "add",
+        panel: card,
+        box: { x: 12, y: 12, w: width - 24, h: 30 },
+        text: "Add a card",
+        look: "primary",
+        onClick: () => {
+          const id = `new${++added}`;
+          const last = doc.cards[doc.cards.length - 1]!;
+          commit({ ...doc, cards: [...doc.cards, { id, title: `Card ${added}`, x: last.x + 40, y: last.y + 140, count: 0 }], links: [...doc.links, { from: last.id, to: id }] });
+        },
+      }),
+    );
+    card.mount(
+      slider({
+        id: "bend",
+        panel: card,
+        box: { x: 12, y: 54, w: width - 24, h: 28 },
+        text: "Bend",
+        min: -0.5,
+        max: 0.5,
+        step: 0.05,
+        value: doc.bend,
+        format: (v) => v.toFixed(2),
+        onChange: (bend) => commit({ ...doc, bend }, "bend"),
+      }),
+    );
+    return 94;
+  },
+  onMove: (x, y) => commit({ ...doc, controls: { x, y } }),
+});
+
 function draw(d: Doc): void {
   scene.replaceGroup("board", record(d));
   bindActions(d);
+  // The controls card shows the document too: after an undo, its place and its slider's value.
+  controls.moveTo(d.controls.x, d.controls.y);
+  const bend = controls.get<{ value: number }>("bend");
+  if (bend && bend.state.value !== d.bend) bend.setState({ value: d.bend });
   host.schedule();
 }
 
@@ -142,6 +197,11 @@ const host = mountCanvas(canvas, {
     renderer.setView(viewport.device(pixelRatio), canvas.width, canvas.height);
     a11y.setView(viewport.matrix);
     renderer.render();
+    if (cardCanvas.width !== canvas.width || cardCanvas.height !== canvas.height) {
+      cardCanvas.width = canvas.width;
+      cardCanvas.height = canvas.height;
+    }
+    layer.setView(viewport.matrix, viewport.device(pixelRatio));
   },
 });
 viewport.onChange(() => host.schedule());
@@ -191,7 +251,12 @@ const gestures = new Gestures({
   },
 });
 bindGestures(canvas, gestures, {
-  wheel: ({ point, deltaY }) => viewport.zoomAt(wheelZoom(deltaY), point),
+  // Presses and hovers over the controls card go to it; the rest are the board's.
+  above: layer,
+  wheel: (input) => {
+    if (layer.hits(input.point) && layer.wheel({ x: input.point.x, y: input.point.y, deltaX: input.deltaX, deltaY: input.deltaY, ctrlKey: input.ctrlKey, metaKey: input.metaKey })) return;
+    viewport.zoomAt(wheelZoom(input.deltaY), input.point);
+  },
 });
 window.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "z") undo();
@@ -201,4 +266,4 @@ document.getElementById("undo")!.addEventListener("click", undo);
 bindActions(doc);
 
 // For the check script and for poking at it from the console.
-Object.assign(window, { example: { get doc() { return doc; }, history, viewport, actions } });
+Object.assign(window, { example: { get doc() { return doc; }, history, viewport, actions, layer, scene, controls } });

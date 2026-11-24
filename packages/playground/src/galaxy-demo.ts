@@ -10,7 +10,7 @@
 // position as a whole light year plus a fraction and everything is drawn
 // relative to it: the board's own float coordinates would run out long before.
 import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
-import { TITLE_LEFT, closeBox, drawClose, inBox } from "./ui/window";
+import { TITLE_LEFT, closeBox, drawClose, inBox } from "@canvas-ir/toolkit";
 import { WheelGesture } from "./wheel";
 import { origin } from "./collage";
 

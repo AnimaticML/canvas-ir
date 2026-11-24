@@ -18,7 +18,19 @@ import {
   Scene,
   applyToPoint,
 } from "canvas-ir";
-import { FONT, type Palette, type Surface, palette } from "./kit";
+import { FONT, type Palette, type Surface, palette } from "./controls";
+import type { PointerLayer } from "./dom";
+
+type Modifiers = { readonly button?: number; readonly altKey?: boolean; readonly shiftKey?: boolean; readonly ctrlKey?: boolean; readonly metaKey?: boolean };
+const input = (p: { x: number; y: number }, e?: Modifiers) => ({
+  x: p.x,
+  y: p.y,
+  button: e?.button ?? 0,
+  altKey: !!e?.altKey,
+  shiftKey: !!e?.shiftKey,
+  ctrlKey: !!e?.ctrlKey,
+  metaKey: !!e?.metaKey,
+});
 
 const TITLE = 38;
 const translate = (x: number, y: number): Matrix2D => ({ a: 1, b: 0, c: 0, d: 1, e: x, f: y });
@@ -32,7 +44,7 @@ export interface LayerOptions {
 }
 
 /** The scene, router and renderer the cards share, drawn over the board. */
-export class CardLayer {
+export class CardLayer implements PointerLayer {
   readonly scene = new Scene({ version: 1, ops: [] });
   readonly router: EventRouter;
   readonly components: Components;
@@ -90,6 +102,24 @@ export class CardLayer {
   /** Whether a card is under a point, in CSS pixels over the board. */
   hits(screen: { x: number; y: number }): boolean {
     return this.scene.hitTest(this.router.toWorld(screen)).length > 0;
+  }
+
+  // Pointers, in CSS pixels over the board, for `bindGestures({ above: layer })` or a host routing them itself.
+  down(p: { x: number; y: number }, e?: Modifiers): void {
+    this.router.pointerDown(input(p, e));
+  }
+  move(p: { x: number; y: number }, e?: Modifiers): void {
+    this.router.pointerMove(input(p, e));
+  }
+  up(p: { x: number; y: number }, e?: Modifiers): void {
+    this.router.pointerUp(input(p, e));
+  }
+  cancel(): void {
+    this.router.pointerCancel();
+  }
+  leave(p: { x: number; y: number }): void {
+    this.router.pointerLeave(input(p));
+    this.options.onCursor(null);
   }
 
   /** Sends a wheel to the cards; false when none kept it, so the board can zoom. */
@@ -155,6 +185,11 @@ export interface CardOptions {
   readonly height?: number;
   /** Mounts the card's widgets, in content coordinates, for its width; returns the height they take. */
   readonly build: (card: Card, width: number) => number;
+  /**
+   * Called once when a drag of the frame ends, with where the card now is. The card moves itself while dragged, as a
+   * window does; a host that keeps card positions in its document commits them here, and puts a card back with `moveTo`.
+   */
+  readonly onMove?: (x: number, y: number) => void;
 }
 
 interface FrameState {
@@ -191,6 +226,22 @@ export class Card implements Surface {
       this.scrollTo(this.scroll + (input.deltaY ?? 0));
     });
     this.rebuild();
+  }
+
+  /** Where the card's top left corner is on the board. */
+  get position(): { x: number; y: number } {
+    return { x: this.x, y: this.y };
+  }
+
+  /** Puts the card's top left corner at a point on the board, as when the host undoes a move. */
+  moveTo(x: number, y: number): void {
+    const dx = x - this.x;
+    const dy = y - this.y;
+    if (dx === 0 && dy === 0) return;
+    this.x = x;
+    this.y = y;
+    this.layer.components.move(this.group, translate(dx, dy));
+    this.layer.render();
   }
 
   get colors(): Palette {
@@ -315,6 +366,10 @@ export class Card implements Surface {
           this.y += d.y;
           this.layer.components.move(this.group, translate(d.x, d.y));
           this.layer.render();
+        },
+        dragend: (e) => {
+          e.stopPropagation();
+          this.options.onMove?.(this.x, this.y);
         },
       },
     };

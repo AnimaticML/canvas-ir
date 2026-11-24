@@ -16,7 +16,7 @@ import { PhysicsAggregate } from "@babylonjs/core/Physics/v2/physicsAggregate";
 import type { Scene as BabylonScene } from "@babylonjs/core/scene";
 import { type Point, Renderer, type Scene } from "canvas-ir";
 import { type FloorPage, type FloorWindow, UNITS } from "./floor";
-import { FONT } from "./ui/kit";
+import { FONT } from "@canvas-ir/toolkit";
 
 /** The slab's thickness, in meters. */
 const THICK = 0.06;

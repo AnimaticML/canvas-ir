@@ -4,18 +4,8 @@
 // a loop drawn around what it holds, to point it out.
 //
 // A connector keeps all it needs in its group's meta, so it is saved, exported and restored like any other drawing.
-import type { JsonValue, RecordingContext } from "canvas-ir";
+import type { JsonValue, Point, RecordingContext, Rect } from "canvas-ir";
 
-export interface Point {
-  readonly x: number;
-  readonly y: number;
-}
-export interface Box {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
 
 /**
  * One end: what it holds, by a key the board resolves to a box ("icon:map", "content:Badge", "window:table",
@@ -46,7 +36,7 @@ export interface Connector {
 const GAP = 16;
 
 /** Where a line from inside a box toward `toward` leaves the box, `gap` past its edge. */
-export const edgePoint = (box: Box, toward: Point, gap = GAP): Point => {
+export const edgePoint = (box: Rect, toward: Point, gap = GAP): Point => {
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
   const dx = toward.x - cx;
@@ -60,13 +50,13 @@ export const edgePoint = (box: Box, toward: Point, gap = GAP): Point => {
   return { x: cx + dx * t + (dx / length) * gap, y: cy + dy * t + (dy / length) * gap };
 };
 
-const center = (b: Box): Point => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
+const center = (b: Rect): Point => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
 
 /**
  * Where an arrow's ends are drawn: each attached end on its thing's edge, facing the other end along the bow, and a
  * loose one where it is. `boxOf` gives an attached thing's box, or null when it isn't on the board now.
  */
-export const route = (c: Connector, boxOf: (key: string) => Box | null): { from: Point; to: Point } => {
+export const route = (c: Connector, boxOf: (key: string) => Rect | null): { from: Point; to: Point } => {
   const a = c.from.key ? boxOf(c.from.key) : null;
   const b = c.to?.key ? boxOf(c.to.key) : null;
   const from0 = a ? center(a) : c.from;
@@ -139,7 +129,7 @@ export const drawArrow = (ctx: RecordingContext, from: Point, to: Point, c: Pick
 };
 
 /** Draws a loose loop around a box. */
-export const drawRing = (ctx: RecordingContext, box: Box, c: Pick<Connector, "color" | "seed">): void => {
+export const drawRing = (ctx: RecordingContext, box: Rect, c: Pick<Connector, "color" | "seed">): void => {
   const r = wobble(c.seed);
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;

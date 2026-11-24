@@ -4,7 +4,7 @@
 // They are components on the cards' layer, so they zoom with the board but
 // are never part of the drawing.
 import type { ComponentSpec, RecordingContext } from "canvas-ir";
-import { FONT, type Palette } from "./kit";
+import { FONT, type Palette } from "@canvas-ir/toolkit";
 
 /** A tile's side in world units. */
 export const ICON = 150;
