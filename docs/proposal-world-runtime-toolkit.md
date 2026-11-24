@@ -29,81 +29,170 @@ Find the local documents with `rg --files | rg '(^|/)proposal-world-runtime-'`.
 
 ## Purpose and agreed direction
 
-Extract reusable interaction and editor UI from Playground when an actual second application needs it. Canvas IR consumers should be able to reuse controls and editing tools while keeping their own document format, rendering choices, semantic actions, and history.
+Extract the reusable editor and interaction functionality already implemented in
+Playground into a coherent Canvas Toolkit library. Playground is the confirmed
+source and first consumer. Begin with its controls, panels, tools, selection and
+manipulation, input integration, and host dependencies.
 
-This work supports world-document editing and embedded scene controls, but does not depend on completing a simulation engine. It also serves ordinary 2D applications. Keep its scope separate from the time/execution investigation.
+**A second production application with duplicate code is not a prerequisite.**
+No such pair was established for this handoff, including Playground and Animatic.
+The earlier wording incorrectly made finding that pair a condition of starting.
+Validate the extracted library with a standalone example or test application that
+uses its public API. Existing applications can provide additional requirements
+and consumers when their actual needs fit.
 
-## Current implemented baseline
+Implement in manageable slices while preserving the intended Toolkit scope.
+A small first slice is an implementation step; it does not redefine the outcome
+as the smallest widget shared by two current products.
 
-Checked at `c2acb32a27d906db3ea6943a098516f9b8d20120`:
+This work supports ordinary 2D editing, world-document editors and embedded scene
+controls. It can proceed alongside the separate world/time and observation
+handoffs without waiting for a complete world engine.
 
-- The workspace has core, text, graphics/physics adapters, motion, and Playground packages; there is no separate Toolkit package in this revision.
-- [`playground/src/ui/kit.ts`](../packages/playground/src/ui/kit.ts) implements reusable-looking controls, text input support, drawing helpers, a panel `Surface` contract, and styles.
-- [`playground/src/tools.ts`](../packages/playground/src/tools.ts) implements drawing tools against `ToolHost`. That interface supplies host facilities and a `commit` callback, providing an existing separation from persistence.
-- [`core/src/components.ts`](../packages/core/src/components.ts) and the existing interaction system already provide component redraw and input behavior. Toolkit should build on these rather than duplicate them.
-- [The roadmap's document boundary](roadmap.md#where-the-document-lives) leaves document ownership and undo semantics with applications. Its descriptions of snapping, live text, accessibility, and tools identify existing lower-level functions to reuse.
+## Verified sources and first inspection
 
-These are starting points, not proof that every Playground abstraction is ready to become public. The extraction should be driven by the needs of two consumers and the removal of duplicated implementation between them.
+Rechecked at `8f0dd388dc1057fac4abd13a3833bf08d3185f77`; inspect the current
+revision before changing code. These are source locations, not a claim that every
+file should move unchanged.
 
-## Questions to investigate
+| Starting point | What to investigate |
+| --- | --- |
+| [`ui/kit.ts`](../packages/playground/src/ui/kit.ts) | Controls, labels, text input, palette/style assumptions and the `Surface` contract |
+| [`ui/`](../packages/playground/src/ui/) | Cards, chrome, windows and surrounding UI: separate reusable mechanisms from Playground content and policy |
+| [`tools.ts`](../packages/playground/src/tools.ts) | Drawing tools, `ToolHost`, previews, coordinate conversion, snapping and commit hooks |
+| [`main.ts`](../packages/playground/src/main.ts) | How the board wires selection, manipulation, tools, UI, scene updates and persistence together |
+| [`motion-main.ts`](../packages/playground/src/motion-main.ts), [`motion-bench.ts`](../packages/playground/src/motion-bench.ts), [`motion/views.ts`](../packages/playground/src/motion/views.ts) | Additional controls, scrubbing and views; inspect whether useful UI mechanisms can share an interface without absorbing motion algorithms |
+| [Core components](../packages/core/src/components.ts) and [roadmap](roadmap.md) | Existing component redraw, event routing, geometry, snapping, text and accessibility primitives to reuse |
 
-### What is the first useful reusable unit?
+There is no extracted Toolkit package in this inspected revision. Similarities
+inside Playground can inform the design, but their size does not determine the
+whole library scope. A small overlap between motion pages does not make motion
+playback deduplication the entire assignment.
 
-Inventory actual duplication in Playground and one selected consuming application. Possible first units are controls/panels, selection and manipulation, or a small set of drawing tools. Pick the smallest unit that both applications need now.
+Animatic's graphics and playback integration is relevant to the separate
+execution work. It is not evidence that Animatic duplicates these editor tools
+or should replace its DOM preview with the Playground UI.
 
-Do not move all Playground UI simply because it is in a folder named `ui`. Motion-lab diagnostics, AR calibration flows, demo-specific window management, and game-specific card behavior may remain local. Reusing a basic slider does not imply sharing the complete screen around it.
+## Inventory and library boundary
 
-### Where does an editing gesture become a document action?
+Inventory existing capabilities and their dependencies before choosing the first
+extraction. For each coherent area, record:
 
-A tool may produce transient preview state while dragging and request a semantic change on completion. Establish the host contract for coordinates, hit targets, selection, snapping, preview, commit, cancellation, and error reporting where the selected tools require them.
+- the current source and user-visible behavior;
+- which Canvas IR primitive it already relies on;
+- assumptions about the board, DOM, page styles, global state and lifecycle;
+- the host inputs, callbacks or adapters needed outside Playground;
+- whether it belongs in Toolkit, an existing low-level package, a format-specific
+  adapter, or the Playground application.
 
-The host decides how the semantic change is implemented and admitted. A Codec integration may compute several ordinary operations and submit them atomically while recording a meaningful history group. A programmatic Playground host may update a scene directly. Toolkit must not introduce a second document model, collaboration engine, or undo stack.
+Use responsibility and external usability to make these decisions. Finding copied
+code elsewhere is useful evidence when available, not the acceptance criterion.
+Do not move the entire `ui` directory automatically or exclude windows, cards,
+motion views or other areas solely because their first implementation is a demo.
 
-Distinguish a gesture from a history group and from an atomic request. Continuous input does not by itself determine persistence policy. Domain-specific tools may also need intermediate committed actions; avoid hardcoding one gesture-to-transaction rule for every application.
+The inventory should lead to a coherent controls/tools library and a practical
+implementation order. Choose a first usable editor interaction, such as controls
+and a drawing/manipulation tool with preview and commit. The exact group follows
+from the source inspection; no arbitrary one-widget or two-application limit is
+imposed.
 
-### Which responsibilities are actually common?
+## Host contract and document ownership
 
-| Responsibility | Proposed boundary |
-|---|---|
-| Rendering a reusable control and handling its local input | Toolkit |
-| Hit testing, geometry, low-level event routing | Existing Canvas IR APIs |
-| Current selection/view state and available tool context | Host contract, with helpers when shared |
-| Meaning of an action and validation of its consequences | Application or format integration |
-| Collaboration, persistence, history, admission | Existing document/host integration |
-| Choosing a world camera or manipulating a 3D object | Relevant provider/tool adapter |
+A tool may produce transient preview state while dragging and request a semantic
+change on completion. Establish the necessary host contract for coordinates, hit
+targets, selection, snapping, preview, commit, cancellation, lifecycle and errors.
+Use the current `ToolHost` as evidence, not as a frozen public API.
 
-Investigate 2D and 3D similarities without requiring identical gestures or gizmos. A generic input layer can recognize interaction primitives while concrete tools interpret them in their own coordinate spaces. Motion input can later invoke those same actions where appropriate; it does not require every editor tool to depend on MediaPipe or the motion package.
+The host owns the meaning and persistence of a change. A Codec integration may
+calculate several ordinary operations, submit required consequences atomically,
+and record a meaningful history group. A programmatic host may update its scene
+directly. Toolkit does not introduce a second document model, collaboration engine
+or undo stack.
 
-### How does an embedded editor expose its controls?
+A gesture, a history group and an atomic request are different boundaries.
+Some tools may commit intermediate changes; others commit at gesture completion.
+Keep that choice with the tool/application contract rather than imposing one
+persistence rule on every interaction.
 
-An embedded scene may expose a camera selector, shot parameters, or staging tools. The UI invokes the same application functions that agents can discover. Toolkit is a presentation and interaction consumer of those functions, not the owner of a universal agent protocol.
+| Responsibility | Proposed owner |
+| --- | --- |
+| Reusable controls and editing interaction | Toolkit |
+| Geometry, hit testing and low-level event routing | Existing Canvas IR libraries |
+| Selection, view and execution context | Host, with reusable helpers where appropriate |
+| Meaning and validation of a document action | Application or format integration |
+| Collaboration, persistence, admission and history | Existing document/host integration |
+| Engine-specific manipulation and camera operations | Relevant tool/provider adapter |
 
-Keep temporary viewing controls distinct from persisted edits. Orbiting a scene to inspect it should not silently rewrite an authored shot. A separate operation can adopt the current view as a shot parameter when the application offers that action.
+2D and 3D tools may differ. Shared input primitives need not imply identical gizmos
+or gestures. Motion can invoke the same application actions where useful without
+making every control depend on a tracker.
 
-## Candidate packaging
+An embedded editor's controls invoke the same functions an agent can discover.
+A temporary inspection camera remains separate from a saved shot parameter.
+Toolkit consumes those functions; their domain meaning stays with the format.
 
-`@canvas-ir/toolkit` is a working name. Begin with a narrow module boundary and exports that reflect the first shared unit. A separate optional Codec adapter can be added only when the selected consumers demonstrate its need; core controls and tools should remain usable with a programmatic host.
+## Package and consumer example
 
-Avoid making the package depend on Shell or AVML. An application assembles Toolkit, its format, and its runtime provider. World-specific editor behavior can remain in the world-document integration until another consumer establishes a reusable part.
+`@canvas-ir/toolkit` is the working package name. Establish deliberate public
+exports and environment boundaries inside this workspace. Pure tool calculations
+should not acquire a DOM dependency through unrelated UI helpers; browser text
+input and accessibility support can be explicit browser facilities.
 
-Review dependency and environment assumptions during extraction. Browser-only text input or accessibility helpers should be identified as such, while pure geometry or tool calculations should not acquire a DOM dependency unnecessarily. Preserve existing low-level functionality rather than maintaining copied versions inside Toolkit.
+Playground must consume the extracted implementation through that public boundary.
+Keep code in existing low-level packages when it already belongs there, and remove
+local copies that the extraction actually replaces.
+
+Build a small standalone consumer/example in the same workspace, with a separate
+entry point and application state. It may be created specifically for this task.
+It must import public Toolkit/Canvas exports, supply the documented host contract,
+and work without importing private Playground files or relying on its page globals.
+Exercise actual interactions rather than merely rendering a mock screenshot.
+
+This example tests isolation, completeness and usability of the public API. It
+does not claim adoption by a second production application. A suitable existing
+application may supplement or replace it, but searching other repositories is not
+required to begin or complete the first extraction.
+
+Keep the foundation usable without Codec, Shell or AVML. Add a Codec adapter only
+where the chosen editor scenario needs it; a basic programmatic host is sufficient
+for the initial consumer example. Format-specific rules remain with their owner
+even when the controls that expose them are reusable.
 
 ## Expected outputs
 
-1. A short inventory naming the two real consumers, the duplicated behavior, and the exact first extraction.
-2. A documented host contract with persistence and semantic-action ownership explicit.
-3. One reusable implementation consumed by both applications, with the replaced duplication removed.
-4. An example showing the same tool with a direct programmatic host and, if required by the selected consumer, a document-backed host.
-5. A brief account of what remains local and why; these are scope decisions, not a backlog to extract everything later.
+1. An inventory of Playground capabilities, dependencies and proposed ownership,
+   with a coherent extraction scope and implementation order.
+2. A reusable Toolkit module/package with documented public exports and host
+   integration, based on the existing implementation.
+3. Playground using the extracted functionality, with replaced local copies removed.
+4. A standalone example/test application demonstrating the public API independently
+   of Playground internals.
+5. Focused verification of the moved interactions and a short account of remaining
+   local behavior, limitations and subsequent extraction slices.
 
-The second consumer must be an actual application requirement, not a synthetic host created solely to justify a package. Inspect current consumers before selecting it. If there is no shared implementation need yet, document the candidate boundary and defer package creation.
+The task can proceed without a named second product. Lack of existing duplicate
+code is not a reason to defer it. Implementation should follow the inventory
+through a usable library and consumer example, rather than stop after identifying
+a candidate boundary or extracting a token helper.
 
-## First slice and bounded validation
+## First implementation step and validation
 
-Choose one duplicated control/tool group. Port Playground to that shared implementation, then use it in the selected application. Keep any necessary host adaptation explicit and small enough to compare.
+Start with the files above. Produce the inventory, select a coherent first
+controls/tools group, extract it, adapt Playground, and demonstrate it in the
+independent consumer. Continue through the agreed Toolkit scope in practical
+slices; record what each slice exposes and exercises.
 
-Verify the interaction paths affected by extraction: preview and commit reach the correct host; cancellation leaves the expected state; coordinate mapping and selection still work; focus/text input or accessibility remain intact for the moved controls. If the application uses Codec, verify one meaningful edit goes through its existing action/history path. Reuse existing geometry and event-router tests.
+Verify the relevant affected behavior: preview/commit/cancel, coordinate mapping,
+selection, mounting/disposal, and focus/text input or accessibility for the controls
+actually moved. If a Codec-backed host is included, verify its ordinary action and
+history path. Reuse existing geometry and event-router checks.
 
-Do not require a new exhaustive editor test suite or a generalized plugin system before this slice can ship. The extraction succeeds when real duplicated code is replaced and both consumers retain their intended editing semantics.
+A useful success criterion is that the extracted editor behavior works through
+public imports in both Playground and the independent consumer, while the host
+retains document semantics and persistence. A new exhaustive editor suite or a
+generalized plugin system is not a prerequisite.
 
-Related work: [world documents and execution](proposal-world-runtime-document-and-execution.md) define the optional world integration; [runtime observation](proposal-world-runtime-observation.md) defines inspection. Toolkit can expose those capabilities in UI without owning their semantics.
+Related work: [world documents and execution](proposal-world-runtime-document-and-execution.md)
+define the world/time foundation; [runtime observation](proposal-world-runtime-observation.md)
+defines inspection. Selecting Toolkit for an assigned step does not replace those
+separate research and integration responsibilities.

@@ -18,7 +18,11 @@ to be established by the worked examples.
 
 - [World document, time and shared execution](docs/proposal-world-runtime-document-and-execution.md).
 - [Runtime observation and source identity](docs/proposal-world-runtime-observation.md).
-- [Toolkit extraction from real consumers](docs/proposal-world-runtime-toolkit.md).
+- [Toolkit extraction and an independent consumer example](docs/proposal-world-runtime-toolkit.md).
+
+These three topics own separate responsibilities and can progress independently.
+Toolkit work starts from existing Playground functionality; a standalone test
+application can validate its public API without a second production consumer.
 
 Each handoff links the full seven-document series across Canvas IR, Video, Codec
 and Shell. Find local files with `rg --files | rg '(^|/)proposal-world-runtime-'`.

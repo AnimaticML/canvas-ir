@@ -123,7 +123,7 @@ Record what is reused, adapted or rejected and why. These references inform sepa
 
 Here, backend means execution code and platform adapters, not specifically a Shell server. Candidate common responsibilities are local clocks, scheduling, instance lifecycle, sampling/advancement coordination, resource readiness, and observations tied to their source and execution context.
 
-Compare World and Animatic implementations before extracting this library. Audiovisual track selection and montage compilation stay with Animatic. World entity behavior stays with world/application components. Codec remains the editing and collaboration foundation. Engine adapters keep engine-specific stepping, rendering, and resource handling.
+Compare the existing Canvas execution paths and Animatic APIs while shaping the shared contract. Use focused prototypes or standalone example applications to establish missing boundaries; completed downstream products are not a prerequisite for implementing and validating the library. Audiovisual track selection and montage compilation stay with Animatic. World entity behavior stays with world/application components. Codec remains the editing and collaboration foundation. Engine adapters keep engine-specific stepping, rendering, and resource handling.
 
 Possible package names are `@canvas-ir/runtime` and `@canvas-ir/world-document`; these are placeholders. The first implementation may use internal modules or separate entrypoints instead. A separate `world` package is justified only if there is a meaningful programmatic execution API independent of the document package.
 
