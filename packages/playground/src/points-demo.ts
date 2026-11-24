@@ -5,9 +5,8 @@
 // one, the readings are a line; spread far enough apart, each is a dot you can
 // hover. The wheel over the chart zooms its time axis and a drag pans it;
 // zooming the board changes the detail too.
-import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type Rect, type Scene, VirtualGroup } from "canvas-ir";
-import { TITLE_LEFT, closeBox, drawClose, inBox } from "@canvas-ir/toolkit";
-import { WheelGesture } from "./wheel";
+import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type WheelInput, type RecordingContext, type Rect, type Scene, VirtualGroup } from "canvas-ir";
+import { WheelGesture, wheelZoom, TITLE_LEFT, closeBox, drawClose, inBox } from "@canvas-ir/toolkit";
 import { origin } from "./collage";
 
 export const POINTS_ID = "ten-million";
@@ -199,16 +198,19 @@ export class TenMillionPoints {
     let from = 0;
     this.unlisten = [
       this.router.on(POINTS_ID, "wheel", (e) => {
-        const input = e.input as { deltaX?: number; deltaY?: number; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean };
-        if (input.ctrlKey || input.metaKey) return;
+        const input = e.input as WheelInput;
+        if (input.metaKey) return;
+        const { ctrlKey = false, timeStamp = performance.now() } = input;
+        const sideways = input.shiftKey && !ctrlKey;
+        const deltaX = sideways ? input.deltaY || input.deltaX : input.deltaX;
+        const deltaY = sideways ? 0 : input.deltaY;
+        const action = this.gesture.push({ deltaX, deltaY, ctrlKey, timeStamp });
         e.stopPropagation();
-        // A sideways gesture pans; up and down zooms, however a trackpad wobbles on the way.
-        const { zoom: dy, pan } = this.gesture.read(input);
-        if (pan !== 0) this.view(this.start + (pan / PW) * this.span, this.span);
+        if (action === "pan") this.view(this.start + ((deltaX || deltaY) / PW) * this.span, this.span);
         else {
           // Zoom about the reading under the pointer, from the whole year down to 40 readings.
           const pivot = at(e.point.x);
-          const span = Math.max(40, Math.min(N, this.span * Math.exp(dy * 0.002)));
+          const span = Math.max(40, Math.min(N, this.span / wheelZoom(deltaY, 0.002)));
           this.view(pivot - ((pivot - this.start) * span) / this.span, span);
         }
       }),

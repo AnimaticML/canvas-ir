@@ -9,10 +9,9 @@
 // map asks Wikipedia for the articles about places in view, a cell at a
 // time, and pins them; a click on a pin reads its article in a panel over
 // the map's right side, whose links open more articles and fly to them.
-import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
-import { TITLE_LEFT, closeBox, drawClose, inBox, fit } from "@canvas-ir/toolkit";
+import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type WheelInput, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
+import { WheelGesture, wheelZoom, TITLE_LEFT, closeBox, drawClose, inBox, fit } from "@canvas-ir/toolkit";
 import worldUrl from "./map/world.bin" with { type: "file" };
-import { WheelGesture } from "./wheel";
 import { Reader, type ReaderHost, type ReaderSpec } from "./reader";
 import { type Pin, article, articlesIn, titleNear, titleOf } from "./wiki";
 import { LAND, PLACE_ZOOM, type Paint, type TileFeature, paint, placeOf, tile, tileZoom } from "./osm";
@@ -320,15 +319,22 @@ export class WorldMap {
     let moved = false;
     this.unlisten = [
       this.router.on(MAP_ID, "wheel", (e) => {
-        const input = e.input as { deltaX?: number; deltaY?: number; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean };
-        if (input.ctrlKey || input.metaKey) return;
+        const input = e.input as WheelInput;
+        if (input.metaKey) return;
+        const { ctrlKey = false, timeStamp = performance.now() } = input;
+        const sideways = input.shiftKey && !ctrlKey;
+        const deltaX = sideways ? input.deltaY || input.deltaX : input.deltaX;
+        const deltaY = sideways ? 0 : input.deltaY;
+        const action = this.gesture.push({ deltaX, deltaY, ctrlKey, timeStamp });
         e.stopPropagation();
         this.land();
-        const { zoom, pan } = this.gesture.read(input);
         const c = this.camera;
-        if (pan !== 0) c.x += pan / (this.host.zoom() * c.scale);
-        else {
-          const scale = this.clampScale(c.scale * Math.exp(-zoom * 0.0025));
+        if (action === "pan") {
+          const scale = this.host.zoom() * c.scale;
+          c.x += deltaX / scale;
+          c.y += deltaY / scale;
+        } else {
+          const scale = this.clampScale(c.scale * wheelZoom(deltaY, 0.0025));
           const px = (e.point.x - this.x - W / 2) / c.scale;
           const py = (e.point.y - this.y - TITLE - H / 2) / c.scale;
           const k = 1 - c.scale / scale;

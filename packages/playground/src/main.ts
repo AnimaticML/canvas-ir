@@ -335,7 +335,7 @@ floorHost.canvasIrFloor = {
   // A wheel at a board point, for what keeps one there (the map, the stars, the million rows); false when nothing does.
   wheel: (at, deltaX, deltaY) => {
     const p = { x: view.a * at.x + view.c * at.y + view.e, y: view.b * at.x + view.d * at.y + view.f };
-    return board.wheel({ ...p, deltaX, deltaY, altKey: false, shiftKey: false, ctrlKey: false, metaKey: false });
+    return board.wheel({ ...p, deltaX, deltaY, timeStamp: performance.now(), altKey: false, shiftKey: false, ctrlKey: false, metaKey: false });
   },
   footprints: (things) => {
     const components = board.components;

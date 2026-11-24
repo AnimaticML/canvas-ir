@@ -30,6 +30,7 @@ export interface PointerInput {
 export interface WheelInput extends PointerInput {
   readonly deltaX: number;
   readonly deltaY: number;
+  readonly timeStamp?: number;
 }
 
 export interface KeyInput {

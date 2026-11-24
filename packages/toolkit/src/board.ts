@@ -907,7 +907,7 @@ export class Board {
         const p = point(e);
         // A card, or anything on the board that scrolls, keeps the wheel; elsewhere the board pans or zooms.
         const { x: deltaX, y: deltaY } = wheelPixels(e, canvas.clientHeight);
-        const input = { ...p, deltaX, deltaY, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
+        const input = { ...p, deltaX, deltaY, timeStamp: e.timeStamp, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
         if (this.wheel(input)) return;
         if (this.wheelGesture.push({ deltaX, deltaY, timeStamp: e.timeStamp, ctrlKey: e.ctrlKey }) === "zoom") this.viewport.zoomAt(wheelZoom(deltaY), p);
         else this.viewport.panBy(-deltaX, -deltaY);
@@ -942,7 +942,7 @@ export class Board {
    * Offers a wheel at a screen point to the cards and then to what is on the board (a card or a table that scrolls);
    * true when one kept it, false when it is free to zoom the board.
    */
-  wheel(input: Point & Modifiers & { deltaX: number; deltaY: number }): boolean {
+  wheel(input: Point & Modifiers & { deltaX: number; deltaY: number; timeStamp?: number }): boolean {
     if (this.cards?.hits(input) && this.cards.wheel(input)) return true;
     this.wheelFree = false;
     this.router.wheel(input);

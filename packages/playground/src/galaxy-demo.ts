@@ -9,9 +9,8 @@
 // whole galaxy to a planet's face, about 10^13 times, so the camera keeps its
 // position as a whole light year plus a fraction and everything is drawn
 // relative to it: the board's own float coordinates would run out long before.
-import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
-import { TITLE_LEFT, closeBox, drawClose, inBox } from "@canvas-ir/toolkit";
-import { WheelGesture } from "./wheel";
+import { type ComponentHandle, type ComponentSpec, type Components, type EventRouter, type WheelInput, type RecordingContext, type RecordingContextOptions, type Rect, type Scene, VirtualGroup } from "canvas-ir";
+import { WheelGesture, wheelZoom, TITLE_LEFT, closeBox, drawClose, inBox } from "@canvas-ir/toolkit";
 import { origin } from "./collage";
 
 export const GALAXY_ID = "galaxy";
@@ -305,17 +304,22 @@ export class StarsAndPlanets {
     let moved = false;
     this.unlisten = [
       this.router.on(GALAXY_ID, "wheel", (e) => {
-        const input = e.input as { deltaX?: number; deltaY?: number; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean };
-        if (input.ctrlKey || input.metaKey) return;
+        const input = e.input as WheelInput;
+        if (input.metaKey) return;
+        const { ctrlKey = false, timeStamp = performance.now() } = input;
+        const sideways = input.shiftKey && !ctrlKey;
+        const deltaX = sideways ? input.deltaY || input.deltaX : input.deltaX;
+        const deltaY = sideways ? 0 : input.deltaY;
+        const action = this.gesture.push({ deltaX, deltaY, ctrlKey, timeStamp });
         e.stopPropagation();
         this.land();
-        // A sideways gesture pans, as on the chart; up and down zooms about the pointer.
-        const { zoom: dy, pan } = this.gesture.read(input);
         const c = this.camera;
-        if (pan !== 0) {
-          c.x = at(c.x.whole, c.x.part + pan / (this.host.zoom() * c.scale));
+        if (action === "pan") {
+          const scale = this.host.zoom() * c.scale;
+          c.x = at(c.x.whole, c.x.part + deltaX / scale);
+          c.y = at(c.y.whole, c.y.part + deltaY / scale);
         } else {
-          const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, c.scale * Math.exp(-dy * 0.0025)));
+          const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, c.scale * wheelZoom(deltaY, 0.0025)));
           const px = (e.point.x - this.x - W / 2) / c.scale;
           const py = (e.point.y - this.y - TITLE - H / 2) / c.scale;
           const k = 1 - c.scale / scale;
