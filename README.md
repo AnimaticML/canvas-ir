@@ -8,6 +8,21 @@ Experimental **[motion](docs/motion.md)** (`packages/motion`, the playground's `
 
 Experimental **[AR mode of the original Babylon demo](docs/ar-table.md)** (`ar.html`) runs the same `startBabylon` scene, board, controls, crates, balls, and Havok bodies over a full-screen camera. ArUco places it relative to a group of markers; MediaPipe touch calibration and pinch gestures drive the original components and physics. Interaction traces capture concrete success/failure reasons without a diagnostic dashboard.
 
+## World and runtime proposals
+
+The `proposal-world-runtime-` series records owner-requested research and
+integration handoffs. The direction is to keep world authoring, simulation and
+reusable execution in this workspace while preserving the independent recording,
+geometry and rendering core. These are proposals; package names and APIs remain
+to be established by the worked examples.
+
+- [World document, time and shared execution](docs/proposal-world-runtime-document-and-execution.md).
+- [Runtime observation and source identity](docs/proposal-world-runtime-observation.md).
+- [Toolkit extraction from real consumers](docs/proposal-world-runtime-toolkit.md).
+
+Each handoff links the full seven-document series across Canvas IR, Video, Codec
+and Shell. Find local files with `rg --files | rg '(^|/)proposal-world-runtime-'`.
+
 ## Status
 
 All five phases: recording, the IR, serialization and replay; geometry queries; the full Canvas 2D drawing API; rich text layout; groups, events and SVG export, with a playground.
