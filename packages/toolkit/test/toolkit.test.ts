@@ -130,7 +130,9 @@ describe("gestures", () => {
     g.move(2, { x: -100, y: 1 });
     g.move(2, { x: -100, y: -1 });
     expect(Math.abs(twists.at(-1)!)).toBeLessThan(0.05);
-    expect(wrapAngle(3 * Math.PI)).toBeCloseTo(Math.PI);
+    expect(wrapAngle(2.5 * Math.PI)).toBeCloseTo(Math.PI / 2);
+    expect(wrapAngle(-2.5 * Math.PI)).toBeCloseTo(-Math.PI / 2);
+    expect(wrapAngle(0.3)).toBeCloseTo(0.3);
   });
 
   test("a cancelled pointer ends the press without a tap, and hovering is only with nothing pressed", () => {

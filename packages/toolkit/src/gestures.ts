@@ -35,8 +35,8 @@ export interface PinchEvent {
   readonly twist: number;
 }
 
-/** An angle brought within half a turn either way, so a twist across the ±π seam is the short way round. */
-export const wrapAngle = (a: number): number => a - Math.round(a / (2 * Math.PI)) * 2 * Math.PI;
+/** An angle brought within half a turn either way (from -π up to π), so a twist across the ±π seam is the short way round. */
+export const wrapAngle = (a: number): number => a - Math.floor((a + Math.PI) / (2 * Math.PI)) * 2 * Math.PI;
 
 export interface GestureHandlers {
   /** A first pointer went down: a press began. */
