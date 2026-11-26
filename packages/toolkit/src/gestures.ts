@@ -1,4 +1,4 @@
-// Pointers turned into gestures: a tap, a drag, a two-finger pinch. It decides only what kind of gesture the pointers
+// Pointers turned into gestures: a tap, a drag, a two-finger pinch and twist. It decides only what kind of gesture the pointers
 // make; what a tap selects, what a drag moves and what a pinch zooms is the host's, which handles them in its own
 // coordinates and commits what they mean. It knows nothing of the DOM: `bindGestures` (dom.ts) feeds it a canvas's
 // pointer events, and tests feed it points.
@@ -26,10 +26,17 @@ export interface PinchEvent {
   /** The middle of the two fingers, and how far apart they are. */
   readonly center: Point;
   readonly distance: number;
+  /** The direction from the first finger to the second, in radians, clockwise on screen from the x axis. */
+  readonly angle: number;
   /** Since the last pinch event: the change in their spread as a factor, and how far their middle moved. */
   readonly scale: number;
   readonly pan: Point;
+  /** Since the last pinch event, how far the fingers turned, in radians, clockwise on screen; never more than half a turn. */
+  readonly twist: number;
 }
+
+/** An angle brought within half a turn either way, so a twist across the ±π seam is the short way round. */
+export const wrapAngle = (a: number): number => a - Math.round(a / (2 * Math.PI)) * 2 * Math.PI;
 
 export interface GestureHandlers {
   /** A first pointer went down: a press began. */
@@ -60,7 +67,7 @@ export class Gestures {
   private press: { id: number; start: Point; last: Point; dragging: boolean } | null = null;
   /** More than one finger has been down since the screen was last clear: nothing taps or drags until it is. */
   private multi = false;
-  private spread: { ids: [number, number]; distance: number; center: Point } | null = null;
+  private spread: { ids: [number, number]; distance: number; center: Point; angle: number } | null = null;
 
   constructor(
     private readonly on: GestureHandlers,
@@ -103,7 +110,7 @@ export class Gestures {
       const [a, b] = [...this.pointers.keys()] as [number, number];
       const s = this.measure(a, b);
       this.spread = { ids: [a, b], ...s };
-      this.on.pinchStart?.({ center: s.center, distance: s.distance, scale: 1, pan: { x: 0, y: 0 } });
+      this.on.pinchStart?.({ ...s, scale: 1, pan: { x: 0, y: 0 }, twist: 0 });
     }
   }
 
@@ -119,10 +126,10 @@ export class Gestures {
       const was = this.spread;
       this.spread = { ids: was.ids, ...s };
       this.on.pinch?.({
-        center: s.center,
-        distance: s.distance,
+        ...s,
         scale: s.distance / Math.max(1, was.distance),
         pan: { x: s.center.x - was.center.x, y: s.center.y - was.center.y },
+        twist: wrapAngle(s.angle - was.angle),
       });
       return;
     }
@@ -173,10 +180,10 @@ export class Gestures {
     }
   }
 
-  private measure(a: number, b: number): { distance: number; center: Point } {
+  private measure(a: number, b: number): { distance: number; center: Point; angle: number } {
     const p = this.pointers.get(a)!;
     const q = this.pointers.get(b)!;
-    return { distance: Math.hypot(p.x - q.x, p.y - q.y), center: { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 } };
+    return { distance: Math.hypot(p.x - q.x, p.y - q.y), center: { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }, angle: Math.atan2(q.y - p.y, q.x - p.x) };
   }
 
   private dragEvent(p: { id: number; start: Point; last: Point }, point: Point): DragEvent {

@@ -6,6 +6,7 @@
 // shape, and both reach the same "*" handlers.
 import { Components, EventRouter, type ComponentHandle, type RecordingContext, type RouterEvent, type WheelInput } from "canvas-ir";
 import { Focus, type ObjectHandle, Objects, type Region, Surface, World, fitRegion, noMipmaps } from "@canvas-ir/three";
+import { Gestures } from "@canvas-ir/toolkit";
 import * as THREE from "three";
 import { thumbsticks } from "./thumbsticks";
 
@@ -498,6 +499,8 @@ export const startSpace = (host: SpaceHost): void => {
   window.addEventListener("keydown", (e) => (shift = e.shiftKey));
   window.addEventListener("keyup", (e) => (shift = e.shiftKey));
 
+  // For tests: where the walker stands and which way it faces.
+  (window as unknown as { canvasIrSpace?: unknown }).canvasIrSpace = { walker: () => ({ at: walker.at.toArray(), yaw: walker.yaw }) };
   const playground = showPlayground(root, world);
   standObject(playground.stand, playground.board);
 
@@ -507,85 +510,74 @@ export const startSpace = (host: SpaceHost): void => {
   // A press on the playground's screen keeps going to it until it's released, as the playground's own pointer capture would.
   let pressOnScreen = false;
   // Two fingers: a pinch walks forward and back, sliding them moves sideways, up and down; over the playground's screen a pinch zooms its board.
-  const fingers = new Map<number, { x: number; y: number }>();
-  let pinch: { d: number; c: { x: number; y: number }; angle: number; screen: boolean } | null = null;
-  const spread = (): { d: number; c: { x: number; y: number }; angle: number } => {
-    const [a, b] = [...fingers.values()] as [{ x: number; y: number }, { x: number; y: number }];
-    return { d: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), c: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, angle: Math.atan2(b.y - a.y, b.x - a.x) };
-  };
-  const twoFingers = (e: PointerEvent): boolean => {
-    fingers.set(e.pointerId, pointer(e));
-    if (fingers.size !== 2) return fingers.size > 2;
+  let pinchOnScreen = false;
+  let last = { x: 0, y: 0 };
+  const fingers = new Gestures({
     // The first finger's press ends without a click, as a pinch on a page does.
-    if (pointerId !== null) {
-      if (pressOnScreen) playground.forward(new PointerEvent("pointercancel", { pointerId }), fingers.get(pointerId) ?? pointer(e));
+    cancel: () => {
+      if (pointerId === null) return;
+      if (pressOnScreen) playground.forward(new PointerEvent("pointercancel", { pointerId }), last);
       router.pointerCancel();
       pointerId = null;
       pressOnScreen = false;
-    }
-    canvas.setPointerCapture(e.pointerId);
-    const now = spread();
-    pinch = { ...now, screen: playground.under(now.c) };
-    return true;
-  };
-  const movePinch = (): void => {
-    if (!pinch || fingers.size < 2) return;
-    const now = spread();
-    const zoom = Math.log(now.d / pinch.d);
-    if (pinch.screen) {
-      // As the playground's wheel zooms: by exp(-deltaY * 0.0015) about the point under it.
-      playground.forward(new WheelEvent("wheel", { deltaY: -zoom / 0.0015, deltaMode: 0, ctrlKey: true }), now.c);
-    } else if (selected) {
-      // With something selected: a pinch moves in and out toward it, a twist turns a selected shape, sliding orbits it.
-      dolly(zoom * 3);
-      let twist = now.angle - pinch.angle;
-      twist -= Math.round(twist / (2 * Math.PI)) * 2 * Math.PI;
-      if (SHAPES.includes(selected.id as ShapeName)) selected.object.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), twist);
-      orbit(now.c.x - pinch.c.x, now.c.y - pinch.c.y);
-    } else {
-      const ahead = camera.getWorldDirection(new THREE.Vector3());
-      const side = new THREE.Vector3().crossVectors(ahead, camera.up).normalize();
-      walker.at.addScaledVector(ahead, zoom * 3);
-      walker.at.addScaledVector(side, (now.c.x - pinch.c.x) * 0.01);
-      walker.at.y = Math.max(0.3, Math.min(12, walker.at.y - (now.c.y - pinch.c.y) * 0.01));
-    }
-    pinch = { ...pinch, ...now };
-  };
-  const liftFinger = (e: PointerEvent): boolean => {
-    fingers.delete(e.pointerId);
-    if (!pinch) return false;
-    // The pinch is over once fewer than two fingers are down; the one left starts nothing until it's lifted too.
-    if (fingers.size === 0) pinch = null;
-    return true;
-  };
+    },
+    pinchStart: ({ center }) => (pinchOnScreen = playground.under(center)),
+    pinch: ({ center, scale, pan, twist }) => {
+      const zoom = Math.log(scale);
+      if (pinchOnScreen) {
+        // As the playground's wheel zooms: by exp(-deltaY * 0.0015) about the point under it.
+        playground.forward(new WheelEvent("wheel", { deltaY: -zoom / 0.0015, deltaMode: 0, ctrlKey: true }), center);
+      } else if (selected) {
+        // With something selected: a pinch moves in and out toward it, a twist turns a selected shape, sliding orbits it.
+        dolly(zoom * 3);
+        if (SHAPES.includes(selected.id as ShapeName)) selected.object.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), twist);
+        orbit(pan.x, pan.y);
+      } else {
+        const ahead = camera.getWorldDirection(new THREE.Vector3());
+        const side = new THREE.Vector3().crossVectors(ahead, camera.up).normalize();
+        walker.at.addScaledVector(ahead, zoom * 3);
+        walker.at.addScaledVector(side, pan.x * 0.01);
+        walker.at.y = Math.max(0.3, Math.min(12, walker.at.y - pan.y * 0.01));
+      }
+    },
+  });
   canvas.addEventListener("pointerdown", (e) => {
-    if (twoFingers(e) || pinch) return;
-    if (pointerId !== null) return;
+    // A pointer that isn't the browser's own (one a test or a host page sends) can't be captured.
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch {}
+    fingers.down(e.pointerId, pointer(e));
+    // A second finger, or one left from a pinch: nothing else until every finger is up.
+    if (fingers.multiTouch || pointerId !== null) return;
     pointerId = e.pointerId;
-    canvas.setPointerCapture(e.pointerId);
+    last = pointer(e);
     pressOnScreen = playground.under(pointer(e));
     if (pressOnScreen) playground.forward(e, pointer(e));
     else playground.release();
     router.pointerDown(pointer(e));
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (fingers.has(e.pointerId)) fingers.set(e.pointerId, pointer(e));
-    if (pinch) return movePinch();
+    fingers.move(e.pointerId, pointer(e));
+    if (fingers.multiTouch) return;
     if (pointerId !== null && e.pointerId !== pointerId) return;
+    if (pointerId !== null) last = pointer(e);
     if (pointerId !== null ? pressOnScreen : playground.under(pointer(e))) playground.forward(e, pointer(e));
     else playground.leave();
     router.pointerMove(pointer(e));
   });
   canvas.addEventListener("pointerup", (e) => {
-    if (liftFinger(e)) return;
-    if (e.pointerId !== pointerId) return;
+    const pinched = fingers.multiTouch;
+    fingers.up(e.pointerId, pointer(e));
+    if (pinched || e.pointerId !== pointerId) return;
     pointerId = null;
     if (pressOnScreen) playground.forward(e, pointer(e));
     pressOnScreen = false;
     router.pointerUp(pointer(e));
   });
   canvas.addEventListener("pointercancel", (e) => {
-    if (liftFinger(e)) return;
+    const pinched = fingers.multiTouch;
+    fingers.cancel(e.pointerId);
+    if (pinched) return;
     pointerId = null;
     if (pressOnScreen) playground.forward(e, pointer(e));
     pressOnScreen = false;

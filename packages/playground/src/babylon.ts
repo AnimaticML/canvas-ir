@@ -30,6 +30,7 @@ import { Scene as BabylonScene } from "@babylonjs/core/scene";
 import HavokPhysics from "@babylonjs/havok";
 import havokWasm from "@babylonjs/havok/lib/esm/HavokPhysics.wasm" with { type: "file" };
 import { type ObjectHandle, Objects, Surface, World } from "@canvas-ir/babylon";
+import { Gestures } from "@canvas-ir/toolkit";
 import { type ComponentHandle, Components, EventRouter, type Point, type RouterEvent } from "canvas-ir";
 import { Floor, type FloorPage, type FloorThing, type FloorWindow, TABLE, UNITS } from "./floor";
 import { type HandOptions, type HandSurface, Hands, meshHandSurface } from "./hands";
@@ -589,29 +590,21 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
     const r = canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top, button: e.button, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
   };
-  const fingers = new Map<number, Point>();
-  let pinch: { mid: Point; spread: number; angle: number } | null = null;
   /** Two fingers on a tablet: on its title bar they carry and turn it, on its face they magnify and move what it shows. */
-  let tabletPinch: { tablet: Tablet; turn: boolean; last: { mid: Point; spread: number; angle: number }; offset: Vector3 } | null = null;
+  let tabletPinch: { tablet: Tablet; turn: boolean; offset: Vector3 } | null = null;
   const faceAt = (tablet: Tablet, p: Point): Point | null => {
     const { point, normal } = tablet.plane();
     const at = world.onPlane(p, point, normal);
     return at ? tablet.face(at) : null;
   };
   let pointerId: number | null = null;
-  const twoFingers = (): { mid: Point; spread: number; angle: number } => {
-    const [a, b] = [...fingers.values()];
-    return { mid: { x: (a!.x + b!.x) / 2, y: (a!.y + b!.y) / 2 }, spread: Math.hypot(a!.x - b!.x, a!.y - b!.y), angle: Math.atan2(b!.y - a!.y, b!.x - a!.x) };
-  };
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  const down = (e: Press): void => {
-    if (e.pointerType === "touch") fingers.set(e.pointerId, pointer(e));
-    if (fingers.size === 2) {
+  // Touch pointers pair up as two fingers: what the first began is let go, and they move the camera, or a tablet.
+  const fingers = new Gestures({
+    pinchStart: ({ center }) => {
       const on = carrying?.tablet ?? forwardingTablet;
       if (on) {
-        const now = twoFingers();
-        const ground = onTable(now.mid);
-        tabletPinch = { tablet: on, turn: carrying !== null, last: now, offset: ground ? on.pose.at.subtract(ground) : Vector3.Zero() };
+        const ground = onTable(center);
+        tabletPinch = { tablet: on, turn: carrying !== null, offset: ground ? on.pose.at.subtract(ground) : Vector3.Zero() };
         carrying = null;
         forwardingTablet = null;
       }
@@ -621,10 +614,33 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
       forwarding = null;
       held = null;
       orbiting = null;
-      if (!tabletPinch) pinch = twoFingers();
-      return;
-    }
-    if (pinch !== null || tabletPinch !== null || pointerId !== null || forwarding !== null || moving) return;
+    },
+    pinch: ({ center, scale, pan, twist }) => {
+      const was = { x: center.x - pan.x, y: center.y - pan.y };
+      if (tabletPinch) {
+        const { tablet } = tabletPinch;
+        if (tabletPinch.turn) {
+          // Held by its title bar: the tablet follows the fingers over the table and turns as they twist.
+          const ground = onTable(center);
+          tablet.set({ yaw: tablet.pose.yaw + twist, ...(ground ? { at: ground.add(tabletPinch.offset) } : {}) });
+        } else {
+          // On its face: what it shows spreads and moves with the fingers.
+          const from = faceAt(tablet, was);
+          const to = faceAt(tablet, center);
+          if (from && to) tablet.zoomAt(scale, from, to);
+        }
+        return;
+      }
+      // Two fingers: the table under them follows them, their spread comes closer to the point between them, and their twist turns the view.
+      slide(was, center);
+      zoom(1 / scale, center);
+      camera.alpha -= twist;
+    },
+  });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  const down = (e: Press): void => {
+    if (e.pointerType === "touch") fingers.down(e.pointerId, pointer(e));
+    if (fingers.multiTouch || pointerId !== null || forwarding !== null || moving) return;
     flight = null;
     const p = pointer(e);
     try {
@@ -669,37 +685,8 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   };
   canvas.addEventListener("pointerdown", down);
   const move = (e: Press): void => {
-    if (fingers.has(e.pointerId)) fingers.set(e.pointerId, pointer(e));
-    if (tabletPinch !== null) {
-      if (fingers.size !== 2) return;
-      const now = twoFingers();
-      const { tablet, last } = tabletPinch;
-      if (tabletPinch.turn) {
-        // Held by its title bar: the tablet follows the fingers over the table and turns as they twist.
-        let twist = now.angle - last.angle;
-        twist -= Math.round(twist / (2 * Math.PI)) * 2 * Math.PI;
-        const ground = onTable(now.mid);
-        tablet.set({ yaw: tablet.pose.yaw + twist, ...(ground ? { at: ground.add(tabletPinch.offset) } : {}) });
-      } else {
-        // On its face: what it shows spreads and moves with the fingers.
-        const from = faceAt(tablet, last.mid);
-        const to = faceAt(tablet, now.mid);
-        if (from && to) tablet.zoomAt(now.spread / Math.max(1, last.spread), from, to);
-      }
-      tabletPinch = { ...tabletPinch, last: now };
-      return;
-    }
-    if (pinch !== null && fingers.size === 2) {
-      // Two fingers: the table under them follows them, their spread comes closer to the point between them, and their twist turns the view.
-      const now = twoFingers();
-      slide(pinch.mid, now.mid);
-      zoom(pinch.spread / Math.max(1, now.spread), now.mid);
-      let twist = now.angle - pinch.angle;
-      twist -= Math.round(twist / (2 * Math.PI)) * 2 * Math.PI;
-      camera.alpha -= twist;
-      pinch = now;
-      return;
-    }
+    if (e.pointerType === "touch") fingers.move(e.pointerId, pointer(e));
+    if (fingers.multiTouch) return;
     const p = pointer(e);
     if (carrying) {
       if (e.pointerId !== carrying.pointer) return;
@@ -737,13 +724,12 @@ export const startBabylon = async (options: { canvas: HTMLCanvasElement; frame: 
   };
   canvas.addEventListener("pointermove", move);
   const lift = (e: Press, cancel: boolean): void => {
-    fingers.delete(e.pointerId);
-    if (tabletPinch !== null) {
-      if (fingers.size === 0) tabletPinch = null;
-      return;
-    }
-    if (pinch !== null) {
-      if (fingers.size === 0) pinch = null;
+    const pinched = fingers.multiTouch;
+    if (cancel) fingers.cancel(e.pointerId);
+    else fingers.up(e.pointerId, pointer(e));
+    if (pinched) {
+      // Over once every finger is up; the one left starts nothing.
+      if (!fingers.multiTouch) tabletPinch = null;
       return;
     }
     if (carrying && e.pointerId === carrying.pointer) {

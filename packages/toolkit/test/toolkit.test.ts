@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Actions, Gestures, type GestureHandlers, Viewport, wheelPixels, wheelZoom } from "../src";
+import { Actions, Gestures, wrapAngle, type GestureHandlers, Viewport, wheelPixels, wheelZoom } from "../src";
 
 describe("viewport", () => {
   test("zooming at a point keeps the world point under it", () => {
@@ -116,6 +116,21 @@ describe("gestures", () => {
     g.down(3, { x: 5, y: 5 });
     g.up(3);
     expect(said.at(-1)).toBe("tap 5,5");
+  });
+
+  test("two fingers turning twist, clockwise on screen, the short way across the seam", () => {
+    const twists: number[] = [];
+    const g = new Gestures({ pinch: (e) => twists.push(e.twist) });
+    g.down(1, { x: 0, y: 0 });
+    g.down(2, { x: 100, y: 0 });
+    // A quarter turn clockwise on screen (y down): the second finger swings below the first.
+    g.move(2, { x: 0, y: 100 });
+    expect(twists[0]).toBeCloseTo(Math.PI / 2);
+    // From pointing left just above the seam to just below it is a small turn, not nearly a whole one.
+    g.move(2, { x: -100, y: 1 });
+    g.move(2, { x: -100, y: -1 });
+    expect(Math.abs(twists.at(-1)!)).toBeLessThan(0.05);
+    expect(wrapAngle(3 * Math.PI)).toBeCloseTo(Math.PI);
   });
 
   test("a cancelled pointer ends the press without a tap, and hovering is only with nothing pressed", () => {

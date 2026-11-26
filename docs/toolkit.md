@@ -38,7 +38,7 @@ It came out in four steps:
 
 - **`Viewport`** is a uniform zoom and a translation, with `matrix` for a router or the accessibility layer and `device(ratio)` for a renderer. It has `toWorld`/`toScreen`, `panBy`, `zoomAt(factor, anchor)`, `zoomTo`, `fit`, `setMatrix` for hosts that keep a matrix, and `onChange`. Zoom limits and a `clamp(view)` are applied on every change, which covers Painter's bounds, Harmonica's limits and centering at the least zoom. It is pure, with no DOM.
 - **`wheelPixels(event, pageHeight)`** normalizes wheel deltas. **`WheelGesture`** chooses pan or zoom on the first event and keeps that choice until 100 ms of idle time or a Ctrl modifier change. Unknown input pans. Learned vertical notch multiples and Ctrl+wheel zoom through **`wheelZoom(dy)`**.
-- **`Gestures`** takes pointer down, move, up and cancel by id and reports `press`, `hover`, `dragStart`/`drag`/`dragEnd` (with `delta` and `total`), `tap`, `pinchStart`/`pinch`/`pinchEnd` (with `scale`, `center`, `pan`) and `cancel`. It enforces the rules each app wrote by hand:
+- **`Gestures`** takes pointer down, move, up and cancel by id and reports `press`, `hover`, `dragStart`/`drag`/`dragEnd` (with `delta` and `total`), `tap`, `pinchStart`/`pinch`/`pinchEnd` (with `scale`, `center`, `pan`, and the fingers' `angle` and `twist`, the turn since the last event, taken the short way round with `wrapAngle`) and `cancel`. It enforces the rules each app wrote by hand:
   - a slop before a drag (6 px by default);
   - a second finger cancels the press and starts a pinch;
   - the finger left after a pinch does nothing until all are up;
@@ -152,6 +152,8 @@ The playground imports the cards, window parts, connectors, tools and controls f
 
 The board also gained two-finger pinch, through `Gestures` fed beside its router. A second finger cancels whatever the first began (a tool's stroke, a router drag), and the remaining finger does nothing until both are up. Clicks, drags, tools and the cards are routed as before.
 
+The 3D pages feed `Gestures` the same way, in place of the finger maps each kept: in the room (`space.ts`) a pinch walks forward and back, a slide moves sideways, and with a shape selected a twist turns it; on the Babylon table a twist turns the view, a pinch comes closer, a slide moves along the table, and on a held tablet a twist turns the tablet.
+
 ### The examples
 
 `packages/toolkit/example` is a separate page with its own state that imports only the public `canvas-ir` and `@canvas-ir/toolkit` exports. It has:
@@ -198,8 +200,7 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 
 ## Next
 
-1. **Twist in gestures.** Two-finger rotation, and the 3D pages on the shared gestures.
-2. **Widget behaviours without the stock look.** A button's or slider's pressing, dragging and keys, with the app drawing it.
-3. **An image registry.** Images loaded once and drawn by key, for cards and drawings.
-4. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
-5. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
+1. **Widget behaviours without the stock look.** A button's or slider's pressing, dragging and keys, with the app drawing it.
+2. **An image registry.** Images loaded once and drawn by key, for cards and drawings.
+3. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
+4. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
