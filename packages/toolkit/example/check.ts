@@ -211,7 +211,22 @@ expect(linkAfter.y + linkAfter.height > linkBefore.y + linkBefore.height + 40, "
 await page.setViewportSize({ width: 1400, height: 800 });
 await page.goto(`http://localhost:${server.port}/board.html`);
 await page.waitForFunction(() => "boardExample" in window);
+// The picture is loaded by URL through the image registry, then drawn on the board by its key.
+await page.waitForFunction(() => !!(window as any).boardExample.board.scene.getGroup("pin"), null, { timeout: 5000 }).catch(() => {});
 await page.waitForTimeout(100);
+const pin = await page.evaluate(() => {
+  const e = (window as any).boardExample;
+  const s = e.board.scene;
+  const op = s.document.ops.find((o: any) => o.kind === "image" && s.groupChain(o.id).includes("pin"));
+  const c = document.getElementById("board") as HTMLCanvasElement;
+  const r = c.getBoundingClientRect();
+  // A point on the pin's red head, on the board's canvas in device pixels.
+  const dpr = c.width / r.width;
+  const px = c.getContext("2d")!.getImageData(Math.round((700 + 152) * dpr), Math.round((20 + 240) * dpr), 1, 1).data;
+  return { src: op?.image.src ?? null, outline: (op?.image.outline?.length ?? 0) > 0, committed: e.changes.includes("drawn"), px: [...px] };
+});
+expect(pin.src === "pin" && pin.outline && pin.committed, `board: a picture loaded through the image registry is recorded by its key, with its outline, and committed (${pin.src})`);
+expect(pin.px[0]! > 200 && pin.px[1]! < 80, `board: the renderer draws it from the registry (${pin.px.join(",")})`);
 type B = { changes: string[]; history: number; groups: string[]; tool: string; zoom: number };
 const b = (): Promise<B> =>
   page.evaluate(() => {
@@ -236,7 +251,7 @@ const link0 = await box("idea-sketch");
 await drag(at(150, 125), { x: 60, y: 120 }, true);
 let idea1 = await box("idea");
 let bs = await b();
-expect(Math.abs(idea1.x - idea0.x - 60) < 0.01 && Math.abs(idea1.y - idea0.y - 120) < 0.01 && bs.changes.join() === "moved", "board: a drag moves a shape and the page commits it once");
+expect(Math.abs(idea1.x - idea0.x - 60) < 0.01 && Math.abs(idea1.y - idea0.y - 120) < 0.01 && bs.changes.join() === "drawn,moved", "board: a drag moves a shape and the page commits it once");
 expect(JSON.stringify(await box("idea-sketch")) !== JSON.stringify(link0), "board: the arrows on it are drawn again");
 await page.keyboard.press("Control+z");
 await page.waitForTimeout(50);

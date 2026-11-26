@@ -13,7 +13,6 @@ import {
   serializeDocument,
   imageToWorld,
   toSVG,
-  traceImageSource,
   transformOp,
   type ImageOp,
   type Op,
@@ -25,7 +24,7 @@ import {
 } from "canvas-ir";
 import { vectorize } from "@canvas-ir/vectorize";
 import { LiveText } from "@canvas-ir/text";
-import { Board, BoardFeed, CardLayer, type Connector, TOOLS, snapControls, snapSettings, textSink, windowFrame } from "@canvas-ir/toolkit";
+import { Board, BoardFeed, CardLayer, type Connector, ImageRegistry, TOOLS, snapControls, snapSettings, textSink, windowFrame } from "@canvas-ir/toolkit";
 import { datumAt } from "./charts";
 import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
@@ -53,33 +52,14 @@ const overlay = document.getElementById("overlay") as HTMLCanvasElement;
 /** What the inspector's controls set. */
 const settings: Settings = { snap: snapControls(), lod: true };
 
-// Images seen while recording, by the src the IR stores, so replay draws the same objects.
-const images = new Map<string, CanvasImageSource>();
-const imageIds = new Map<unknown, string>();
-// Each image's traced silhouette, so hit tests, snapping and text wrap follow its opaque pixels.
-const outlines = new Map<unknown, Point[][]>();
+// Images seen while recording, by the src the IR stores, so replay draws the same objects; each traced, so hit tests,
+// snapping and text wrap follow its opaque pixels.
+const images = new ImageRegistry();
 /** Op id to the line of code that drew it, for devtools. */
 const sources = new Map<string, string>();
 const recorderOptions: RecordingContextOptions = {
   captureSource: true,
-  describeImage: (img) => {
-    const source = img as { src?: string; width?: number; height?: number; naturalWidth?: number; naturalHeight?: number };
-    const width = source.naturalWidth ?? source.width ?? 0;
-    const height = source.naturalHeight ?? source.height ?? 0;
-    if (!(width > 0 && height > 0)) return null;
-    let src = imageIds.get(img);
-    if (src === undefined) {
-      src = typeof source.src === "string" && source.src !== "" ? source.src : `image-${imageIds.size}`;
-      imageIds.set(img, src);
-      images.set(src, img as CanvasImageSource);
-    }
-    let outline = outlines.get(img);
-    if (!outline) {
-      outline = traceImageSource(img as CanvasImageSource, width, height);
-      outlines.set(img, outline);
-    }
-    return { src, width, height, outline };
-  },
+  describeImage: images.describe,
 };
 
 // The playground's controls: cards in a scene of their own, drawn over the board with its view.
@@ -98,7 +78,7 @@ const board: Board = new Board({
   overlay,
   cards,
   recorder: recorderOptions,
-  renderer: () => ({ images: (src) => images.get(src), ...(settings.lod ? {} : { lod: false }) }),
+  renderer: () => ({ images: images.resolve, ...(settings.lod ? {} : { lod: false }) }),
   snap: () => snapSettings(settings.snap),
   hooks: {
     bound: (s, r) => {
@@ -276,7 +256,7 @@ const footprints = new Set<string>();
 floorHost.canvasIrFloor = {
   scene: () => scene,
   cards: () => cards.scene,
-  images: (src) => images.get(src),
+  images: images.resolve,
   lod: () => settings.lod,
   view: () => view,
   setView: (next) => setView(next),
@@ -353,7 +333,7 @@ const devtools = new Devtools({
   sources,
   select: (id) => select([id]),
   redraw: () => render(),
-  images: (src) => images.get(src),
+  images: images.resolve,
 });
 
 /** Texts that flow around shapes: the ones the controls change. */
@@ -383,7 +363,7 @@ const hooks: ControlHooks = {
 const add = async (sample: Sample, at?: { x: number; y: number; middle?: boolean }): Promise<string[]> => {
   const recorder = new RecordingContext(recorderOptions);
   const before = scene.document.ops;
-  replayDocument(recorder, scene.document, { images: (src) => images.get(src) });
+  replayDocument(recorder, scene.document, { images: images.resolve });
   if ("svg" in sample) {
     recorder.beginGroup({ meta: { source: sample.name } });
     const canvg = Canvg.fromString(recorder as unknown as CanvasRenderingContext2D, sample.svg, {

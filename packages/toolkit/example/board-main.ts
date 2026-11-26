@@ -3,13 +3,15 @@
 // one per drawing, and an undo history of those lists. Each change the board reports is committed here; undo loads the
 // last list back onto the board.
 import type { IRDocument } from "canvas-ir";
-import { Board, CardLayer, type Connector, TextSink, boardPanels, fixedTheme, snapControls, snapSettings } from "@canvas-ir/toolkit";
+import { Board, CardLayer, type Connector, ImageRegistry, TextSink, boardPanels, fixedTheme, snapControls, snapSettings } from "@canvas-ir/toolkit";
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
 // Typing goes through this page's own hidden textarea, and the colors are this page's: the cards and the board take
 // both from here rather than from the page's CSS and a textarea of the toolkit's.
 const text = new TextSink(stage);
+// Images by key: recorded as the key, drawn from it, loaded once.
+const images = new ImageRegistry();
 const theme = fixedTheme({ accent: "#0d9488" });
 const cards = new CardLayer(document.getElementById("cards") as HTMLCanvasElement, stage, {
   recorder: {},
@@ -45,6 +47,8 @@ const board: Board = new Board({
   overlay: document.getElementById("overlay") as HTMLCanvasElement,
   cards,
   theme,
+  recorder: { describeImage: images.describe },
+  renderer: () => ({ images: images.resolve }),
   snap: () => snapSettings(snap),
   hooks: {
     changed: ({ kind }) => commit(kind),
@@ -66,6 +70,12 @@ const shape = (id: string, x: number, y: number, fill: string, round = false) =>
 shape("idea", 80, 80, "#fde68a");
 shape("sketch", 360, 40, "#bfdbfe");
 shape("shot", 360, 240, "#bbf7d0", true);
+// A picture loaded by URL: once it is here it goes on the board, drawn by its key, and is saved and undone like any drawing.
+const PIN = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="26" r="20" fill="#e11d48"/><path d="M32 62 18 38h28z" fill="#e11d48"/><circle cx="32" cy="26" r="8" fill="#fff"/></svg>')}`;
+void images.load("pin", PIN).then(() => {
+  board.drawGroup("pin", (c) => images.draw(c, "pin", 120, 230, 64, 64));
+  commit("drawn");
+});
 const arrow = (id: string, from: string, to: string, more: Partial<Connector> = {}) =>
   board.drawConnector(id, { kind: "arrow", from: { key: `board:${from}`, x: 0, y: 0 }, to: { key: `board:${to}`, x: 0, y: 0 }, bend: 0.15, color: "#475569", seed: id.length * 97, ...more });
 // One hand-drawn, one clean: dashed, in right angles, with a dot for a tail and a label on the line.

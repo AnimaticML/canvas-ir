@@ -4,6 +4,7 @@ export { Actions, type Action } from "./actions";
 export { bindGestures, mountCanvas, type BindOptions, type CanvasHost, type CanvasHostOptions, type Frame, type PointerLayer, type WheelInput } from "./dom";
 export * from "./controls";
 export * from "./behaviours";
+export * from "./images";
 export * from "./cards";
 export * from "./window";
 export * from "./connectors";

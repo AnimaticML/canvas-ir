@@ -80,6 +80,12 @@ These moved from the playground unchanged in behavior, and the playground import
 
   The tools draw previews and record the new drawing.
 - **Controls** (`controls.ts`): button, toggle, slider, swatches, text box and field, section headings, the palette, and the text sink (one hidden textarea that takes typing for every text field). They mount on a `Surface`, which a card is.
+- **Images** (`images.ts`): an `ImageRegistry` keeps images by key, the two maps every app with images wrote by hand.
+  - `describe` is the recorder's `describeImage`: an image a drawing passes to `drawImage` is recorded by its key (or its `src`, or a new key), with its opaque outline traced so hit tests, snapping and text wrap follow it.
+  - `resolve` is the renderer's and replay's `images`: the key back to something `drawImage` takes.
+  - `load(key, url)` loads once however many drawings ask, and a failed load can be tried again; `onChange` says when an image arrives, to draw again; `draw(ctx, key, ...)` draws one by key, or starts its load.
+
+  The playground and the board example use it.
 - **Behaviours** (`behaviours.ts`): what a control does, apart from its look, for an app that draws its own.
   - `pressable` clicks on a press released on it, or on Enter or Space.
   - `checkable` flips on or off, as a checkbox or a switch.
@@ -173,7 +179,7 @@ The 3D pages feed `Gestures` the same way, in place of the finger maps each kept
 
 Its document is a plain object with a history. A drag previews as it goes and commits once, and a slider's run of changes is one step.
 
-`packages/toolkit/example/board.html` is a `Board` with a document of its own: shapes joined by arrows (one hand-drawn, one clean, dashed and in right angles with a label), the toolkit's toolbar and inspector (`boardPanels`, with Undo among its actions), and an undo history of the board's documents. Every change the board reports is one step, and undo loads the last document back, arrows and all. It passes in its own text input and theme, and its `dispose` takes the board, the cards and the text input off the page.
+`packages/toolkit/example/board.html` is a `Board` with a document of its own: shapes joined by arrows (one hand-drawn, one clean, dashed and in right angles with a label), the toolkit's toolbar and inspector (`boardPanels`, with Undo among its actions), and an undo history of the board's documents. Every change the board reports is one step, and undo loads the last document back, arrows and all. A picture loaded by URL through an `ImageRegistry` is drawn on it by its key. It passes in its own text input and theme, and its `dispose` takes the board, the cards and the text input off the page.
 
 - Run them with `bun run --cwd packages/toolkit example`.
 - `bun run --cwd packages/toolkit check` builds both, opens them in Chromium and drives each of those interactions, including touch through pointer events. It runs in CI.
@@ -206,6 +212,5 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 
 ## Next
 
-1. **An image registry.** Images loaded once and drawn by key, for cards and drawings.
-2. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
-3. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
+1. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
+2. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
