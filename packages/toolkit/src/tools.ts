@@ -4,7 +4,7 @@
 // board like a drag does. Text is typed into the hidden textarea every text
 // field shares and drawn on the overlay as it is typed. An arrow is drawn from one
 // thing to another and holds on to both (the board draws it; see connectors.ts).
-import { textSink } from "./controls";
+import { type TextInput, textSink } from "./controls";
 import { RecordingContext, type Matrix2D, type Point, type RecordingContextOptions, type Scene, applyToPoint, fitCurve, simplifyPolyline, traceCurve } from "canvas-ir";
 
 export type ToolName = "select" | "pen" | "rect" | "ellipse" | "text" | "arrow";
@@ -27,6 +27,8 @@ export interface ToolHost {
   readonly recorder: RecordingContextOptions;
   readonly stage: HTMLElement;
   readonly redraw: () => void;
+  /** Where the text tool takes typing from. Default the shared `textSink()`. */
+  readonly text?: () => TextInput;
   readonly log: (line: string) => void;
 }
 
@@ -55,6 +57,10 @@ export class Tools {
   private editor: { world: Point; value: string; caret: number } | null = null;
 
   constructor(private readonly host: ToolHost) {}
+
+  private get input(): TextInput {
+    return this.host.text?.() ?? textSink();
+  }
 
   /** Whether a press is being turned into a shape. */
   get drawing(): boolean {
@@ -250,7 +256,7 @@ export class Tools {
     this.to = null;
     this.points = [];
     this.mark = null;
-    if (this.editor) textSink().release();
+    if (this.editor) this.input.release();
   }
 
   /** The pointer in world space, snapped to the board when something is near. */
@@ -288,7 +294,7 @@ export class Tools {
     };
     const r = this.host.stage.getBoundingClientRect();
     this.editor = editor;
-    textSink().take("", { x: r.left + screen.x, y: r.top + screen.y }, {
+    this.input.take("", { x: r.left + screen.x, y: r.top + screen.y }, {
       onInput: (value, caret) => {
         editor.value = value;
         editor.caret = caret;
@@ -297,12 +303,12 @@ export class Tools {
       // Enter ends the text (Shift+Enter starts a line); Escape drops it.
       onKey: (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
-          textSink().release();
+          this.input.release();
           return true;
         }
         if (e.key === "Escape") {
           keep = false;
-          textSink().release();
+          this.input.release();
           return true;
         }
         return false;

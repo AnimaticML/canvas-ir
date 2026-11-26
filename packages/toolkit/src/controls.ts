@@ -30,6 +30,34 @@ export const palette = (): Palette => {
   };
 };
 
+/**
+ * Where a page's colors come from, and when they change: a host passes one to its cards (and its board, for the
+ * outlines), so they need not read the page's CSS. `systemTheme` follows the page's custom properties and its light or
+ * dark preference; `fixedTheme` never changes.
+ */
+export interface Theme {
+  colors(): Palette;
+  /** Calls `listener` when the colors change; returns what stops it. */
+  subscribe(listener: () => void): () => void;
+}
+
+export const systemTheme = (): Theme => ({
+  colors: palette,
+  subscribe: (listener) => {
+    if (typeof matchMedia === "undefined") return () => {};
+    const query = matchMedia("(prefers-color-scheme: dark)");
+    query.addEventListener("change", listener);
+    return () => query.removeEventListener("change", listener);
+  },
+});
+
+const LIGHT: Palette = { bg: "#f6f6f4", panel: "#ffffff", text: "#1d1d1b", muted: "#6b6b66", border: "#dcdcd6", accent: "#2563eb", hover: "#f59e0b" };
+
+export const fixedTheme = (colors: Partial<Palette> = {}): Theme => {
+  const p = { ...LIGHT, ...colors };
+  return { colors: () => p, subscribe: () => () => {} };
+};
+
 export const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 export const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
@@ -63,23 +91,43 @@ export const fit = (c: RecordingContext, text: string, width: number): string =>
   return `${text.slice(0, lo)}…`;
 };
 
+/** What has the keyboard while a field or the text tool is being typed into. */
+export interface TextOwner {
+  onInput(value: string, caret: number): void;
+  /** True when the key was used, so the page's default for it is prevented. */
+  onKey(e: KeyboardEvent): boolean;
+  onBlur(): void;
+}
+
 /**
- * The hidden textarea that takes typing for the focused text field, so IME,
+ * Where typing comes from for text fields and the text tool: a host passes one to its board and cards, with the
+ * lifetime it chooses. `TextSink` is the toolkit's; `textSink()` is one shared by everything not given one.
+ */
+export interface TextInput {
+  /** Whether something has the keyboard. */
+  readonly active: boolean;
+  /** Gives the keyboard to an owner, with `value` to edit, an input method's window opening at `at` (page pixels). */
+  take(value: string, at: { x: number; y: number }, owner: TextOwner): void;
+  release(): void;
+}
+
+/**
+ * A hidden textarea that takes typing for the focused text field, so IME,
  * paste, mobile keyboards and selection all work; the field draws its value
  * and caret from it.
  */
-class TextSink {
+export class TextSink implements TextInput {
   readonly element: HTMLTextAreaElement;
-  private owner: { onInput: (value: string, caret: number) => void; onKey: (e: KeyboardEvent) => boolean; onBlur: () => void } | null = null;
+  private owner: TextOwner | null = null;
 
-  constructor() {
+  constructor(parent: HTMLElement = document.body) {
     const t = document.createElement("textarea");
     t.setAttribute("aria-hidden", "true");
     t.tabIndex = -1;
     t.autocapitalize = "off";
     t.spellcheck = false;
     Object.assign(t.style, { position: "fixed", left: "0", top: "0", width: "1px", height: "1px", opacity: "0", pointerEvents: "none", resize: "none" });
-    document.body.append(t);
+    parent.append(t);
     t.addEventListener("input", () => this.owner?.onInput(t.value, t.selectionEnd));
     t.addEventListener("select", () => this.owner?.onInput(t.value, t.selectionEnd));
     t.addEventListener("keydown", (e) => {
@@ -102,7 +150,7 @@ class TextSink {
   }
 
   /** Gives the keyboard to a field, placing the textarea at `at` (page pixels) so an IME's window opens there. */
-  take(value: string, at: { x: number; y: number }, owner: NonNullable<TextSink["owner"]>): void {
+  take(value: string, at: { x: number; y: number }, owner: TextOwner): void {
     const previous = this.owner;
     this.owner = null;
     previous?.onBlur();
@@ -118,6 +166,12 @@ class TextSink {
   release(): void {
     if (this.owner) this.element.blur();
   }
+
+  /** Takes the textarea off the page. */
+  dispose(): void {
+    this.release();
+    this.element.remove();
+  }
 }
 
 let sink: TextSink | null = null;
@@ -130,6 +184,8 @@ export const textSink = (): TextSink => (sink ??= new TextSink());
  */
 export interface Surface {
   readonly colors: Palette;
+  /** Where its fields take typing from; the shared `textSink()` when not given. */
+  readonly text?: TextInput;
   /** Mounts a widget; ids are unique within the surface. */
   mount<S>(spec: ComponentSpec<S>): ComponentHandle<S>;
   get<S>(id: string): ComponentHandle<S> | undefined;
@@ -543,7 +599,7 @@ export const textField = (o: {
     click: (e, self) => {
       e.stopPropagation();
       if (self.state.editing) return;
-      textSink().take(self.state.value, o.panel.toPage(o.box.x + 8, o.box.y + o.box.h), {
+      (o.panel.text ?? textSink()).take(self.state.value, o.panel.toPage(o.box.x + 8, o.box.y + o.box.h), {
         onInput: (value, caret) => {
           const changed = value !== self.state.value;
           self.setState({ value, caret, editing: true });
@@ -555,7 +611,7 @@ export const textField = (o: {
             return true;
           }
           if (k.key === "Escape") {
-            textSink().release();
+            (o.panel.text ?? textSink()).release();
             return true;
           }
           return false;

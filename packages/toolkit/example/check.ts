@@ -260,6 +260,37 @@ await t("pointerup", 22, 900, 500);
 await t("pointerup", 21, 700, 500);
 expect(Math.abs((await b()).zoom / z - 2) < 1e-6, "board: two fingers pinch it");
 
+// What the page passed in, the board and the cards use; disposing takes them off the page.
+const passed = await page.evaluate(() => {
+  const e = (window as any).boardExample;
+  return { same: e.board.text === e.text && e.cards.text === e.text, inStage: e.text.element.parentElement?.id, accent: e.cards.colors.accent };
+});
+expect(passed.same && passed.inStage === "stage" && passed.accent === "#0d9488", "board: the text input and theme the page passes in are the ones used");
+await page.evaluate(() => (window as any).boardExample.panels.toolbar.dispose());
+const toolbarGone = await page.evaluate(() => (window as any).boardExample.cards.scene.getGroup("card-toolbar") === undefined && !(window as any).boardExample.cards.scene.bounds("card-toolbar:tool-rect"));
+expect(toolbarGone, "board: a disposed panel leaves the board");
+await page.evaluate(() => (window as any).boardExample.dispose());
+const gone0 = await page.evaluate(() => {
+  const e = (window as any).boardExample;
+  return { zoom: e.board.viewport.zoom, view: JSON.stringify(e.board.viewport.view), tool: e.board.tools.current, selected: e.board.selection.length, mirrors: document.querySelectorAll(".canvas-ir-a11y").length, sinks: document.querySelectorAll("textarea").length };
+});
+await page.mouse.move(900, 400);
+await page.mouse.wheel(0, 300);
+await drag({ x: 1000, y: 500 }, { x: 80, y: 40 });
+await page.keyboard.press("r");
+await t("pointerdown", 31, 700, 500);
+await t("pointerdown", 32, 800, 500);
+await t("pointermove", 32, 900, 500);
+await t("pointerup", 32, 900, 500);
+await t("pointerup", 31, 700, 500);
+await page.waitForTimeout(100);
+const gone1 = await page.evaluate(() => {
+  const e = (window as any).boardExample;
+  return { zoom: e.board.viewport.zoom, view: JSON.stringify(e.board.viewport.view), tool: e.board.tools.current, selected: e.board.selection.length };
+});
+expect(gone1.zoom === gone0.zoom && gone1.view === gone0.view && gone1.tool === gone0.tool && gone1.selected === gone0.selected, "board: once disposed, the wheel, pointer, pinch and keys change nothing");
+expect(gone0.mirrors === 0 && gone0.sinks === 0, `board: disposing takes the mirrors and the text input off the page (${gone0.mirrors} mirrors, ${gone0.sinks} textareas)`);
+
 expect(errors.length === 0, `no page errors${errors.length ? `: ${errors.join("; ")}` : ""}`);
 await browser.close();
 server.stop();

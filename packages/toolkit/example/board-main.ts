@@ -3,12 +3,18 @@
 // one per drawing, and an undo history of those lists. Each change the board reports is committed here; undo loads the
 // last list back onto the board.
 import type { IRDocument } from "canvas-ir";
-import { Board, CardLayer, boardPanels, snapControls, snapSettings } from "@canvas-ir/toolkit";
+import { Board, CardLayer, TextSink, boardPanels, fixedTheme, snapControls, snapSettings } from "@canvas-ir/toolkit";
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
+// Typing goes through this page's own hidden textarea, and the colors are this page's: the cards and the board take
+// both from here rather than from the page's CSS and a textarea of the toolkit's.
+const text = new TextSink(stage);
+const theme = fixedTheme({ accent: "#0d9488" });
 const cards = new CardLayer(document.getElementById("cards") as HTMLCanvasElement, stage, {
   recorder: {},
+  text,
+  theme,
   onCursor: (cursor) => {
     if (board.pointerOverCards) canvas.style.cursor = cursor ?? "default";
   },
@@ -38,6 +44,7 @@ const board: Board = new Board({
   canvas,
   overlay: document.getElementById("overlay") as HTMLCanvasElement,
   cards,
+  theme,
   snap: () => snapSettings(snap),
   hooks: {
     changed: ({ kind }) => commit(kind),
@@ -68,9 +75,21 @@ board.adoptConnectors();
 board.setView({ a: 1, b: 0, c: 0, d: 1, e: 700, f: 20 });
 
 // The toolkit's toolbar and inspector, with this page's undo among the toolbar's actions.
-boardPanels(board, cards, { x: -660, y: 0, snap, height: 560, actions: [{ text: "Undo", look: "primary", onClick: undo }] });
-window.addEventListener("keydown", (e) => {
+const panels = boardPanels(board, cards, { x: -660, y: 0, snap, height: 560, actions: [{ text: "Undo", look: "primary", onClick: undo }] });
+const onKey = (e: KeyboardEvent): void => {
   if ((e.ctrlKey || e.metaKey) && e.key === "z") undo();
-});
+};
+window.addEventListener("keydown", onKey);
 
-Object.assign(window, { boardExample: { board, history, changes, get doc() { return doc; } } });
+// Taking the board off the page, as an application does when it leaves this view: what the page gave the board and
+// the cards (the text input) it disposes itself.
+const dispose = (): void => {
+  window.removeEventListener("keydown", onKey);
+  panels.feed.detach(panels.toolbar);
+  panels.feed.detach(panels.inspector);
+  board.dispose();
+  cards.dispose();
+  text.dispose();
+};
+
+Object.assign(window, { boardExample: { board, cards, panels, text, history, changes, dispose, get doc() { return doc; } } });

@@ -29,7 +29,7 @@ import {
 } from "canvas-ir";
 import type { CardLayer } from "./cards";
 import { type Connector, drawArrow, drawRing, fromMeta, route, toMeta } from "./connectors";
-import { textSink } from "./controls";
+import { type TextInput, type Theme, textSink } from "./controls";
 import { Gestures } from "./gestures";
 import { type ToolName, Tools } from "./tools";
 import { Viewport, wheelPixels, wheelZoom } from "./viewport";
@@ -134,6 +134,12 @@ export interface BoardOptions {
   readonly snap?: () => SnapSettings;
   /** Keys that choose a tool. Default V, P, R, O, T and A. */
   readonly toolKeys?: Readonly<Record<string, ToolName>>;
+  /** Where the text tool takes typing from. Default the cards' text input, or the shared `textSink()`. */
+  readonly text?: TextInput;
+  /** Where the outlines' colors come from (accent and hover). Default the page's `--accent` and `--hover`. */
+  readonly theme?: Theme;
+  /** Where the board listens for its keys. Default the window. */
+  readonly keys?: Pick<Window, "addEventListener" | "removeEventListener">;
   readonly hooks?: BoardHooks;
 }
 
@@ -150,6 +156,8 @@ export class Board {
   readonly viewport = new Viewport();
   readonly tools: Tools;
   readonly cards: CardLayer | undefined;
+  /** Where the text tool takes typing from. */
+  readonly text: TextInput;
   /** The part of the page to draw, for a host showing it on a 3D screen; null for all of it. Set it, then `render`. */
   part: DrawPart | null = null;
   /** The part the last frame drew: what a host showing it reads, since the canvases change size a frame after it asks. */
@@ -175,6 +183,9 @@ export class Board {
   private readonly connectors = new Map<string, string>();
   private connectorCount = 0;
 
+  /** What `dispose` undoes: every listener and observer the board put on the page. */
+  private readonly undo: (() => void)[] = [];
+  private disposed = false;
   private readonly listeners = new Map<keyof BoardEvents, Set<unknown>>();
   private frame = 0;
   private viewKey = "";
@@ -191,6 +202,7 @@ export class Board {
   constructor(private readonly options: BoardOptions) {
     this.hooks = options.hooks ?? {};
     this.cards = options.cards;
+    this.text = options.text ?? options.cards?.text ?? textSink();
     this.ctx = options.canvas.getContext("2d")!;
     this.octx = options.overlay.getContext("2d")!;
     this.scene = new Scene({ version: 1, ops: [] });
@@ -239,6 +251,7 @@ export class Board {
       recorder: options.recorder ?? {},
       stage: options.stage,
       redraw: () => this.render(),
+      text: () => this.text,
       log: (line) => this.emit("log", line),
     });
     // Two fingers on the board pinch it: the press the first began is let go, and the board zooms and pans with them.
@@ -568,7 +581,7 @@ export class Board {
 
   /** Draws the board at the next frame, once however many changes come before it. */
   render(): void {
-    if (!this.frame) this.frame = requestAnimationFrame(() => this.draw());
+    if (!this.frame && !this.disposed) this.frame = requestAnimationFrame(() => this.draw());
   }
 
   private draw(): void {
@@ -631,9 +644,11 @@ export class Board {
       ctx.setLineDash(dash.map((d) => d * ui));
       ctx.strokeRect(Math.round(p.x) + 0.5, Math.round(p.y) + 0.5, Math.round(q.x - p.x), Math.round(q.y - p.y));
     };
-    const style = getComputedStyle(document.documentElement);
-    const accent = style.getPropertyValue("--accent").trim() || "#2563eb";
-    if (this.hover && !this.selection.includes(this.hover)) outline(this.hover, style.getPropertyValue("--hover").trim() || "#94a3b8", [4, 3]);
+    const theme = this.options.theme?.colors();
+    const style = theme ? null : getComputedStyle(document.documentElement);
+    const accent = theme?.accent ?? (style!.getPropertyValue("--accent").trim() || "#2563eb");
+    const hover = theme?.hover ?? (style!.getPropertyValue("--hover").trim() || "#94a3b8");
+    if (this.hover && !this.selection.includes(this.hover)) outline(this.hover, hover, [4, 3]);
     for (const id of this.selection) outline(id, accent, []);
     ctx.setLineDash([]);
     if (this.lasso && this.lasso.length > 1) {
@@ -869,14 +884,14 @@ export class Board {
       return { x: e.clientX - r.left, y: e.clientY - r.top };
     };
     const pointer = (e: PointerEvent) => ({ ...point(e), button: e.button, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey });
-    canvas.addEventListener("pointerdown", (e) => {
+    this.listenTo(canvas, "pointerdown", (e) => {
       // A pointer a host page forwards, as a page showing the board on a 3D panel does, can't be captured here.
       try {
         canvas.setPointerCapture(e.pointerId);
       } catch {}
       // Keeps focus where it is, so the text tool's hidden textarea keeps the keyboard.
       e.preventDefault();
-      textSink().release();
+      this.text.release();
       // The arrow tool starts on cards too, to hold on to what is there.
       if (cards?.hits(point(e)) && this.tools.current !== "arrow") {
         this.cardPress = true;
@@ -892,7 +907,7 @@ export class Board {
       if (this.tools.down(point(e), e.shiftKey)) return;
       this.router.pointerDown(pointer(e));
     });
-    canvas.addEventListener("pointermove", (e) => {
+    this.listenTo(canvas, "pointermove", (e) => {
       if (this.cardPress) {
         cards!.move(point(e), e);
         return;
@@ -919,7 +934,7 @@ export class Board {
       else this.router.pointerMove(pointer(e));
       this.showTooltip(point(e));
     });
-    canvas.addEventListener("pointerup", (e) => {
+    this.listenTo(canvas, "pointerup", (e) => {
       if (this.cardPress) {
         this.cardPress = false;
         cards!.up(point(e), e);
@@ -932,22 +947,21 @@ export class Board {
       if (this.tools.drawing) this.tools.up();
       else this.router.pointerUp(pointer(e));
     });
-    canvas.addEventListener("pointercancel", (e) => {
+    this.listenTo(canvas, "pointercancel", (e) => {
       this.fingers.cancel(e.pointerId);
       this.cardPress = false;
       this.boardPress = false;
       cards?.cancel();
       this.router.pointerCancel();
     });
-    canvas.addEventListener("pointerleave", (e) => {
+    this.listenTo(canvas, "pointerleave", (e) => {
       this.overCards = false;
       cards?.router.pointerLeave(pointer(e));
       this.router.pointerLeave(pointer(e));
       this.tip = null;
       this.render();
     });
-    canvas.addEventListener(
-      "wheel",
+    this.listenTo(canvas, "wheel",
       (e) => {
         e.preventDefault();
         const p = point(e);
@@ -961,9 +975,9 @@ export class Board {
       { passive: false },
     );
     const toolKeys = this.options.toolKeys ?? TOOL_KEYS;
-    window.addEventListener("keydown", (e) => {
+    this.listenTo(this.options.keys ?? window, "keydown", (e) => {
       // Typing in a text field goes through its hidden textarea, which keeps its keys.
-      if (textSink().active) return;
+      if (this.text.active) return;
       const keys: Modifiers & { key: string } = { key: e.key, altKey: e.altKey, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey };
       if (this.keysToCards && cards) {
         if (e.key === " " || e.key.startsWith("Arrow")) e.preventDefault();
@@ -981,7 +995,11 @@ export class Board {
       }
       this.router.keyDown(keys);
     });
-    new ResizeObserver(() => this.render()).observe(stage);
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(() => this.render());
+      observer.observe(stage);
+      this.undo.push(() => observer.disconnect());
+    }
   }
 
   /**
@@ -995,6 +1013,35 @@ export class Board {
     if (this.wheelFree) return false;
     this.render();
     return true;
+  }
+
+  private listenTo<K extends keyof HTMLElementEventMap>(
+    target: Pick<EventTarget, "addEventListener" | "removeEventListener">,
+    type: K,
+    listener: (e: HTMLElementEventMap[K]) => void,
+    options?: AddEventListenerOptions,
+  ): void {
+    const l = listener as EventListener;
+    target.addEventListener(type, l, options);
+    this.undo.push(() => target.removeEventListener(type, l, options));
+  }
+
+  /**
+   * Takes the board off the page: its listeners on the canvas and the keys, its resize observer, its pending frame and
+   * flight, its mirror and its renderer. The cards and the text input are the host's, given to it, and stay.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.tools.cancel();
+    this.text.release();
+    for (const u of this.undo.splice(0)) u();
+    if (this.frame) cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    this.flight++;
+    this.a11y.dispose();
+    this.renderer.dispose();
+    this.listeners.clear();
   }
 
   /** Gives the keyboard to the cards, as when one of their controls was focused. */

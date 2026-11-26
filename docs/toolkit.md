@@ -128,6 +128,19 @@ The playground's `main.ts` is now a host of a `Board`. It went from 1,799 lines 
 | A tool records a drawing and asks the host to commit it. | Puts it in its scene and its history. |
 | The board reports a change (`changed`): moved, drawn, connected, removed. | Commits it: reads `board.documents()` into its document and history, or saves the layout. On undo, `board.load(...)` puts a document back. |
 
+### What the host passes in, and taking it off the page
+
+Two things the toolkit used to find on the page, a host can now give it:
+- **Text input** (`TextInput`): where typing goes while a field or the text tool is being edited. The default is one shared hidden textarea (`textSink()`); a host passes its own `new TextSink(parent)` to the `CardLayer` and the `Board` (the board takes the cards' when it has none), or anything with `take`, `release` and `active`, such as an input of its own framework.
+- **Theme** (`Theme`): the cards' colors and the board's outlines. The default `systemTheme()` reads the page's CSS custom properties and follows its light or dark preference; `fixedTheme({...})` gives colors outright. Cards rebuild when a theme says its colors changed.
+
+Each part takes off the page what it put there:
+- `board.dispose()` removes its listeners on the canvas and the keys, its resize observer, its pending frame and flight, its mirror and its renderer.
+- `cards.dispose()` does the same for the cards' layer, and `cards.removeCard(card)` or `panel.dispose()` takes one card off.
+- `feed.detach(panel)` stops a `BoardFeed` refreshing a panel.
+
+What the host gave (the cards to the board, the text input to both) it disposes itself.
+
 ### In the playground
 
 The playground imports the cards, window parts, connectors, tools and controls from the toolkit. Its board in `main.ts` keeps its view in a `Viewport`:
@@ -150,7 +163,7 @@ The board also gained two-finger pinch, through `Gestures` fed beside its router
 
 Its document is a plain object with a history. A drag previews as it goes and commits once, and a slider's run of changes is one step.
 
-`packages/toolkit/example/board.html` is a `Board` with a document of its own: shapes joined by arrows, the toolkit's toolbar and inspector (`boardPanels`, with Undo among its actions), and an undo history of the board's documents. Every change the board reports is one step, and undo loads the last document back, arrows and all.
+`packages/toolkit/example/board.html` is a `Board` with a document of its own: shapes joined by arrows, the toolkit's toolbar and inspector (`boardPanels`, with Undo among its actions), and an undo history of the board's documents. Every change the board reports is one step, and undo loads the last document back, arrows and all. It passes in its own text input and theme, and its `dispose` takes the board, the cards and the text input off the page.
 
 - Run them with `bun run --cwd packages/toolkit example`.
 - `bun run --cwd packages/toolkit check` builds both, opens them in Chromium and drives each of those interactions, including touch through pointer events. It runs in CI.
@@ -183,5 +196,9 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 
 ## Next
 
-1. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
-2. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
+1. **Connector styles.** Clean dashed curves and labels beside the hand-drawn arrow, for diagrams such as Harmonica's.
+2. **Twist in gestures.** Two-finger rotation, and the 3D pages on the shared gestures.
+3. **Widget behaviours without the stock look.** A button's or slider's pressing, dragging and keys, with the app drawing it.
+4. **An image registry.** Images loaded once and drawn by key, for cards and drawings.
+5. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
+6. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.

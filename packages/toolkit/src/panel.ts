@@ -73,7 +73,10 @@ export class Panel {
   readonly card: Card;
   private items: readonly PanelItem[] = [];
 
-  constructor(layer: CardLayer, private readonly options: PanelOptions) {
+  constructor(
+    private readonly layer: CardLayer,
+    private readonly options: PanelOptions,
+  ) {
     this.card = layer.card({
       id: options.id,
       title: options.title,
@@ -84,6 +87,12 @@ export class Panel {
       ...(options.onMove ? { onMove: options.onMove } : {}),
       build: (card, width) => this.build(card, width),
     });
+  }
+
+  /** Takes the panel off the board. */
+  dispose(): void {
+    this.layer.removeCard(this.card);
+    this.items = [];
   }
 
   /** Builds the panel again, as when its list of controls changed. */

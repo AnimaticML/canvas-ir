@@ -18,7 +18,7 @@ import {
   Scene,
   applyToPoint,
 } from "canvas-ir";
-import { FONT, type Palette, type Surface, palette } from "./controls";
+import { FONT, type Palette, type Surface, type TextInput, type Theme, systemTheme, textSink } from "./controls";
 import type { PointerLayer } from "./dom";
 
 type Modifiers = { readonly button?: number; readonly altKey?: boolean; readonly shiftKey?: boolean; readonly ctrlKey?: boolean; readonly metaKey?: boolean };
@@ -41,6 +41,10 @@ export interface LayerOptions {
   readonly onCursor: (cursor: string | null) => void;
   /** Called when the keyboard should come to the cards, as when Tab reaches one of their controls. */
   readonly onFocus: () => void;
+  /** Where the cards' colors come from. Default the page's CSS custom properties and its light or dark preference. */
+  readonly theme?: Theme;
+  /** Where their text fields take typing from. Default the shared `textSink()`. */
+  readonly text?: TextInput;
 }
 
 /** The scene, router and renderer the cards share, drawn over the board. */
@@ -48,7 +52,9 @@ export class CardLayer implements PointerLayer {
   readonly scene = new Scene({ version: 1, ops: [] });
   readonly router: EventRouter;
   readonly components: Components;
-  colors: Palette = palette();
+  colors: Palette;
+  readonly text: TextInput;
+  private readonly unsubscribe: () => void;
   private readonly renderer: Renderer;
   private readonly a11y: AccessibilityLayer;
   private readonly cards: Card[] = [];
@@ -61,6 +67,9 @@ export class CardLayer implements PointerLayer {
     container: HTMLElement,
     private readonly options: LayerOptions,
   ) {
+    const theme = options.theme ?? systemTheme();
+    this.colors = theme.colors();
+    this.text = options.text ?? textSink();
     this.router = new EventRouter(this.scene, { tolerance: 2 });
     this.renderer = new Renderer(this.scene, canvas.getContext("2d")!, { lod: false });
     this.components = new Components(this.scene, this.router, {
@@ -86,8 +95,8 @@ export class CardLayer implements PointerLayer {
         this.router.pointerUp({ x: p.x, y: p.y, button: 0 });
       },
     });
-    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-      this.colors = palette();
+    this.unsubscribe = theme.subscribe(() => {
+      this.colors = theme.colors();
       for (const card of this.cards) card.rebuild();
     });
   }
@@ -97,6 +106,15 @@ export class CardLayer implements PointerLayer {
     const card = new Card(this, options);
     this.cards.push(card);
     return card;
+  }
+
+  /** Takes a card off the board, with its controls. */
+  removeCard(card: Card): void {
+    const i = this.cards.indexOf(card);
+    if (i < 0) return;
+    this.cards.splice(i, 1);
+    card.dispose();
+    this.render();
   }
 
   /** Whether a card is under a point, in CSS pixels over the board. */
@@ -164,6 +182,16 @@ export class CardLayer implements PointerLayer {
     return { x: r.left + p.x, y: r.top + p.y };
   }
 
+  /** Takes the cards off the page: their mirror, their drawing and what they listen to. The text input is the host's. */
+  dispose(): void {
+    if (this.frame) cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    this.unsubscribe();
+    this.a11y.dispose();
+    this.renderer.dispose();
+    this.cards.length = 0;
+  }
+
   /** Draws what changed, once per frame. */
   render(): void {
     if (this.frame) return;
@@ -208,6 +236,7 @@ export class Card implements Surface {
   private view = 0;
   private readonly children = new Set<string>();
   private readonly frame: ComponentHandle<FrameState>;
+  private readonly offWheel: () => void;
 
   constructor(
     private readonly layer: CardLayer,
@@ -218,7 +247,7 @@ export class Card implements Surface {
     this.y = options.y;
     layer.scene.addGroup({ id: this.group, meta: { role: "group", label: options.title } });
     this.frame = layer.components.mount(this.frameSpec());
-    layer.router.on(this.group, "wheel", (e) => {
+    this.offWheel = layer.router.on(this.group, "wheel", (e) => {
       const input = e.input as { deltaY?: number; ctrlKey?: boolean; metaKey?: boolean };
       // A pinch (or Ctrl and the wheel) zooms the board even over a card.
       if (input.ctrlKey || input.metaKey || this.content <= this.view) return;
@@ -246,6 +275,10 @@ export class Card implements Surface {
 
   get colors(): Palette {
     return this.layer.colors;
+  }
+
+  get text(): TextInput {
+    return this.layer.text;
   }
 
   mount<S>(spec: ComponentSpec<S>): ComponentHandle<S> {
@@ -281,6 +314,15 @@ export class Card implements Surface {
     this.content = this.options.build(this, this.options.width);
     if (this.options.height === undefined) this.view = this.content;
     this.scrollTo(this.scroll, true);
+  }
+
+  /** Unmounts the card's controls and frame; `CardLayer.removeCard` calls this. */
+  dispose(): void {
+    for (const id of this.children) this.layer.components.unmount(id);
+    this.children.clear();
+    this.layer.components.unmount(`${this.group}:frame`);
+    this.offWheel();
+    if (this.layer.scene.getGroup(this.group)) this.layer.scene.remove(this.group);
   }
 
   /** Scrolls so content y is at the top of the card, within bounds. */

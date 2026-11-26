@@ -144,6 +144,11 @@ export class BoardFeed {
     this.panels.add(panel);
   }
 
+  /** Stops refreshing a panel, as when it is disposed. */
+  detach(panel: Panel): void {
+    this.panels.delete(panel);
+  }
+
   private refresh(id: string): void {
     for (const p of this.panels) p.refresh(id);
   }
