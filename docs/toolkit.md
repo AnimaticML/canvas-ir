@@ -159,6 +159,18 @@ Each part takes off the page what it put there:
 
 What the host gave (the cards to the board, the text input to both) it disposes itself.
 
+### Importing a part, and React
+
+Each module is its own entry, so an app can import only what it uses and its bundle leaves the rest out: `@canvas-ir/toolkit/playback`, `/gestures`, `/viewport`, `/images`, `/desktop`, `/connectors`, `/controls` and so on, one per file in `src`. `@canvas-ir/toolkit` still gives all of them but React.
+
+`@canvas-ir/toolkit/react` is the one part that needs React (an optional peer dependency, 18 or later):
+- `useBoard({ board, layer, setup })` makes a `Board` with a `CardLayer` over it when its stage mounts, runs `setup(board, layer)` (whose return runs before disposing), and disposes both on unmount, so a view that comes and goes leaves nothing listening. Unless the app gives a text input, the board gets one inside its own stage, which goes with it. It returns the refs, and the board and layer once mounted.
+- `<BoardStage refs={refs} style={...} />` is the markup it needs: a stage with the board's canvas, the cards' and the overlay stacked.
+
+### Text that fits its box
+
+`fitText(ctx, text, {width, height}, {font, weight, min, max, lineHeight, wrap})` finds the largest size at which text, wrapped to the box's width, fits the box, and gives its lines, font and line height, with `fits` false when even the smallest size overflows. `fillFitted(ctx, text, {x, y, width, height}, options)` draws it centred in the box (or from its top left), for a sticky note, a shape's label or a title that grows and shrinks with its box.
+
 ### In the playground
 
 The playground imports the cards, window parts, connectors, tools and controls from the toolkit. Its board in `main.ts` keeps its view in a `Viewport`:
@@ -185,8 +197,10 @@ Its document is a plain object with a history. A drag previews as it goes and co
 
 `packages/toolkit/example/board.html` is a `Board` with a document of its own: shapes joined by arrows (one hand-drawn, one clean, dashed and in right angles with a label), the toolkit's toolbar and inspector (`boardPanels`, with Undo among its actions), and an undo history of the board's documents. Every change the board reports is one step, and undo loads the last document back, arrows and all. A picture loaded by URL through an `ImageRegistry` is drawn on it by its key. It passes in its own text input and theme, and its `dispose` takes the board, the cards and the text input off the page.
 
+`packages/toolkit/example/react.html` is a React app with a board from `useBoard`, which a button closes and opens again.
+
 - Run them with `bun run --cwd packages/toolkit example`.
-- `bun run --cwd packages/toolkit check` builds both, opens them in Chromium and drives each of those interactions, including touch through pointer events. It runs in CI.
+- `bun run --cwd packages/toolkit check` builds them, opens them in Chromium and drives each of those interactions, including touch through pointer events. It runs in CI.
 
 ## Usage in Harmonica and ML Painter
 
@@ -216,7 +230,4 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 
 ## Next
 
-The handout's list is done. What could come after it:
-- subpath exports, so an app can import only the part it uses;
-- a React hook around a board;
-- text that sizes itself to fit its box.
+The handout's list is done, and so are the three items after it (subpath exports, the React hook and text that fits its box). The next step on the roadmap is the 2-camera recording setup.

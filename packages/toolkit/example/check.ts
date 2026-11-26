@@ -4,7 +4,7 @@
 import { chromium } from "playwright-core";
 
 const out = new URL("./dist/", import.meta.url).pathname;
-const built = await Bun.build({ entrypoints: [new URL("./index.html", import.meta.url).pathname, new URL("./board.html", import.meta.url).pathname], outdir: out, minify: false });
+const built = await Bun.build({ entrypoints: [new URL("./index.html", import.meta.url).pathname, new URL("./board.html", import.meta.url).pathname, new URL("./react.html", import.meta.url).pathname], outdir: out, minify: false });
 if (!built.success) throw new AggregateError(built.logs, "build failed");
 const server = Bun.serve({
   port: 0,
@@ -344,6 +344,34 @@ const gone1 = await page.evaluate(() => {
 });
 expect(gone1.zoom === gone0.zoom && gone1.view === gone0.view && gone1.tool === gone0.tool && gone1.selected === gone0.selected, "board: once disposed, the wheel, pointer, pinch and keys change nothing");
 expect(gone0.mirrors === 0 && gone0.sinks === 0, `board: disposing takes the mirrors and the text input off the page (${gone0.mirrors} mirrors, ${gone0.sinks} textareas)`);
+
+// The board in React: made when its stage mounts, with what the app's setup drew; gone when it unmounts, again on a remount.
+await page.setViewportSize({ width: 900, height: 600 });
+await page.goto(`http://localhost:${server.port}/react.html`);
+await page.waitForFunction(() => !!(window as any).reactExample?.board, null, { timeout: 5000 }).catch(() => {});
+await page.waitForTimeout(100);
+type R = { log: string[]; made: boolean; hello: boolean; mirrors: number; sinks: number; canvases: number };
+const rs = (): Promise<R> =>
+  page.evaluate(() => {
+    const e = (window as any).reactExample;
+    return { log: [...e.log], made: !!e.board, hello: !!e.board?.scene.getGroup("hello"), mirrors: document.querySelectorAll(".canvas-ir-a11y").length, sinks: document.querySelectorAll("textarea").length, canvases: document.querySelectorAll("canvas").length };
+  });
+let rr = await rs();
+const blue = await page.evaluate(() => {
+  const c = document.querySelectorAll("canvas")[0] as HTMLCanvasElement;
+  const dpr = c.width / c.getBoundingClientRect().width;
+  return [...c.getContext("2d")!.getImageData(Math.round(160 * dpr), Math.round(130 * dpr), 1, 1).data];
+});
+expect(rr.made && rr.hello && rr.log.join() === "setup" && rr.canvases === 3, `react: useBoard makes the board when its stage mounts and runs the setup once (${rr.log.join()})`);
+expect(blue[2]! > 200 && blue[0]! < 80, `react: the board draws what the setup put on it (${blue.join(",")})`);
+await page.click("#toggle");
+await page.waitForTimeout(50);
+rr = await rs();
+expect(!rr.made && rr.log.join() === "setup,cleanup" && rr.canvases === 0 && rr.mirrors === 0 && rr.sinks === 0, `react: unmounting runs the cleanup and disposes the board (${rr.mirrors} mirrors, ${rr.sinks} textareas)`);
+await page.click("#toggle");
+await page.waitForTimeout(50);
+rr = await rs();
+expect(rr.made && rr.hello && rr.log.join() === "setup,cleanup,setup", "react: mounting again makes a new board");
 
 expect(errors.length === 0, `no page errors${errors.length ? `: ${errors.join("; ")}` : ""}`);
 await browser.close();

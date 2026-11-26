@@ -5,10 +5,28 @@
   "description": "Editor and interaction building blocks for CanvasIR boards: a viewport, multi-touch gestures, a canvas host and actions, with the document and its meaning left to the application",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./viewport": "./src/viewport.ts",
+    "./gestures": "./src/gestures.ts",
+    "./wheel": "./src/wheel.ts",
+    "./dom": "./src/dom.ts",
+    "./actions": "./src/actions.ts",
+    "./controls": "./src/controls.ts",
+    "./behaviours": "./src/behaviours.ts",
+    "./panel": "./src/panel.ts",
+    "./cards": "./src/cards.ts",
+    "./window": "./src/window.ts",
+    "./connectors": "./src/connectors.ts",
+    "./tools": "./src/tools.ts",
+    "./board": "./src/board.ts",
+    "./inspector": "./src/inspector.ts",
+    "./images": "./src/images.ts",
+    "./desktop": "./src/desktop.ts",
+    "./playback": "./src/playback.ts",
+    "./react": "./src/react.ts"
   },
   "scripts": {
-    "example": "bun example/index.html example/board.html",
+    "example": "bun example/index.html example/board.html example/react.html",
     "check": "bun run example/check.ts",
     "check:wheel": "bun run example/check-wheel.ts"
   },
@@ -16,6 +34,18 @@
     "canvas-ir": "workspace:*"
   },
   "devDependencies": {
-    "playwright-core": "1.56.1"
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "playwright-core": "1.56.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }

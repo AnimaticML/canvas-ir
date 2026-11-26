@@ -92,6 +92,79 @@ export const fit = (c: RecordingContext, text: string, width: number): string =>
   return `${text.slice(0, lo)}…`;
 };
 
+export interface FitTextOptions {
+  /** The font family; default the toolkit's. */
+  readonly font?: string;
+  /** Its weight or style, written before the size, e.g. "600" or "italic bold". */
+  readonly weight?: string;
+  /** The sizes to choose between, in pixels; default 8 to 72. */
+  readonly min?: number;
+  readonly max?: number;
+  /** Line height as a multiple of the size; default 1.25. */
+  readonly lineHeight?: number;
+  /** Wraps the text to the box's width (the default), or keeps it on its lines. */
+  readonly wrap?: boolean;
+}
+
+export interface FittedText {
+  readonly size: number;
+  readonly font: string;
+  readonly lines: readonly string[];
+  readonly lineHeight: number;
+  /** False when even the smallest size overflows the box; the lines are then at that size. */
+  readonly fits: boolean;
+}
+
+/**
+ * The largest size at which text fits a box, wrapped to its width: a sticky note, a shape's label or a title that
+ * grows and shrinks with its box. Leaves the context's font as it found it.
+ */
+export const fitText = (c: RecordingContext, text: string, box: { readonly width: number; readonly height: number }, o: FitTextOptions = {}): FittedText => {
+  const family = o.font ?? FONT;
+  const lh = o.lineHeight ?? 1.25;
+  const was = c.font;
+  const at = (size: number): FittedText => {
+    c.font = `${o.weight ? `${o.weight} ` : ""}${size}px ${family}`;
+    const lines = o.wrap === false ? text.split("\n") : wrap(c, text, box.width);
+    const wide = Math.max(0, ...lines.map((l) => c.measureText(l).width));
+    return { size, font: c.font, lines, lineHeight: size * lh, fits: wide <= box.width && lines.length * size * lh <= box.height };
+  };
+  let lo = Math.max(1, Math.floor(o.min ?? 8));
+  let hi = Math.max(lo, Math.floor(o.max ?? 72));
+  let best = at(lo);
+  // Fitting only gets harder as the size grows, so the largest size that fits is found by halving.
+  if (best.fits)
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      const t = at(mid);
+      if (t.fits) {
+        best = t;
+        lo = mid;
+      } else hi = mid - 1;
+    }
+  c.font = was;
+  return best;
+};
+
+/** Draws text at the largest size that fits a box, centred in it (or from its top left with `align: "start"`). */
+export const fillFitted = (
+  c: RecordingContext,
+  text: string,
+  box: { readonly x: number; readonly y: number; readonly width: number; readonly height: number },
+  o: FitTextOptions & { readonly align?: "center" | "start" } = {},
+): FittedText => {
+  const t = fitText(c, text, box, o);
+  const center = o.align !== "start";
+  c.save();
+  c.font = t.font;
+  c.textAlign = center ? "center" : "left";
+  c.textBaseline = "middle";
+  const top = center ? box.y + (box.height - t.lines.length * t.lineHeight) / 2 : box.y;
+  t.lines.forEach((line, i) => c.fillText(line, center ? box.x + box.width / 2 : box.x, top + (i + 0.5) * t.lineHeight));
+  c.restore();
+  return t;
+};
+
 /** What has the keyboard while a field or the text tool is being typed into. */
 export interface TextOwner {
   onInput(value: string, caret: number): void;
