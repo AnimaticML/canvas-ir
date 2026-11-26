@@ -3,7 +3,7 @@
 // one per drawing, and an undo history of those lists. Each change the board reports is committed here; undo loads the
 // last list back onto the board.
 import type { IRDocument } from "canvas-ir";
-import { Board, CardLayer, TextSink, boardPanels, fixedTheme, snapControls, snapSettings } from "@canvas-ir/toolkit";
+import { Board, CardLayer, type Connector, TextSink, boardPanels, fixedTheme, snapControls, snapSettings } from "@canvas-ir/toolkit";
 
 const stage = document.getElementById("stage")!;
 const canvas = document.getElementById("board") as HTMLCanvasElement;
@@ -66,10 +66,11 @@ const shape = (id: string, x: number, y: number, fill: string, round = false) =>
 shape("idea", 80, 80, "#fde68a");
 shape("sketch", 360, 40, "#bfdbfe");
 shape("shot", 360, 240, "#bbf7d0", true);
-const arrow = (id: string, from: string, to: string) =>
-  board.drawConnector(id, { kind: "arrow", from: { key: `board:${from}`, x: 0, y: 0 }, to: { key: `board:${to}`, x: 0, y: 0 }, bend: 0.15, color: "#475569", seed: id.length * 97 });
+const arrow = (id: string, from: string, to: string, more: Partial<Connector> = {}) =>
+  board.drawConnector(id, { kind: "arrow", from: { key: `board:${from}`, x: 0, y: 0 }, to: { key: `board:${to}`, x: 0, y: 0 }, bend: 0.15, color: "#475569", seed: id.length * 97, ...more });
+// One hand-drawn, one clean: dashed, in right angles, with a dot for a tail and a label on the line.
 arrow("idea-sketch", "idea", "sketch");
-arrow("idea-shot", "idea", "shot");
+arrow("idea-shot", "idea", "shot", { word: "draft", style: { look: "clean", path: "elbow", dash: [6, 4], head: "filled", tail: "dot" } });
 doc = board.documents();
 board.adoptConnectors();
 board.setView({ a: 1, b: 0, c: 0, d: 1, e: 700, f: 20 });

@@ -28,7 +28,7 @@ import {
   multiply,
 } from "canvas-ir";
 import type { CardLayer } from "./cards";
-import { type Connector, drawArrow, drawRing, fromMeta, route, toMeta } from "./connectors";
+import { type Connector, type ConnectorStyle, drawArrow, drawRing, fromMeta, route, toMeta } from "./connectors";
 import { type TextInput, type Theme, textSink } from "./controls";
 import { Gestures } from "./gestures";
 import { type ToolName, Tools } from "./tools";
@@ -138,6 +138,8 @@ export interface BoardOptions {
   readonly text?: TextInput;
   /** Where the outlines' colors come from (accent and hover). Default the page's `--accent` and `--hover`. */
   readonly theme?: Theme;
+  /** How the arrows the arrow tool draws look; omitted, hand-drawn. */
+  readonly connectorStyle?: ConnectorStyle;
   /** Where the board listens for its keys. Default the window. */
   readonly keys?: Pick<Window, "addEventListener" | "removeEventListener">;
   readonly hooks?: BoardHooks;
@@ -454,9 +456,9 @@ export class Board {
       this.connectors.set(id, JSON.stringify(b));
       return;
     }
-    const { from, to } = route(c, (key) => this.boxOf(key));
+    const { from, to, across } = route(c, (key) => this.boxOf(key));
     const kept: Connector = { ...c, from: { ...c.from, x: from.x, y: from.y }, to: { ...(c.to ?? c.from), x: to.x, y: to.y } };
-    this.drawGroup(id, (ctx) => drawArrow(ctx, from, to, c), { connector: toMeta(kept) });
+    this.drawGroup(id, (ctx) => drawArrow(ctx, from, to, c, across), { connector: toMeta(kept) });
     this.connectors.set(id, JSON.stringify([from, to]));
   }
 
@@ -474,7 +476,7 @@ export class Board {
   connect(from: { key: string | null; point: Point }, to: { key: string | null; point: Point }): void {
     const id = `drawn-arrow-${Date.now().toString(36)}-${this.connectorCount++}`;
     const end = (e: typeof from) => (e.key ? { key: e.key, x: e.point.x, y: e.point.y } : { x: e.point.x, y: e.point.y });
-    this.drawConnector(id, { kind: "arrow", from: end(from), to: end(to), bend: 0.12, color: this.tools.style.stroke, seed: 1 + Math.floor(Math.random() * 1e6) });
+    this.drawConnector(id, { kind: "arrow", from: end(from), to: end(to), bend: 0.12, color: this.tools.style.stroke, seed: 1 + Math.floor(Math.random() * 1e6), ...(this.options.connectorStyle ? { style: this.options.connectorStyle } : {}) });
     this.select([id]);
     this.emit("log", `arrow from ${from.key ?? "a point"} to ${to.key ?? "a point"}`);
     this.emit("changed", { kind: "connected", ids: [id] });

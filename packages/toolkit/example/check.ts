@@ -247,6 +247,20 @@ expect(!bs.groups.includes("shot") && bs.changes.at(-1) === "removed", "board: D
 await page.keyboard.press("Control+z");
 bs = await b();
 expect(bs.groups.includes("shot"), "board: undo brings it back");
+// The clean arrow: dashed, in right angles, labelled, and it follows the shape it holds too.
+type CleanOp = { kind: string; dash: number[] | null; text: string | null };
+const cleanOps = () =>
+  page.evaluate((): CleanOp[] => {
+    const s = (window as any).boardExample.board.scene;
+    return s.document.ops.filter((o: any) => s.groupChain(o.id).includes("idea-shot")).map((o: any) => ({ kind: o.kind, dash: o.stroke?.lineDash ?? null, text: o.text ?? null }));
+  });
+const clean0 = await cleanOps();
+expect(clean0.some((o) => o.kind === "stroke" && o.dash?.length === 2) && clean0.some((o) => o.text === "draft"), "board: a clean arrow is drawn dashed, with its label");
+const cleanBox0 = await box("idea-shot");
+const shotBox = await box("shot");
+await drag(at(shotBox.x + shotBox.width / 2, shotBox.y + shotBox.height / 2), { x: 0, y: 80 });
+expect(JSON.stringify(await box("idea-shot")) !== JSON.stringify(cleanBox0), "board: the clean arrow follows the shape it holds");
+await page.keyboard.press("Control+z");
 // Two fingers pinch the board.
 const z = (await b()).zoom;
 const t = (type: string, id: number, x: number, y: number) =>

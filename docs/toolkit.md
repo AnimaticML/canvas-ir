@@ -67,7 +67,9 @@ These moved from the playground unchanged in behavior, and the playground import
   - `windowFrame()`, a title bar and border around content drawn straight on the board.
 - **Connectors** (`connectors.ts`): arrows whose ends hold on to what they join, by a key the host resolves to a box, or stay loose.
   - `route()` places each end on its box's edge, facing along the bow.
-  - `drawArrow()` and `drawRing()` draw them with a repeatable hand-drawn wobble.
+  - `drawArrow()` and `drawRing()` draw them with a repeatable hand-drawn wobble, or, with `style: { look: "clean" }`, as an even thin line for diagrams.
+  - A connector's `style` also picks its path (a bowed curve, straight, or right angles with rounded corners that leave the sides facing each other), its width and dashes, what it ends in at each end (open, filled, a dot or nothing), and its word as a label: beside the bow by hand, on the line over a pill when clean. `arrowPath()` gives the path, where the label goes and the angle at each end, for a host drawing its own.
+  - A board's `connectorStyle` option sets how the arrows its arrow tool draws look.
   - `toMeta()` and `fromMeta()` keep a connector in its group's meta, so it is saved like any drawing.
 
   What the keys mean, and when to draw again, is the host's.
@@ -163,7 +165,7 @@ The board also gained two-finger pinch, through `Gestures` fed beside its router
 
 Its document is a plain object with a history. A drag previews as it goes and commits once, and a slider's run of changes is one step.
 
-`packages/toolkit/example/board.html` is a `Board` with a document of its own: shapes joined by arrows, the toolkit's toolbar and inspector (`boardPanels`, with Undo among its actions), and an undo history of the board's documents. Every change the board reports is one step, and undo loads the last document back, arrows and all. It passes in its own text input and theme, and its `dispose` takes the board, the cards and the text input off the page.
+`packages/toolkit/example/board.html` is a `Board` with a document of its own: shapes joined by arrows (one hand-drawn, one clean, dashed and in right angles with a label), the toolkit's toolbar and inspector (`boardPanels`, with Undo among its actions), and an undo history of the board's documents. Every change the board reports is one step, and undo loads the last document back, arrows and all. It passes in its own text input and theme, and its `dispose` takes the board, the cards and the text input off the page.
 
 - Run them with `bun run --cwd packages/toolkit example`.
 - `bun run --cwd packages/toolkit check` builds both, opens them in Chromium and drives each of those interactions, including touch through pointer events. It runs in CI.
@@ -174,7 +176,7 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 
 - **Harmonica**:
   - Replace `camera`, `toWorld` and the wheel handler with a `Viewport({ minZoom: 0.45, maxZoom: 2.4 })`, and keep the scene, renderer, router and accessibility layer across view changes. A pan or zoom then calls `renderer.setView` and redraws, instead of re-recording the whole board. Zoom also follows the pointer.
-  - Card frames and connectors: `Card`'s frame with `onMove` (or a drag preview committed per move), and `route()` with its own drawing in place of `drawConnectorArrow()`.
+  - Card frames and connectors: `Card`'s frame with `onMove` (or a drag preview committed per move), and `route()` with `drawArrow()` in the clean look (dashed, with its label on the line) in place of `drawConnectorArrow()`.
   - `Gestures` replaces `dragState`:
     - `press` hit tests for a note, a title bar or empty board;
     - `drag` calls `collabDoc.moveBoardCard` or `viewport.panBy`;
@@ -196,9 +198,8 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 
 ## Next
 
-1. **Connector styles.** Clean dashed curves and labels beside the hand-drawn arrow, for diagrams such as Harmonica's.
-2. **Twist in gestures.** Two-finger rotation, and the 3D pages on the shared gestures.
-3. **Widget behaviours without the stock look.** A button's or slider's pressing, dragging and keys, with the app drawing it.
-4. **An image registry.** Images loaded once and drawn by key, for cards and drawings.
-5. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
-6. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
+1. **Twist in gestures.** Two-finger rotation, and the 3D pages on the shared gestures.
+2. **Widget behaviours without the stock look.** A button's or slider's pressing, dragging and keys, with the app drawing it.
+3. **An image registry.** Images loaded once and drawn by key, for cards and drawings.
+4. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
+5. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
