@@ -3,7 +3,8 @@
 // mounted on a surface (a card on the board). The only DOM is one hidden
 // textarea that takes keyboard and IME input for whichever text field has
 // focus; what is typed is drawn on canvas.
-import { type ComponentHandle, type ComponentSpec, type JsonValue, type RecordingContext, type RouterEvent } from "canvas-ir";
+import { type ComponentHandle, type ComponentSpec, type ComponentUi, type JsonValue, type RecordingContext, type RouterEvent } from "canvas-ir";
+import { checkable, pressable, ranged } from "./behaviours";
 
 /** The page's colors, read from its CSS custom properties so the chrome follows light and dark. */
 export interface Palette {
@@ -231,104 +232,99 @@ export const button = (o: {
   /** Whether it shows as on, as the current tool does. */
   active?: boolean;
   title?: string;
-}): ComponentSpec<{ active: boolean; text: string }> => ({
-  id: o.id,
-  state: { active: o.active ?? false, text: o.text },
-  meta: (s) => ({ role: "button", label: o.title ? `${s.text}: ${o.title}` : s.text, ...(s.active ? { pressed: true } : {}) }),
-  cursor: "pointer",
-  draw: (c, s, ui) => {
-    const k = o.panel.colors;
-    const { x, y, w, h } = o.box;
-    hitArea(c, o.box, k.panel);
-    const filled = s.active || o.look === "primary" || o.look === "accent";
-    const base = o.look === "accent" ? "#f97316" : k.accent;
-    c.beginPath();
-    c.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 6);
-    if (filled) {
-      c.fillStyle = ui.pressed ? k.text : ui.hovered && o.look === "accent" ? "#ea580c" : base;
-      c.fill();
-      if (ui.hovered && o.look !== "accent") {
-        c.globalAlpha = 0.15;
-        c.fillStyle = "#ffffff";
-        c.fill();
-        c.globalAlpha = 1;
-      }
-    } else {
-      if (ui.pressed) {
-        c.fillStyle = k.border;
-        c.fill();
-      }
-      c.strokeStyle = ui.hovered || ui.focused ? k.accent : k.border;
-      c.lineWidth = 1;
-      c.stroke();
-    }
-    c.font = `${o.look === "accent" ? "600 " : ""}13px ${FONT}`;
-    c.fillStyle = filled ? "#ffffff" : k.text;
-    c.textBaseline = "middle";
-    c.textAlign = "center";
-    c.fillText(s.text, x + w / 2, y + h / 2 + 0.5);
-    c.textAlign = "start";
-  },
-  on: {
-    click: (e) => {
-      e.stopPropagation();
-      o.onClick();
-    },
-    keydown: (e) => {
-      const key = (e.input as { key: string }).key;
-      if (key === "Enter" || key === " ") o.onClick();
-    },
-  },
-});
+  /** The app's own drawing, in place of the toolkit's look; it clicks the same. */
+  draw?: (c: RecordingContext, s: { active: boolean; text: string }, ui: ComponentUi) => void;
+}): ComponentSpec<{ active: boolean; text: string }> =>
+  pressable({
+    id: o.id,
+    state: { active: o.active ?? false, text: o.text },
+    label: (s) => (o.title ? `${s.text}: ${o.title}` : s.text),
+    pressed: (s) => s.active,
+    onPress: () => o.onClick(),
+    draw:
+      o.draw ??
+      ((c, s, ui) => {
+        const k = o.panel.colors;
+        const { x, y, w, h } = o.box;
+        hitArea(c, o.box, k.panel);
+        const filled = s.active || o.look === "primary" || o.look === "accent";
+        const base = o.look === "accent" ? "#f97316" : k.accent;
+        c.beginPath();
+        c.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 6);
+        if (filled) {
+          c.fillStyle = ui.pressed ? k.text : ui.hovered && o.look === "accent" ? "#ea580c" : base;
+          c.fill();
+          if (ui.hovered && o.look !== "accent") {
+            c.globalAlpha = 0.15;
+            c.fillStyle = "#ffffff";
+            c.fill();
+            c.globalAlpha = 1;
+          }
+        } else {
+          if (ui.pressed) {
+            c.fillStyle = k.border;
+            c.fill();
+          }
+          c.strokeStyle = ui.hovered || ui.focused ? k.accent : k.border;
+          c.lineWidth = 1;
+          c.stroke();
+        }
+        c.font = `${o.look === "accent" ? "600 " : ""}13px ${FONT}`;
+        c.fillStyle = filled ? "#ffffff" : k.text;
+        c.textBaseline = "middle";
+        c.textAlign = "center";
+        c.fillText(s.text, x + w / 2, y + h / 2 + 0.5);
+        c.textAlign = "start";
+      }),
+  });
 
 /** A checkbox with its label. */
-export const toggle = (o: { id: string; panel: Surface; box: Box; text: string; checked: boolean; onChange: (checked: boolean) => void }): ComponentSpec<{ checked: boolean }> => ({
-  id: o.id,
-  state: { checked: o.checked },
-  meta: (s) => ({ role: "checkbox", label: o.text, value: s.checked }),
-  cursor: "pointer",
-  draw: (c, s, ui) => {
-    const k = o.panel.colors;
-    const { x, y, h } = o.box;
-    hitArea(c, o.box, k.panel);
-    const m = y + h / 2;
-    c.beginPath();
-    c.roundRect(x + 0.5, m - 7.5, 15, 15, 3);
-    c.fillStyle = s.checked ? k.accent : k.panel;
-    c.fill();
-    c.strokeStyle = s.checked ? k.accent : ui.hovered ? k.accent : k.muted;
-    c.lineWidth = 1;
-    c.stroke();
-    if (s.checked) {
-      c.strokeStyle = "#ffffff";
-      c.lineWidth = 2;
-      c.lineCap = "round";
-      c.lineJoin = "round";
-      c.beginPath();
-      c.moveTo(x + 4, m);
-      c.lineTo(x + 7, m + 3.5);
-      c.lineTo(x + 12, m - 3.5);
-      c.stroke();
-    }
-    c.font = `13px ${FONT}`;
-    c.fillStyle = k.text;
-    c.textBaseline = "middle";
-    c.fillText(o.text, x + 23, m + 0.5);
-  },
-  on: {
-    click: (e, self) => {
-      e.stopPropagation();
-      self.setState({ checked: !self.state.checked });
-      o.onChange(self.state.checked);
-    },
-    keydown: (e, self) => {
-      const key = (e.input as { key: string }).key;
-      if (key !== " " && key !== "Enter") return;
-      self.setState({ checked: !self.state.checked });
-      o.onChange(self.state.checked);
-    },
-  },
-});
+export const toggle = (o: {
+  id: string;
+  panel: Surface;
+  box: Box;
+  text: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  /** The app's own drawing, in place of the toolkit's look; it flips the same. */
+  draw?: (c: RecordingContext, s: { checked: boolean }, ui: ComponentUi) => void;
+}): ComponentSpec<{ checked: boolean }> =>
+  checkable({
+    id: o.id,
+    checked: o.checked,
+    label: o.text,
+    onChange: o.onChange,
+    draw:
+      o.draw ??
+      ((c, s, ui) => {
+        const k = o.panel.colors;
+        const { x, y, h } = o.box;
+        hitArea(c, o.box, k.panel);
+        const m = y + h / 2;
+        c.beginPath();
+        c.roundRect(x + 0.5, m - 7.5, 15, 15, 3);
+        c.fillStyle = s.checked ? k.accent : k.panel;
+        c.fill();
+        c.strokeStyle = s.checked ? k.accent : ui.hovered ? k.accent : k.muted;
+        c.lineWidth = 1;
+        c.stroke();
+        if (s.checked) {
+          c.strokeStyle = "#ffffff";
+          c.lineWidth = 2;
+          c.lineCap = "round";
+          c.lineJoin = "round";
+          c.beginPath();
+          c.moveTo(x + 4, m);
+          c.lineTo(x + 7, m + 3.5);
+          c.lineTo(x + 12, m - 3.5);
+          c.stroke();
+        }
+        c.font = `13px ${FONT}`;
+        c.fillStyle = k.text;
+        c.textBaseline = "middle";
+        c.fillText(o.text, x + 23, m + 0.5);
+      }),
+  });
 
 /** A slider with a label and its value; drag, click or use arrow keys. */
 export const slider = (o: {
@@ -342,76 +338,61 @@ export const slider = (o: {
   value: number;
   format?: (v: number) => string;
   onChange: (v: number) => void;
+  /** The app's own drawing, in place of the toolkit's look; it drags and steps the same, along the same track. */
+  draw?: (c: RecordingContext, s: { value: number }, ui: ComponentUi) => void;
 }): ComponentSpec<{ value: number }> => {
   const labelWidth = o.text ? 64 : 0;
   const valueWidth = o.format ? 44 : 0;
   const track = { x0: o.box.x + labelWidth + 8, x1: o.box.x + o.box.w - valueWidth - 8 };
-  const step = o.step ?? 1;
-  const set = (self: ComponentHandle<{ value: number }>, v: number): void => {
-    const value = Math.min(o.max, Math.max(o.min, Math.round(v / step) * step));
-    if (value === self.state.value) return;
-    self.setState({ value });
-    o.onChange(value);
-  };
   const at = (x: number): number => o.min + ((x - track.x0) / (track.x1 - track.x0)) * (o.max - o.min);
-  return {
+  return ranged({
     id: o.id,
-    state: { value: o.value },
-    meta: (s) => ({ role: "slider", label: o.text ?? o.id, value: s.value }),
-    cursor: "pointer",
-    draw: (c, s, ui) => {
-      const k = o.panel.colors;
-      const m = o.box.y + o.box.h / 2;
-      hitArea(c, o.box, k.panel);
-      c.font = `13px ${FONT}`;
-      c.textBaseline = "middle";
-      c.fillStyle = k.text;
-      if (o.text) c.fillText(o.text, o.box.x, m + 0.5);
-      const t = (s.value - o.min) / (o.max - o.min);
-      const kx = track.x0 + t * (track.x1 - track.x0);
-      c.lineCap = "round";
-      c.lineWidth = 4;
-      c.strokeStyle = k.border;
-      c.beginPath();
-      c.moveTo(track.x0, m);
-      c.lineTo(track.x1, m);
-      c.stroke();
-      c.strokeStyle = k.accent;
-      c.beginPath();
-      c.moveTo(track.x0, m);
-      c.lineTo(kx, m);
-      c.stroke();
-      c.beginPath();
-      c.arc(kx, m, ui.pressed || ui.hovered ? 8 : 7, 0, Math.PI * 2);
-      c.fillStyle = k.panel;
-      c.fill();
-      c.lineWidth = ui.focused ? 2.5 : 1.5;
-      c.strokeStyle = k.accent;
-      c.stroke();
-      if (o.format) {
-        c.fillStyle = k.muted;
-        c.textAlign = "right";
-        c.fillText(o.format(s.value), o.box.x + o.box.w, m + 0.5);
-        c.textAlign = "start";
-      }
-    },
-    on: {
-      down: (e, self) => {
-        e.stopPropagation();
-        set(self, at(o.panel.local(e).x));
-      },
-      dragstart: (e) => e.stopPropagation(),
-      drag: (e, self) => {
-        e.stopPropagation();
-        set(self, at(o.panel.local(e).x));
-      },
-      keydown: (e, self) => {
-        const key = (e.input as { key: string }).key;
-        if (key === "ArrowRight" || key === "ArrowUp") set(self, self.state.value + step);
-        if (key === "ArrowLeft" || key === "ArrowDown") set(self, self.state.value - step);
-      },
-    },
-  };
+    value: o.value,
+    min: o.min,
+    max: o.max,
+    ...(o.step !== undefined ? { step: o.step } : {}),
+    label: o.text ?? o.id,
+    valueAt: (e) => at(o.panel.local(e).x),
+    onChange: o.onChange,
+    draw:
+      o.draw ??
+      ((c, s, ui) => {
+        const k = o.panel.colors;
+        const m = o.box.y + o.box.h / 2;
+        hitArea(c, o.box, k.panel);
+        c.font = `13px ${FONT}`;
+        c.textBaseline = "middle";
+        c.fillStyle = k.text;
+        if (o.text) c.fillText(o.text, o.box.x, m + 0.5);
+        const t = (s.value - o.min) / (o.max - o.min);
+        const kx = track.x0 + t * (track.x1 - track.x0);
+        c.lineCap = "round";
+        c.lineWidth = 4;
+        c.strokeStyle = k.border;
+        c.beginPath();
+        c.moveTo(track.x0, m);
+        c.lineTo(track.x1, m);
+        c.stroke();
+        c.strokeStyle = k.accent;
+        c.beginPath();
+        c.moveTo(track.x0, m);
+        c.lineTo(kx, m);
+        c.stroke();
+        c.beginPath();
+        c.arc(kx, m, ui.pressed || ui.hovered ? 8 : 7, 0, Math.PI * 2);
+        c.fillStyle = k.panel;
+        c.fill();
+        c.lineWidth = ui.focused ? 2.5 : 1.5;
+        c.strokeStyle = k.accent;
+        c.stroke();
+        if (o.format) {
+          c.fillStyle = k.muted;
+          c.textAlign = "right";
+          c.fillText(o.format(s.value), o.box.x + o.box.w, m + 0.5);
+          c.textAlign = "start";
+        }
+      }),
+  });
 };
 
 /** A row of color swatches to pick from. */

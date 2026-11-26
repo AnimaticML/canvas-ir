@@ -3,7 +3,7 @@
 // accessibility mirror reading and pressing the same buttons. Its document is a plain object with its own undo: the
 // toolkit decides what the pointers did and draws its parts, and this page decides what that means and keeps it.
 import { AccessibilityLayer, RecordingContext, Renderer, Scene, type Point, type Rect } from "canvas-ir";
-import { Actions, CardLayer, Gestures, Viewport, WheelGesture, bindGestures, button, drawArrow, mountCanvas, route, slider, wheelZoom } from "@canvas-ir/toolkit";
+import { Actions, CardLayer, Gestures, Viewport, WheelGesture, bindGestures, button, drawArrow, mountCanvas, pressable, ranged, route, slider, wheelZoom } from "@canvas-ir/toolkit";
 
 interface Card {
   readonly id: string;
@@ -177,7 +177,66 @@ const controls = layer.card({
         onChange: (bend) => commit({ ...doc, bend }, "bend"),
       }),
     );
-    return 94;
+    // The same value as a knob, and a round button that straightens it: the toolkit's behaviours with this page's own
+    // drawing. The knob turns as a drag goes up or down, wherever it began; both answer keys and the mirror as the
+    // stock controls do.
+    const knob = { x: 40, y: 122, r: 22 };
+    card.mount(
+      ranged({
+        id: "bend-knob",
+        label: "Bend knob",
+        value: doc.bend,
+        min: -0.5,
+        max: 0.5,
+        step: 0.05,
+        relative: true,
+        cursor: "ns-resize",
+        valueAt: (e) => -card.local(e).y / 100,
+        onChange: (bend) => commit({ ...doc, bend }, "bend"),
+        draw: (c, s, ui) => {
+          const k = card.colors;
+          c.beginPath();
+          c.arc(knob.x, knob.y, knob.r, 0, Math.PI * 2);
+          c.fillStyle = ui.pressed ? k.border : k.panel;
+          c.fill();
+          c.lineWidth = ui.focused ? 3 : 2;
+          c.strokeStyle = k.accent;
+          c.stroke();
+          // The pointer sweeps 270 degrees, from bottom left at the minimum to bottom right at the maximum.
+          const a = Math.PI * 0.75 + ((s.value + 0.5) / 1) * Math.PI * 1.5;
+          c.beginPath();
+          c.moveTo(knob.x + Math.cos(a) * 6, knob.y + Math.sin(a) * 6);
+          c.lineTo(knob.x + Math.cos(a) * (knob.r - 4), knob.y + Math.sin(a) * (knob.r - 4));
+          c.lineCap = "round";
+          c.lineWidth = 3;
+          c.stroke();
+        },
+      }),
+    );
+    const round = { x: width - 40, y: 122, r: 18 };
+    card.mount(
+      pressable({
+        id: "straighten",
+        label: "Straighten",
+        state: null,
+        onPress: () => commit({ ...doc, bend: 0 }),
+        draw: (c, _s, ui) => {
+          const k = card.colors;
+          c.beginPath();
+          c.arc(round.x, round.y, round.r, 0, Math.PI * 2);
+          c.fillStyle = ui.pressed ? k.text : ui.hovered ? k.accent : k.muted;
+          c.fill();
+          c.strokeStyle = "#ffffff";
+          c.lineWidth = 2.5;
+          c.lineCap = "round";
+          c.beginPath();
+          c.moveTo(round.x - 8, round.y);
+          c.lineTo(round.x + 8, round.y);
+          c.stroke();
+        },
+      }),
+    );
+    return 158;
   },
   onMove: (x, y) => commit({ ...doc, controls: { x, y } }),
 });
@@ -187,8 +246,10 @@ function draw(d: Doc): void {
   bindActions(d);
   // The controls card shows the document too: after an undo, its place and its slider's value.
   controls.moveTo(d.controls.x, d.controls.y);
-  const bend = controls.get<{ value: number }>("bend");
-  if (bend && bend.state.value !== d.bend) bend.setState({ value: d.bend });
+  for (const id of ["bend", "bend-knob"]) {
+    const h = controls.get<{ value: number }>(id);
+    if (h && h.state.value !== d.bend) h.setState({ value: d.bend });
+  }
   host.schedule();
 }
 

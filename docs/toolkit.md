@@ -80,6 +80,12 @@ These moved from the playground unchanged in behavior, and the playground import
 
   The tools draw previews and record the new drawing.
 - **Controls** (`controls.ts`): button, toggle, slider, swatches, text box and field, section headings, the palette, and the text sink (one hidden textarea that takes typing for every text field). They mount on a `Surface`, which a card is.
+- **Behaviours** (`behaviours.ts`): what a control does, apart from its look, for an app that draws its own.
+  - `pressable` clicks on a press released on it, or on Enter or Space.
+  - `checkable` flips on or off, as a checkbox or a switch.
+  - `ranged` holds a value in a range: a press sets it, a drag moves it (or, `relative`, turns it by how far the drag went, as a knob), the arrows step it, Page Up and Down move it further, and Home and End go to the ends. `valueAt` says what value a point means, along a track, round a knob or up a fader.
+
+  Each names itself to the accessibility mirror (button, checkbox or switch, slider) the way the stock controls do. The stock button, toggle and slider are these with the toolkit's look, and each takes a `draw` to replace that look and keep the behaviour.
 
 ### The board
 
@@ -160,7 +166,7 @@ The 3D pages feed `Gestures` the same way, in place of the finger maps each kept
 - cards with title bars to drag;
 - a button on each, pressed by pointer or by Enter on the mirror;
 - connectors between the cards that follow them as they move;
-- a controls card over the board, whose button adds a card and whose slider bends every connector, dragged by its frame;
+- a controls card over the board, whose button adds a card and whose slider bends every connector, dragged by its frame; beside them a knob and a round button that the page draws itself on the toolkit's behaviours;
 - pan, wheel zoom and pinch;
 - Escape and a second finger to cancel a drag;
 - undo of its own, which also puts the controls card back.
@@ -200,7 +206,6 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 
 ## Next
 
-1. **Widget behaviours without the stock look.** A button's or slider's pressing, dragging and keys, with the app drawing it.
-2. **An image registry.** Images loaded once and drawn by key, for cards and drawings.
-3. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
-4. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
+1. **An image registry.** Images loaded once and drawn by key, for cards and drawings.
+2. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
+3. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.

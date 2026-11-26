@@ -159,6 +159,31 @@ m2 = await more();
 expect(m2.bend === 0.5 && (await state()).history === h1 + 2, "the bend slider sets the document's bend, as one step");
 expect(JSON.stringify(m2.link) !== JSON.stringify(m.link), "the connectors are drawn again for the new bend");
 
+// The knob and the round button are the page's own drawing on the toolkit's behaviours: dragging the knob up turns it
+// by how far the drag went, wherever it began, and the slider follows; the round button straightens the connectors.
+const knobAt = await screen(m.controls.x + 40, m.controls.y + 38 + 122);
+const hk = (await state()).history;
+const turn = async (dy: number, dx = 0) => {
+  await page.mouse.move(knobAt.x + dx, knobAt.y);
+  await page.mouse.down();
+  await page.mouse.move(knobAt.x + dx, knobAt.y + dy, { steps: 5 });
+  await page.mouse.up();
+  return (await more()).bend;
+};
+const down40 = await turn(40);
+const up20 = await turn(-20, 6);
+const sliderNow = await page.evaluate(() => (window as any).example.controls.get("bend").state.value);
+expect(Math.abs(down40 - 0.1) < 1e-9 && Math.abs(up20 - 0.3) < 1e-9 && sliderNow === up20, `the knob turns by how far it is dragged, from where it was (${down40}, then ${up20}), and the slider follows`);
+await click(m.controls.x + 196 - 40 + 12, m.controls.y + 38 + 122);
+m2 = await more();
+expect(m2.bend === 0, "the round button straightens the connectors");
+const mirrored = await page.evaluate(() => Array.from(document.querySelectorAll("[role=slider], [role=button]"), (e) => e.getAttribute("aria-label")));
+expect(mirrored.includes("Bend knob") && mirrored.includes("Straighten"), "both are in the accessibility mirror, as a slider and a button");
+// The page keeps a run of bend changes as one step, so undo straightens back to where the knob left it.
+await page.keyboard.press("Control+z");
+m2 = await more();
+expect(Math.abs(m2.bend - 0.3) < 1e-9 && (await state()).history === hk, `undo puts back what the knob set (${m2.bend})`);
+
 // The card's frame drags it over the board; the move is committed when the drag ends, and undo puts it back.
 q = await screen(m.controls.x + 60, m.controls.y + 18);
 await page.mouse.move(q.x, q.y);
