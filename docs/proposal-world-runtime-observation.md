@@ -20,8 +20,8 @@ the seven handoffs discoverable without a separate umbrella repository.
 | `AnimaticML/canvas-ir` | [World document, time and shared execution](https://github.com/AnimaticML/canvas-ir/blob/main/docs/proposal-world-runtime-document-and-execution.md) |
 | `AnimaticML/canvas-ir` | [World and motion observation](https://github.com/AnimaticML/canvas-ir/blob/main/docs/proposal-world-runtime-observation.md) |
 | `AnimaticML/canvas-ir` | [Editor Toolkit extraction](https://github.com/AnimaticML/canvas-ir/blob/main/docs/proposal-world-runtime-toolkit.md) |
-| `alexandr-panchenko/video` | [World representations in Animatic](https://github.com/alexandr-panchenko/video/blob/main/docs/architecture/proposal-world-runtime-integration.md) |
-| `alexandr-panchenko/video` | [Animatic observation](https://github.com/alexandr-panchenko/video/blob/main/ml-animatic/docs/proposal-world-runtime-observation.md) |
+| `alexandr-panchenko/video` | [World representations in ml-animatic](https://github.com/alexandr-panchenko/video/blob/main/docs/architecture/proposal-world-runtime-integration.md) |
+| `alexandr-panchenko/video` | [ml-animatic observation](https://github.com/alexandr-panchenko/video/blob/main/ml-animatic/docs/proposal-world-runtime-observation.md) |
 | `AnimaticML/ml-collab-codec` | [Document composition and component evolution](https://github.com/AnimaticML/ml-collab-codec/blob/main/docs/proposals/proposal-world-runtime-composition-and-evolution.md) |
 | `AnimaticML/ml-collab-shell` | [Format/runtime discovery and access](https://github.com/AnimaticML/ml-collab-shell/blob/main/docs/architecture/proposal-world-runtime-capabilities.md) |
 
@@ -76,7 +76,7 @@ Research how a provider describes available operations, parameter/result shapes,
 
 The distinction must be visible to callers. Inspecting a state must not secretly step physics or fire gameplay events. A probe that changes state should use an explicit fork/reset/advance contract or report that isolation is unavailable.
 
-Selecting a temporary inspection camera must not change the scene's authored camera or one Animatic occurrence's camera parameters. Persisting that view is a separate semantic action. Multiple observations of one source should not fight over a single global camera.
+Selecting a temporary inspection camera must not change the scene's authored camera or one ml-animatic occurrence's camera parameters. Persisting that view is a separate semantic action. Multiple observations of one source should not fight over a single global camera.
 
 An image and its structured data must refer to the same captured state. Define whether a query freezes an observation snapshot, uses a revision/time token, or reports that the execution changed before completion. Asynchronous rendering and resource loading must not silently substitute a later state.
 
@@ -84,7 +84,7 @@ Historical queries need an honest capability boundary. A document and time may b
 
 ## Composition with other runtimes
 
-An embedded application exposes the queries meaningful for its own format. The host routes to the appropriate instance and preserves source and occurrence context. Canvas need not understand AVML syntax to observe a world used by Animatic, and a world need not import AVML to host a registered media provider.
+An embedded application exposes the queries meaningful for its own format. The host routes to the appropriate instance and preserves source and occurrence context. Canvas need not understand AVML syntax to observe a world used by ml-animatic, and a world need not import AVML to host a registered media provider.
 
 Coordinate with the Video handoff on image/audio observations and selected-time rendering. A rendered canvas alone may omit video layers or other composed surfaces; an observation must describe what is included. Coordinate with Shell on discovery and artifact delivery without introducing an unrestricted host-method bridge.
 

@@ -20,8 +20,8 @@ the seven handoffs discoverable without a separate umbrella repository.
 | `AnimaticML/canvas-ir` | [World document, time and shared execution](https://github.com/AnimaticML/canvas-ir/blob/main/docs/proposal-world-runtime-document-and-execution.md) |
 | `AnimaticML/canvas-ir` | [World and motion observation](https://github.com/AnimaticML/canvas-ir/blob/main/docs/proposal-world-runtime-observation.md) |
 | `AnimaticML/canvas-ir` | [Editor Toolkit extraction](https://github.com/AnimaticML/canvas-ir/blob/main/docs/proposal-world-runtime-toolkit.md) |
-| `alexandr-panchenko/video` | [World representations in Animatic](https://github.com/alexandr-panchenko/video/blob/main/docs/architecture/proposal-world-runtime-integration.md) |
-| `alexandr-panchenko/video` | [Animatic observation](https://github.com/alexandr-panchenko/video/blob/main/ml-animatic/docs/proposal-world-runtime-observation.md) |
+| `alexandr-panchenko/video` | [World representations in ml-animatic](https://github.com/alexandr-panchenko/video/blob/main/docs/architecture/proposal-world-runtime-integration.md) |
+| `alexandr-panchenko/video` | [ml-animatic observation](https://github.com/alexandr-panchenko/video/blob/main/ml-animatic/docs/proposal-world-runtime-observation.md) |
 | `AnimaticML/ml-collab-codec` | [Document composition and component evolution](https://github.com/AnimaticML/ml-collab-codec/blob/main/docs/proposals/proposal-world-runtime-composition-and-evolution.md) |
 | `AnimaticML/ml-collab-shell` | [Format/runtime discovery and access](https://github.com/AnimaticML/ml-collab-shell/blob/main/docs/architecture/proposal-world-runtime-capabilities.md) |
 
@@ -29,7 +29,7 @@ Find the local documents with `rg --files | rg '(^|/)proposal-world-runtime-'`.
 
 ## Purpose and ownership
 
-Investigate a reusable foundation for editable 2D and 3D worlds in this workspace: a document format, its execution, shared time mechanisms, and integration with applications such as Animatic. A world can support interactive play, staged animation, motion input, or combinations of these.
+Investigate a reusable foundation for editable 2D and 3D worlds in this workspace: a document format, its execution, shared time mechanisms, and integration with applications such as ml-animatic. A world can support interactive play, staged animation, motion input, or combinations of these.
 
 Canvas IR is the proposed owner because its existing packages already handle drawing, geometry, interaction, physics integration, 3D surfaces, and motion. No new repository is required. This does not make the existing rendering IR the authoring format or require every Canvas IR consumer to adopt a document model.
 
@@ -39,7 +39,7 @@ The working direction is:
 - Provide a world document as an optional higher-level library built on ML Collab Codec.
 - Keep meaningful persisted state, semantic edits, and collaborative history in that document integration. Derive rendering data and high-frequency simulation state in the runtime.
 - Let applications and components define domain rules. Shared timing and execution supply mechanisms for running those rules.
-- Share execution mechanisms with Animatic where actual implementations demonstrate the same need. Animatic keeps its audiovisual composition semantics.
+- Share execution mechanisms with ml-animatic where actual implementations demonstrate the same need. ml-animatic keeps its audiovisual composition semantics.
 
 ## Implemented baseline to examine first
 
@@ -53,7 +53,7 @@ This handoff was checked against commit `c2acb32a27d906db3ea6943a098516f9b8d2012
 - [The Playground machine](../packages/playground/src/machine.ts) demonstrates Havok fixed stepping, snapshots, and callbacks after a selected step. Havok integration is not yet a general extracted execution package.
 - [`@canvas-ir/motion`](motion.md) already separates engine-independent solving and retargeting from the lab. Its takes are structured temporal resources.
 
-Start from these differing contracts and the current Animatic preview/backend contracts. Do not infer a common scheduler merely from similar names.
+Start from these differing contracts and the current ml-animatic preview/backend contracts. Do not infer a common scheduler merely from similar names.
 
 ## World authoring
 
@@ -123,17 +123,17 @@ Record what is reused, adapted or rejected and why. These references inform sepa
 
 Here, backend means execution code and platform adapters, not specifically a Shell server. Candidate common responsibilities are local clocks, scheduling, instance lifecycle, sampling/advancement coordination, resource readiness, and observations tied to their source and execution context.
 
-Compare the existing Canvas execution paths and Animatic APIs while shaping the shared contract. Use focused prototypes or standalone example applications to establish missing boundaries; completed downstream products are not a prerequisite for implementing and validating the library. Audiovisual track selection and montage compilation stay with Animatic. World entity behavior stays with world/application components. Codec remains the editing and collaboration foundation. Engine adapters keep engine-specific stepping, rendering, and resource handling.
+Compare the existing Canvas execution paths and ml-animatic APIs while shaping the shared contract. Use focused prototypes or standalone example applications to establish missing boundaries; completed downstream products are not a prerequisite for implementing and validating the library. Audiovisual track selection and montage compilation stay with ml-animatic. World entity behavior stays with world/application components. Codec remains the editing and collaboration foundation. Engine adapters keep engine-specific stepping, rendering, and resource handling.
 
 Possible package names are `@canvas-ir/runtime` and `@canvas-ir/world-document`; these are placeholders. The first implementation may use internal modules or separate entrypoints instead. A separate `world` package is justified only if there is a meaningful programmatic execution API independent of the document package.
 
 The dependency direction must allow:
 
 - world-document integration to depend on Codec and Canvas execution;
-- Animatic to consume a generic execution contract and an optional world provider;
-- an application to register an Animatic media provider with a world runtime.
+- ml-animatic to consume a generic execution contract and an optional world provider;
+- an application to register a ml-animatic media provider with a world runtime.
 
-The generic runtime must not import AVML. Showing an Animatic film inside a world is achieved by application wiring of a media provider. This permits mutual composition of results without a static package dependency cycle.
+The generic runtime must not import AVML. Showing a film from ml-animatic inside a world is achieved by application wiring of a media provider. This permits mutual composition of results without a static package dependency cycle.
 
 Browser preview, headless rendering, and server execution may use different adapters. Establish their supported capabilities explicitly. Do not assume a heavy graphics, audio, or video backend runs inside a Cloudflare Worker merely because Shell can run there.
 
@@ -149,13 +149,13 @@ Dynamic component loading is a later extension of the same model, not a prerequi
 
 ### Interview with shot and reverse shot
 
-One scene contains two people at a table. Two Animatic occurrences use that scene with different cameras. Their scene time can overlap while their montage positions differ. The user or agent can edit the common staging, edit one shot's parameters, and inspect a selected instant. The scene can supply a direct preview or reference media for generation.
+One scene contains two people at a table. Two ml-animatic occurrences use that scene with different cameras. Their scene time can overlap while their montage positions differ. The user or agent can edit the common staging, edit one shot's parameters, and inspect a selected instant. The scene can supply a direct preview or reference media for generation.
 
 This should establish document/instance/occurrence identity, shared versus local parameters, temporal mapping, and the world provider boundary.
 
 ### Cinema inside a game world
 
-A world contains a screen playing an Animatic composition while people move around the room. Pausing or seeking the film leaves world time running. An application-defined action can control the media provider. No gameplay rule is embedded in the shared clock implementation.
+A world contains a screen playing an AVML document while people move around the room. Pausing or seeking the film leaves world time running. An application-defined action can control the media provider. No gameplay rule is embedded in the shared clock implementation.
 
 This should establish independent local clocks, active composition, lifecycle, and application registration without a Canvas-to-AVML dependency.
 
