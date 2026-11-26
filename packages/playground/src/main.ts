@@ -24,7 +24,7 @@ import {
 } from "canvas-ir";
 import { vectorize } from "@canvas-ir/vectorize";
 import { LiveText } from "@canvas-ir/text";
-import { Board, BoardFeed, CardLayer, type Connector, ImageRegistry, TOOLS, snapControls, snapSettings, textSink, windowFrame } from "@canvas-ir/toolkit";
+import { Board, BoardFeed, CardLayer, type Connector, Desktop, ImageRegistry, TOOLS, snapControls, snapSettings, textSink, Windows } from "@canvas-ir/toolkit";
 import { datumAt } from "./charts";
 import { Devtools } from "./devtools";
 import { createEmbed, destroyEmbed } from "./embeds";
@@ -42,7 +42,7 @@ import { DECLARATION_AT, DECLARATION_ID, declaration } from "./declaration-demo"
 import { Reader } from "./reader";
 import { type ControlHooks, type LiveSpec, type Sample, samples } from "./samples";
 import { Chrome, type Settings } from "./ui/chrome";
-import { type Feature, featureIcon } from "./ui/features";
+import { type Glyph, ICON, drawGlyph, tintOf } from "./ui/features";
 import { CONNECTORS, CONTENT as CONTENT_AT, DRAWINGS, ICONS, WINDOWS, origin } from "./collage";
 
 const stage = document.getElementById("stage")!;
@@ -762,10 +762,7 @@ function remember(): void {
 }
 /** Moves a window by (dx, dy): its frame, its drawing and its controls. */
 function moveWindowBy(id: string, dx: number, dy: number): void {
-  for (const x of withWindows([id])) {
-    board.components.move(x, { a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
-    followMove(x, dx, dy);
-  }
+  windows.moveBy(id, dx, dy);
 }
 /** A window just opened goes where it was last put, if it was moved, and the view follows it there. */
 function placeWindow(key: string): void {
@@ -786,7 +783,7 @@ const boxOfKey = (key: string): Rect | null => {
   const at = key.indexOf(":");
   const kind = key.slice(0, at);
   const id = key.slice(at + 1);
-  if (kind === "icon") return cards.scene.getGroup(`feature-${id}`) ? (cards.scene.bounds(`feature-${id}`) ?? null) : null;
+  if (kind === "icon") return desktop.boxOf(id);
   if (kind === "content") {
     const ids = (id === FIELD ? field : (contentIds.get(id) ?? [])).filter(exists);
     return ids.length > 0 ? boxOf(ids) : null;
@@ -800,26 +797,31 @@ const boxOfKey = (key: string): Rect | null => {
 /** What a connector's end would hold at a point on the screen: an icon, content, a window or a drawing; null over empty board. */
 const keyAt = (screen: Point): string | null => {
   if (cards.hits(screen)) {
-    const icon = cards.scene.hitTest(board.router.toWorld(screen)).flatMap((h) => h.groups).find((g) => g.startsWith("feature-"));
-    return icon ? `icon:${icon.slice("feature-".length)}` : null;
+    const icon = cards.scene.hitTest(board.router.toWorld(screen)).flatMap((h) => h.groups).map((g) => desktop.iconOf(g)).find((i) => i !== null);
+    return icon ? `icon:${icon}` : null;
   }
   const outer = board.outerAt(screen);
   if (outer === null || board.isConnector(outer)) return null;
   for (const [name, ids] of contentIds) if (ids.includes(outer)) return `content:${name}`;
   if (field.includes(outer)) return `content:${FIELD}`;
-  const windows = withWindows([outer]);
-  for (const [key, group] of Object.entries(WINDOW_OF)) if (windows.includes(group)) return `window:${key}`;
+  const held = withWindows([outer]);
+  for (const [key, group] of Object.entries(WINDOW_OF)) if (held.includes(group)) return `window:${key}`;
   return `board:${outer}`;
 };
 const drawConnector = (id: string, c: Connector): void => board.drawConnector(id, c);
 
-/** Frames around demos drawn straight on the board, by frame id, with what each holds. */
-const frames = new Map<string, readonly string[]>();
+/** Frames around demos drawn straight on the board, moved with all they hold (the toolkit's `Windows`). */
+const windows = new Windows({
+  board,
+  moved: (id, dx, dy) => followMove(id, dx, dy),
+  onClose: () => {
+    desktop.refresh();
+    render();
+  },
+});
 /** The ids, with every window any of them belongs to: its frame and all it holds. */
 function withWindows(ids: readonly string[]): string[] {
-  const out = new Set(ids);
-  for (const [frame, held] of frames) if (ids.includes(frame) || held.some((h) => ids.includes(h))) for (const x of [frame, ...held]) out.add(x);
-  return [...out].filter((x) => scene.getGroup(x) !== undefined || scene.get(x) !== undefined);
+  return windows.with(ids);
 }
 /** The demos' windows open now: each one's group (a frame for a drawn demo), title and box. */
 function openWindows(): FloorWindow[] {
@@ -845,32 +847,8 @@ function openWindows(): FloorWindow[] {
   return out;
 }
 /** Puts a frame with a title bar and a close button around a demo and its controls, as they are now. */
-const frameAround = (id: string, title: string, held: readonly string[], close: () => void): void => {
-  const frame = `${id}:window`;
-  board.components.unmount(frame);
-  frames.delete(frame);
-  const there = held.filter((h) => scene.getGroup(h) !== undefined);
-  const box = boxOf(there);
-  if (!box) return;
-  const pad = 16;
-  board.components.mount(
-    windowFrame({
-      id: frame,
-      title,
-      rect: { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad },
-      onClose: () => {
-        close();
-        refreshIcons();
-        render();
-      },
-    }),
-  );
-  frames.set(frame, there);
-};
-const unframe = (id: string): void => {
-  board.components.unmount(`${id}:window`);
-  frames.delete(`${id}:window`);
-};
+const frameAround = (id: string, title: string, held: readonly string[], close: () => void): void => windows.frame(id, title, held, close);
+const unframe = (id: string): void => windows.unframe(id);
 
 const closeReader = (reader: Reader | null): void => {
   reader?.close();
@@ -911,83 +889,65 @@ const closePaint = (): void => {
   board.components.unmount(PAINT_ID);
 };
 
-// Every demo is an icon on the board, as on a desktop: pressing one opens its demo's window where the window lives and
-// flies there, and pressing it again closes it. Dragged, an icon moves, and stays where it was put.
-const toggle = (key: string, open: () => boolean, show: () => void, hide: () => void) => ({
-  open,
-  onClick: () => {
-    if (open()) {
-      hide();
-      log("closed it");
-    } else {
-      show();
-      placeWindow(key);
-    }
-    refreshIcons();
-    render();
+// Every demo is an icon on the board, as on a desktop (the toolkit's `Desktop`): pressing one opens its demo's window
+// where the window lives and flies there, and pressing it again closes it. Dragged, an icon moves, and stays where it
+// was put.
+const desktop = new Desktop({
+  layer: cards,
+  colors: () => cards.colors,
+  size: ICON,
+  prefix: "feature-",
+  // The board stays light in dark mode, so the names keep dark ink.
+  ink: "#1f2937",
+  moved: layout.icons,
+  onMoved: (id, at) => {
+    layout.icons[id] = at;
+    remember();
   },
-});
-/** Where an icon is, and how it is turned: where it was last put, or its place in the collage. */
-const iconAt = (id: string): { x: number; y: number; tilt: number } => {
-  const at = ICONS[id] ?? { x: 0, y: 0, tilt: 0 };
-  const moved = layout.icons[id];
-  return { tilt: at.tilt, x: moved?.x ?? at.x, y: moved?.y ?? at.y };
-};
-/** How far each icon has been dragged since it was drawn where it is. */
-const iconDrag = new Map<string, { x: number; y: number }>();
-const movable = (id: string) => ({
-  onDrag: (total: { x: number; y: number }) => {
-    const was = iconDrag.get(id) ?? { x: 0, y: 0 };
-    cards.components.move(`feature-${id}`, { a: 1, b: 0, c: 0, d: 1, e: total.x - was.x, f: total.y - was.y });
-    iconDrag.set(id, total);
+  onToggle: (id, opened) => {
+    if (opened) placeWindow(id);
+    else log("closed it");
+  },
+  redraw: () => {
     cards.render();
     render();
   },
-  onDrop: () => {
-    const total = iconDrag.get(id);
-    iconDrag.delete(id);
-    if (!total) return;
-    const at = iconAt(id);
-    layout.icons[id] = { x: at.x + total.x, y: at.y + total.y };
-    remember();
-  },
 });
-const features: Feature[] = [
-  { id: "pelican", name: "Pelican", glyph: "pelican", ...iconAt("pelican"), ...movable("pelican"), ...toggle("pelican", () => scene.getGroup(PELICAN_ID) !== undefined, pelicanDemo, closePelican) },
-  { id: "physics", name: "Physics", glyph: "physics", ...iconAt("physics"), ...movable("physics"), ...toggle("physics", () => scene.getGroup(PHYSICS_ID) !== undefined, physicsDemo, closePhysics) },
-  { id: "graph", name: "Graph", glyph: "graph", ...iconAt("graph"), ...movable("graph"), ...toggle("graph", () => scene.getGroup(GRAPH_ID) !== undefined, graphDemo, closeGraph) },
-  { id: "morph", name: "Morph", glyph: "morph", ...iconAt("morph"), ...movable("morph"), ...toggle("morph", () => scene.getGroup(MORPH_ID) !== undefined, morphDemo, closeMorph) },
-  { id: "paint", name: "Paint by numbers", glyph: "paint", ...iconAt("paint"), ...movable("paint"), ...toggle("paint", () => board.components.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), closePaint) },
-  { id: "table", name: "A million rows", glyph: "table", ...iconAt("table"), ...movable("table"), ...toggle("table", () => table?.alive === true, tableDemo, () => table?.close()) },
-  { id: "points", name: "Ten million points", glyph: "points", ...iconAt("points"), ...movable("points"), ...toggle("points", () => points?.alive === true, pointsDemo, () => points?.close()) },
-  { id: "galaxy", name: "Stars and planets", glyph: "galaxy", ...iconAt("galaxy"), ...movable("galaxy"), ...toggle("galaxy", () => galaxy?.alive === true, galaxyDemo, () => galaxy?.close()) },
-  { id: "map", name: "World map", glyph: "map", ...iconAt("map"), ...movable("map"), ...toggle("map", () => worldMap?.alive === true, mapDemo, () => worldMap?.close()) },
-  { id: "book", name: "War and Peace", glyph: "book", ...iconAt("book"), ...movable("book"), ...toggle("book", () => book?.alive === true, bookDemo, () => book?.close()) },
-  { id: "declaration", name: "Human rights in 529 languages", glyph: "languages", ...iconAt("declaration"), ...movable("declaration"), ...toggle("declaration", () => rights?.alive === true, declarationDemo, () => rights?.close()) },
-  { id: "picture", name: "Paint my image…", glyph: "picture", ...iconAt("picture"), ...movable("picture"), onClick: () => pictureInput.click() },
-  {
-    id: "many",
-    name: "10,000 shapes",
-    glyph: "many",
-    ...iconAt("many"), ...movable("many"),
-    ...toggle(
-      "many",
-      fieldOpen,
-      () => void add(sampleNamed(FIELD), layout.content[FIELD] ?? WINDOWS.many).then((ids) => {
-        field = ids;
-        refreshIcons();
-      }),
-      () => {
-        for (const id of field) if (scene.get(id) !== undefined || scene.getGroup(id) !== undefined) scene.remove(id);
-        field = [];
-      },
-    ),
+/** An icon with its glyph, at its place in the collage, opening and closing a demo's window. */
+const icon = (id: string, name: string, glyph: Glyph, open: (() => boolean) | null, show: () => void, hide?: () => void): void => {
+  const at = ICONS[id] ?? { x: 0, y: 0, tilt: 0 };
+  desktop.add({ id, name, x: at.x, y: at.y, tilt: at.tilt, tint: tintOf(glyph), show, ...(open ? { open } : {}), ...(hide ? { hide } : {}), draw: (c) => drawGlyph(c, glyph) });
+};
+icon("pelican", "Pelican", "pelican", () => scene.getGroup(PELICAN_ID) !== undefined, pelicanDemo, closePelican);
+icon("physics", "Physics", "physics", () => scene.getGroup(PHYSICS_ID) !== undefined, physicsDemo, closePhysics);
+icon("graph", "Graph", "graph", () => scene.getGroup(GRAPH_ID) !== undefined, graphDemo, closeGraph);
+icon("morph", "Morph", "morph", () => scene.getGroup(MORPH_ID) !== undefined, morphDemo, closeMorph);
+icon("paint", "Paint by numbers", "paint", () => board.components.get(PAINT_ID) !== undefined, () => showPaint(paintingSource()), closePaint);
+icon("table", "A million rows", "table", () => table?.alive === true, tableDemo, () => table?.close());
+icon("points", "Ten million points", "points", () => points?.alive === true, pointsDemo, () => points?.close());
+icon("galaxy", "Stars and planets", "galaxy", () => galaxy?.alive === true, galaxyDemo, () => galaxy?.close());
+icon("map", "World map", "map", () => worldMap?.alive === true, mapDemo, () => worldMap?.close());
+icon("book", "War and Peace", "book", () => book?.alive === true, bookDemo, () => book?.close());
+icon("declaration", "Human rights in 529 languages", "languages", () => rights?.alive === true, declarationDemo, () => rights?.close());
+icon("picture", "Paint my image…", "picture", null, () => pictureInput.click());
+icon(
+  "many",
+  "10,000 shapes",
+  "many",
+  fieldOpen,
+  () =>
+    void add(sampleNamed(FIELD), layout.content[FIELD] ?? WINDOWS.many).then((ids) => {
+      field = ids;
+      refreshIcons();
+    }),
+  () => {
+    for (const id of field) if (scene.get(id) !== undefined || scene.getGroup(id) !== undefined) scene.remove(id);
+    field = [];
   },
-];
-for (const f of features) cards.components.mount(featureIcon(f, () => cards.colors));
+);
 /** Draws the icons again, so each shows whether its window is open. */
 function refreshIcons(): void {
-  for (const f of features) cards.components.get(`feature-${f.id}`)?.redraw();
+  desktop.refresh();
 }
 
 // Drawings, text and graphics need no icon: they are on the board from the start and explain themselves.

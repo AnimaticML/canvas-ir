@@ -80,6 +80,9 @@ These moved from the playground unchanged in behavior, and the playground import
 
   The tools draw previews and record the new drawing.
 - **Controls** (`controls.ts`): button, toggle, slider, swatches, text box and field, section headings, the palette, and the text sink (one hidden textarea that takes typing for every text field). They mount on a `Surface`, which a card is.
+- **Desktop and windows** (`desktop.ts`):
+  - `Desktop` keeps icons on the cards' layer, so they zoom with the board but stay out of its drawing. Pressing one opens its window, or closes it when it is open, and a dot under its name shows it open, as a dock does; one without a window is an action. Dragged, an icon moves and the host is told where it was let go (`onMoved`), and `moved` puts it back there next time. `onToggle` lets the host place a window it just opened and fly to it. What an icon shows inside its tile (`draw`, `tint`) and what opening it does (`show`, `hide`) are the host's.
+  - `Windows` puts a `windowFrame` around what a window holds on the board, moves the frame and all it holds as one (`moveBy`, telling the host what moved so arrows follow), widens a selection to whole windows (`with`), and lists the frames on the board.
 - **Images** (`images.ts`): an `ImageRegistry` keeps images by key, the two maps every app with images wrote by hand.
   - `describe` is the recorder's `describeImage`: an image a drawing passes to `drawImage` is recorded by its key (or its `src`, or a new key), with its opaque outline traced so hit tests, snapping and text wrap follow it.
   - `resolve` is the renderer's and replay's `images`: the key back to something `drawImage` takes.
@@ -207,10 +210,9 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 
 - **Its content:** the demos, the collage, the samples added to the board, the saved layout, and the keys it gives connector ends (icons, content, windows).
 - **Its own panel sections:** `ui/chrome.ts` builds the playground's toolbar and inspector from the toolkit's panels and board controls. It adds only the devtools section, pasting SVG, the level-of-detail toggle, its hints and its actions.
-- **Its demo icons:** `ui/features.ts`.
+- **Its demo icons' pictures:** `ui/features.ts`, the glyph drawn inside each tile and its color. The icons themselves and the demos' frames are the toolkit's `Desktop` and `Windows`.
 - **Its 3D hosts:** the floor host for the room in 3D, and the capture of a part of the page for a 3D screen, which it sets on the board.
 
 ## Next
 
-1. **Desktop icons and windows.** `ui/features.ts`'s icons, the demo windows' frames and their opening, closing and placing, as one launcher-and-window mechanism on the board.
-2. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
+1. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.

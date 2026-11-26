@@ -1,15 +1,9 @@
-// The playground's demos as icons on the board, as on a desktop: each is a
-// tile with a small drawing of its demo, and pressing it opens the demo's
-// window, or closes it when it's open.
-// They are components on the cards' layer, so they zoom with the board but
-// are never part of the drawing.
-import type { ComponentSpec, RecordingContext } from "canvas-ir";
-import { FONT, type Palette } from "@canvas-ir/toolkit";
+// The pictures on the playground's demo icons: a small drawing of each demo and its tile's color. The icons themselves,
+// opening and closing the demos' windows and moving when dragged, are the toolkit's `Desktop`.
+import type { RecordingContext } from "canvas-ir";
 
 /** A tile's side in world units. */
 export const ICON = 150;
-/** How wide an icon's name may be before it wraps. */
-const LABEL = 220;
 
 export type Glyph =
   | "pelican"
@@ -36,23 +30,6 @@ export type Glyph =
   | "map"
   | "book"
   | "languages";
-
-export interface Feature {
-  readonly id: string;
-  readonly name: string;
-  readonly glyph: Glyph;
-  /** The tile's top left corner on the board. */
-  readonly x: number;
-  readonly y: number;
-  /** A slight turn, in degrees, for tiles that should look scattered rather than laid out; 0 stands them straight. */
-  readonly tilt: number;
-  /** Whether its window is open now; an icon without one is an action, such as picking a file. */
-  readonly open?: () => boolean;
-  readonly onClick: () => void;
-  /** Dragging the icon: how far it has been dragged since the press, in board units, and then where it was let go. */
-  readonly onDrag?: (total: { x: number; y: number }) => void;
-  readonly onDrop?: () => void;
-}
 
 const TINTS: Record<Glyph, string> = {
   pelican: "#fde68a",
@@ -83,83 +60,13 @@ const TINTS: Record<Glyph, string> = {
 
 const INK = "#1f2937";
 
-export const featureIcon = (f: Feature, colors: () => Palette): ComponentSpec<null> => {
-  const r = (f.tilt * Math.PI) / 180;
-  const c0 = Math.cos(r);
-  const s0 = Math.sin(r);
-  // Turned about the tile's center.
-  const cx = f.x + ICON / 2;
-  const cy = f.y + ICON / 2;
-  return {
-    id: `feature-${f.id}`,
-    state: null,
-    transform: { a: c0, b: s0, c: -s0, d: c0, e: cx - c0 * cx + s0 * cy, f: cy - s0 * cx - c0 * cy },
-    meta: { role: "button", label: f.open ? `Open or close ${f.name}` : f.name },
-    cursor: "pointer",
-    draw: (c, _, ui) => {
-      const k = colors();
-      const lift = ui.pressed ? 0 : ui.hovered ? 4 : 0;
-      c.translate(f.x, f.y - lift);
-      c.shadowColor = "rgba(15, 23, 42, 0.18)";
-      c.shadowBlur = ui.hovered ? 26 : 14;
-      c.shadowOffsetY = ui.hovered ? 8 : 4;
-      c.beginPath();
-      c.roundRect(0, 0, ICON, ICON, 28);
-      c.fillStyle = TINTS[f.glyph];
-      c.fill();
-      c.shadowColor = "transparent";
-      if (ui.hovered || ui.focused) {
-        c.lineWidth = 3;
-        c.strokeStyle = k.accent;
-        c.stroke();
-      }
-      c.save();
-      c.translate(25, 22);
-      glyph(c, f.glyph);
-      c.restore();
-      c.font = `600 22px ${FONT}`;
-      c.textAlign = "center";
-      c.textBaseline = "top";
-      c.fillStyle = INK;
-      // The board stays light in dark mode, so the label keeps dark ink.
-      // The name wraps to lines no wider than the space between icons.
-      const lines: string[] = [];
-      for (const word of f.name.split(" ")) {
-        const line = lines.length ? `${lines[lines.length - 1]} ${word}` : word;
-        if (lines.length && c.measureText(line).width <= LABEL) lines[lines.length - 1] = line;
-        else lines.push(word);
-      }
-      lines.forEach((line, i) => c.fillText(line, ICON / 2, ICON + 12 + i * 26));
-      // An open window shows as a dot under its icon's name, as a dock does.
-      if (f.open?.()) {
-        c.beginPath();
-        c.arc(ICON / 2, ICON + 30 + lines.length * 26, 5, 0, Math.PI * 2);
-        c.fillStyle = k.accent;
-        c.fill();
-      }
-      c.textAlign = "start";
-    },
-    on: {
-      click: (e) => {
-        e.stopPropagation();
-        f.onClick();
-      },
-      // Dragged, an icon moves, as on a desktop; it doesn't open its window.
-      dragstart: (e) => e.stopPropagation(),
-      drag: (e) => {
-        e.stopPropagation();
-        if (e.total) f.onDrag?.(e.total);
-      },
-      dragend: (e) => {
-        e.stopPropagation();
-        f.onDrop?.();
-      },
-      keydown: (e) => {
-        const key = (e.input as { key: string }).key;
-        if (key === "Enter" || key === " ") f.onClick();
-      },
-    },
-  };
+/** A glyph's tile color. */
+export const tintOf = (g: Glyph): string => TINTS[g];
+
+/** Draws a glyph inside its tile, in the tile's coordinates. */
+export const drawGlyph = (c: RecordingContext, g: Glyph): void => {
+  c.translate(25, 22);
+  glyph(c, g);
 };
 
 /** Draws a feature's picture in a 100 by 100 box. */

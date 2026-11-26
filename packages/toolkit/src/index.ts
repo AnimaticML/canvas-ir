@@ -5,6 +5,7 @@ export { bindGestures, mountCanvas, type BindOptions, type CanvasHost, type Canv
 export * from "./controls";
 export * from "./behaviours";
 export * from "./images";
+export * from "./desktop";
 export * from "./cards";
 export * from "./window";
 export * from "./connectors";
