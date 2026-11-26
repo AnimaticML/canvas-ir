@@ -26,12 +26,15 @@ import { Capture } from "./motion/capture";
 import { Character, ROBOT } from "./motion/character";
 import { Mannequin } from "./motion/mannequin";
 import { Overlay, Timeline } from "./motion/views";
+import { Playback } from "@canvas-ir/toolkit";
 // Imported as a file, so the page fetches it only when it is used; TypeScript types it as the JSON regardless.
 import correctionUrl from "./motion/correction.json" with { type: "file" };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const sourceSelect = $<HTMLSelectElement>("source");
 const setupSelect = $<HTMLSelectElement>("setup");
+// Filled now: the live solver is made from the chosen setup before the rest of the page is.
+for (const s of Object.values(SETUPS)) setupSelect.add(new Option(s.label, s.id));
 const compareSelect = $<HTMLSelectElement>("compare");
 const recordButton = $<HTMLButtonElement>("record");
 const info = $<HTMLElement>("info");
@@ -119,8 +122,6 @@ const state = {
   bodiesB: [] as Body[],
   live: false,
   recording: null as Frame[] | null,
-  t: 0,
-  playing: true,
   selected: null as JointName | null,
   view: "orbit" as ViewName,
   inferMs: 0,
@@ -172,29 +173,29 @@ const resolve = (): void => {
 
 // The 2D views.
 const overlay = new Overlay($<HTMLCanvasElement>("overlay"), (joint) => select(joint));
-const timeline = new Timeline($<HTMLCanvasElement>("timeline"), {
-  seek: (t) => {
-    if (state.live) return;
-    state.t = t;
-    state.playing = false;
-    timeline.setPlaying(false);
-    if (state.videoUrl) {
-      video.pause();
-      video.currentTime = t / 1000;
-    }
-  },
-  toggle: () => togglePlay(),
+// The take's clock (the toolkit's `Playback`): the timeline scrubs and plays it, and a video, when there is one, keeps
+// to it: paused and moved when the clock is scrubbed, played from the clock's time when it plays.
+const clock = new Playback();
+/** A play asked of the video and not yet begun: the clock moves on meanwhile, and isn't asked again. */
+let starting = false;
+video.addEventListener("playing", () => (starting = false));
+clock.onChange((t, playing) => {
+  if (state.live || !state.videoUrl) return;
+  if (playing && video.paused) {
+    if (starting) return;
+    starting = true;
+    video.currentTime = t / 1000;
+    void video.play().catch(() => (starting = false));
+  } else if (!playing) {
+    starting = false;
+    if (!video.paused) video.pause();
+    if (Math.abs(video.currentTime * 1000 - t) > 1) video.currentTime = t / 1000;
+  }
 });
+const timeline = new Timeline($<HTMLCanvasElement>("timeline"), clock);
 const togglePlay = (): void => {
   if (state.live || !state.take) return;
-  state.playing = !state.playing;
-  if (state.playing && state.t >= duration(state.take)) state.t = 0;
-  timeline.setPlaying(state.playing);
-  if (state.videoUrl) {
-    video.currentTime = state.t / 1000;
-    if (state.playing) void video.play();
-    else video.pause();
-  }
+  clock.toggle();
 };
 const select = (joint: JointName | null): void => {
   state.selected = joint;
@@ -216,10 +217,8 @@ const openTake = (take: Take, videoBlob: Blob | null = null): void => {
   still.hidden = !!state.videoUrl || !take.images?.length;
   cameraBox.classList.toggle("mirrored", !!take.camera.mirrored);
   setupSelect.value = take.setup;
-  state.t = 0;
-  state.playing = true;
-  timeline.setPlaying(true);
-  if (state.videoUrl) void video.play().catch(() => undefined);
+  clock.load(duration(take), take.frames.map((f) => f.t));
+  clock.play();
   overlay.show({ image: { width: take.camera.width, height: take.camera.height }, video: !!state.videoUrl, still: !still.hidden, visible: 0.5, mirrored: !!take.camera.mirrored });
   drawFrustum(take.camera.fov ?? SETUPS[take.setup].fov, take.camera.height / take.camera.width);
   resolve();
@@ -245,7 +244,8 @@ const stopLive = (): void => {
 const startLive = async (facing: "user" | "environment"): Promise<void> => {
   state.live = true;
   state.take = null;
-  state.playing = false;
+  clock.pause();
+  clock.load(0);
   if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
   state.videoUrl = null;
   video.removeAttribute("src");
@@ -360,7 +360,6 @@ if (navigator.mediaDevices && "getUserMedia" in navigator.mediaDevices) {
   sourceSelect.add(new Option("Camera, rear", "camera:environment"));
 }
 sourceSelect.add(new Option("The take being replayed", "replay"));
-for (const s of Object.values(SETUPS)) setupSelect.add(new Option(s.label, s.id));
 sourceSelect.addEventListener("change", () => {
   const value = sourceSelect.value;
   if (value.startsWith("camera:")) void startLive(value.slice(7) as "user" | "environment");
@@ -408,9 +407,9 @@ const currentRoot = (): { x: number; y: number; z: number } => {
 const currentBody = (): Body | null => {
   if (state.live) return state.liveBody;
   if (!state.take || !state.bodies.length) return null;
-  return state.bodies[frameIndexAt(state.take, state.t)] ?? null;
+  return state.bodies[frameIndexAt(state.take, clock.t)] ?? null;
 };
-const currentFrame = (): Frame | null => (state.live ? state.liveFrame : state.take ? (state.take.frames[frameIndexAt(state.take, state.t)] ?? null) : null);
+const currentFrame = (): Frame | null => (state.live ? state.liveFrame : state.take ? (state.take.frames[frameIndexAt(state.take, clock.t)] ?? null) : null);
 
 /** Where the floor is under a body: under its feet when they were seen, else where its stance says. */
 let floorY = -1;
@@ -489,7 +488,7 @@ const showInfo = (body: Body | null): void => {
 
 // Labels: what the person says they are doing, typed while recording or while replaying a take.
 const takeLabels = (): TakeLabel[] | null => (state.recording ? state.recLabels : state.take && !state.live ? ((state.take as unknown as { labels?: TakeLabel[] }).labels ??= []) : null);
-const labelTime = (): number => (state.recording ? (state.recording.at(-1)?.t ?? 0) : state.t);
+const labelTime = (): number => (state.recording ? (state.recording.at(-1)?.t ?? 0) : clock.t);
 labelInput.addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
   const text = labelInput.value.trim();
@@ -522,17 +521,11 @@ engine.runRenderLoop(() => {
   const now = performance.now();
   const dt = now - last;
   last = now;
-  if (!state.live && state.take && state.playing) {
-    if (state.videoUrl && !video.paused) state.t = video.currentTime * 1000;
-    else state.t += dt;
-    const end = duration(state.take);
-    if (state.t > end) {
-      state.t = 0;
-      if (state.videoUrl) {
-        video.currentTime = 0;
-        void video.play().catch(() => undefined);
-      }
-    }
+  // A playing video sets the time; without one, or once it has ended, the clock moves on, and loops (playing the video
+  // again from the start).
+  if (!state.live && state.take && clock.playing) {
+    if (state.videoUrl && !video.paused) clock.follow(video.currentTime * 1000);
+    else clock.tick(dt);
   }
   const body = currentBody();
   const root = currentRoot();
@@ -544,17 +537,16 @@ engine.runRenderLoop(() => {
     floor.position.set(root.x, floorY, root.z);
   }
   if (state.takeB && state.bodiesB.length) {
-    const b = state.bodiesB[frameIndexAt(state.takeB, state.t)] ?? null;
+    const b = state.bodiesB[frameIndexAt(state.takeB, clock.t)] ?? null;
     ghost.show(b, b?.root ?? root);
   }
-  if (!state.live) timeline.setTime(state.t);
   const take = state.live ? null : state.take;
   if (take && !still.hidden) {
-    const img = imageAt(take, state.t);
+    const img = imageAt(take, clock.t);
     if (img && still.getAttribute("src") !== img.src) still.src = img.src;
   }
-  const marks = take?.marks?.filter((m) => m.t0 <= state.t && state.t <= (m.t1 ?? m.t0 + 1000)) ?? [];
-  overlay.show({ frame: currentFrame(), labels: state.recording ? state.recLabels.slice(-1) : take ? labelsAt(take, state.t) : [], marks });
+  const marks = take?.marks?.filter((m) => m.t0 <= clock.t && clock.t <= (m.t1 ?? m.t0 + 1000)) ?? [];
+  overlay.show({ frame: currentFrame(), labels: state.recording ? state.recLabels.slice(-1) : take ? labelsAt(take, clock.t) : [], marks });
   showInfo(body);
   scene.render();
 });
@@ -566,14 +558,11 @@ window.addEventListener("keydown", (e) => {
     togglePlay();
   }
   if ((e.code === "ArrowLeft" || e.code === "ArrowRight") && state.take) {
-    const i = frameIndexAt(state.take, state.t) + (e.code === "ArrowLeft" ? -1 : 1);
-    state.t = state.take.frames[Math.max(0, Math.min(state.take.frames.length - 1, i))]!.t;
-    state.playing = false;
-    timeline.setPlaying(false);
+    clock.step(e.code === "ArrowLeft" ? -1 : 1);
   }
 });
 
 sourceSelect.value = "";
 drawFrustum(SETUPS.desk.fov, 9 / 16);
 
-(window as unknown as { canvasIrMotion: unknown }).canvasIrMotion = { state, scene, openTake, resolve, select, mannequin, character: () => character };
+(window as unknown as { canvasIrMotion: unknown }).canvasIrMotion = { state, clock, scene, openTake, resolve, select, mannequin, character: () => character };

@@ -1,6 +1,7 @@
 // The motion bench: a rigged human posed by a scripted movement, rendered through a camera placed as a setup places
 // it, and run through the real trackers and the solver. The movement's bones are known, so the solve is scored
 // against the truth, bone by bone, for each camera setup: what the camera-only takes can't tell.
+import { Playback } from "@canvas-ir/toolkit";
 import { ArcRotateCamera } from "@babylonjs/core/Cameras/arcRotateCamera";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
 import { Camera } from "@babylonjs/core/Cameras/camera";
@@ -155,8 +156,15 @@ interface Replay {
 }
 let replay: Replay | null = null;
 let replayAt = 0;
-let replayPlaying = false;
 let replayFps = 15;
+/** The replay's clock (the toolkit's `Playback`), a frame every 1/fps of a second; the scrub bar and Play drive it. */
+const replayTime = new Playback();
+replayTime.onChange((t, playing) => {
+  playButton.textContent = playing ? "Pause" : "Play";
+  if (!replay) return;
+  const i = Math.min(replay.frames.length - 1, Math.floor((t * replayFps) / 1000 + 1e-6));
+  if (i !== replayAt || scrub.value !== String(i)) showReplay(i);
+});
 
 const showReplay = (i: number): void => {
   if (!replay) return;
@@ -192,19 +200,12 @@ const startReplay = (r: Replay, fps: number): void => {
   picture.hidden = false;
   controls.hidden = false;
   scrub.max = String(r.frames.length - 1);
-  replayPlaying = true;
-  playButton.textContent = "Pause";
   showReplay(0);
+  replayTime.load((r.frames.length * 1000) / fps, r.frames.map((_, i) => (i * 1000) / fps));
+  replayTime.play();
 };
-scrub.addEventListener("input", () => {
-  replayPlaying = false;
-  playButton.textContent = "Play";
-  showReplay(Number(scrub.value));
-});
-playButton.addEventListener("click", () => {
-  replayPlaying = !replayPlaying;
-  playButton.textContent = replayPlaying ? "Pause" : "Play";
-});
+scrub.addEventListener("input", () => replayTime.seek((Number(scrub.value) * 1000) / replayFps));
+playButton.addEventListener("click", () => replayTime.toggle());
 for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>(".views button"))) {
   b.addEventListener("click", () => {
     replayView = b.dataset.view as typeof replayView;
@@ -214,15 +215,8 @@ for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>(".views 
     showReplay(replayAt);
   });
 }
-let replayClock = 0;
 replayEngine.runRenderLoop(() => {
-  if (replay && replayPlaying) {
-    replayClock += replayEngine.getDeltaTime();
-    if (replayClock >= 1000 / replayFps) {
-      replayClock = 0;
-      showReplay(replayAt + 1 >= replay.frames.length ? 0 : replayAt + 1);
-    }
-  }
+  if (replay) replayTime.tick(replayEngine.getDeltaTime());
   replayScene.render();
 });
 addEventListener("resize", () => replayEngine.resize());
@@ -252,7 +246,7 @@ const run = async (scriptName: string, setupId?: SetupId, fps = 15): Promise<{ t
   const pictures: string[] = [];
   const truthBodies: Body[] = [];
   replay = null;
-  replayPlaying = false;
+  replayTime.pause();
   canvas.hidden = false;
   picture.hidden = true;
   for (let i = 0; i < synth.truth.length; i++) {

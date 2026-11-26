@@ -83,6 +83,7 @@ These moved from the playground unchanged in behavior, and the playground import
 - **Desktop and windows** (`desktop.ts`):
   - `Desktop` keeps icons on the cards' layer, so they zoom with the board but stay out of its drawing. Pressing one opens its window, or closes it when it is open, and a dot under its name shows it open, as a dock does; one without a window is an action. Dragged, an icon moves and the host is told where it was let go (`onMoved`), and `moved` puts it back there next time. `onToggle` lets the host place a window it just opened and fly to it. What an icon shows inside its tile (`draw`, `tint`) and what opening it does (`show`, `hide`) are the host's.
   - `Windows` puts a `windowFrame` around what a window holds on the board, moves the frame and all it holds as one (`moveBy`, telling the host what moved so arrows follow), widens a selection to whole windows (`with`), and lists the frames on the board.
+- **Playback** (`playback.ts`): `Playback` is a clock for replaying a take, an animation or a recording. It plays and pauses, loops or stops at the end, starts again when played from the end, steps frame by frame (`load(duration, frameTimes)`), and can `follow` another clock, such as a video's, while it plays. `scrubber` and `playButton` are its controls, drawn by the host: a press or drag seeks, the arrows step a frame, Page Up and Down move a second, Home and End go to the ends, and Space plays. The motion lab's timeline and the motion bench's replay both run on it.
 - **Images** (`images.ts`): an `ImageRegistry` keeps images by key, the two maps every app with images wrote by hand.
   - `describe` is the recorder's `describeImage`: an image a drawing passes to `drawImage` is recorded by its key (or its `src`, or a new key), with its opaque outline traced so hit tests, snapping and text wrap follow it.
   - `resolve` is the renderer's and replay's `images`: the key back to something `drawImage` takes.
@@ -215,4 +216,7 @@ These two apps are here as concrete examples of what the toolkit has to serve, n
 
 ## Next
 
-1. **The motion lab and bench.** Scrubbing, playback and the view controls they each build.
+The handout's list is done. What could come after it:
+- subpath exports, so an app can import only the part it uses;
+- a React hook around a board;
+- text that sizes itself to fit its box.

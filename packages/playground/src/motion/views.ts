@@ -1,6 +1,7 @@
 // The 2D parts of the motion page, drawn with CanvasIR: the landmarks over the camera's image, and the timeline with a
 // lane per body part showing, frame by frame, whether it was seen, held or only assumed.
 import { Components, EventRouter, Renderer, Scene, type RecordingContext } from "canvas-ir";
+import { type Playback, playButton, scrubber } from "@canvas-ir/toolkit";
 import { type Body, type Frame, HAND_LINES, type JointName, P, POSE_LINES, type TakeLabel, type TakeMark } from "@canvas-ir/motion";
 
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
@@ -253,50 +254,58 @@ interface TimelineState {
   recording: number | null;
 }
 
-/** The timeline: a play button, the time, and a lane per part, scrubbed by dragging anywhere on the lanes. */
+/**
+ * The timeline: a play button, the time, and a lane per part, scrubbed by dragging anywhere on the lanes. It plays a
+ * `Playback` (the toolkit's), and shows its time and whether it plays; the arrows step a frame and Space plays.
+ */
 export class Timeline {
   private readonly c: Canvas2D;
   private readonly lanes;
   private readonly head;
   private readonly play;
-  private t = 0;
-  private playing = false;
   private static readonly LEFT = 96;
   private static readonly TOP = 48;
   private static readonly LANE = 15;
 
-  constructor(canvas: HTMLCanvasElement, private readonly on: { seek: (t: number) => void; toggle: () => void }) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    private readonly playback: Playback,
+  ) {
     this.c = new Canvas2D(canvas, () => {
       this.lanes?.redraw();
       this.head?.redraw();
+      this.c?.ui.get("scrub")?.redraw();
     });
-    const seek = (x: number) => {
-      const s = this.lanes.state;
-      const w = this.c.width - Timeline.LEFT - 12;
-      this.on.seek(Math.max(0, Math.min(1, (x - Timeline.LEFT) / w)) * s.duration);
-    };
     this.lanes = this.c.ui.mount<TimelineState>({
       id: "lanes",
       state: { labels: [], bodies: [], duration: 0, recording: null },
-      cursor: () => "ew-resize",
       draw: (ctx, s) => this.drawLanes(ctx, s),
-      on: {
-        down: (e) => seek(e.point.x),
-        drag: (e) => {
-          seek(e.point.x);
-          e.stopPropagation();
-        },
-      },
     });
+    // Over the lanes, a scrub bar as wide as them: it holds no drawing of its own but takes the presses, drags and keys.
+    this.c.ui.mount(
+      scrubber({
+        id: "scrub",
+        playback,
+        label: "Take time",
+        timeAt: (e) => Math.max(0, Math.min(1, (e.point.x - Timeline.LEFT) / (this.c.width - Timeline.LEFT - 12))) * playback.duration,
+        draw: (ctx) => {
+          // A transparent target, kept for hit tests.
+          ctx.beginGroup({ id: "area", meta: { hitArea: true } });
+          ctx.fillStyle = "rgba(0,0,0,0)";
+          ctx.fillRect(Timeline.LEFT, Timeline.TOP - Timeline.LANE - 6, Math.max(0, this.c.width - Timeline.LEFT - 12), (LANES.length + 1) * Timeline.LANE + 6);
+          ctx.endGroup();
+        },
+      }),
+    );
     this.head = this.c.ui.mount<{ t: number }>({
       id: "playhead",
       state: { t: 0 },
       draw: (ctx, s) => this.drawHead(ctx, s.t),
     });
-    this.play = this.c.ui.mount<{ playing: boolean }>({
+    this.play = this.c.ui.mount(
+      playButton({
       id: "play",
-      state: { playing: false },
-      cursor: () => "pointer",
+      playback,
       draw: (ctx, s, ui) => {
         ctx.fillStyle = ui.hovered ? "#1e293b" : "#0f172a";
         ctx.beginPath();
@@ -315,32 +324,26 @@ export class Timeline {
           ctx.fill();
         }
       },
-      on: { click: () => this.on.toggle() },
+      }),
+    );
+    playback.onChange((t, playing) => {
+      if (this.head.state.t !== t) this.head.setState({ t });
+      if (this.play.state.playing !== playing) this.play.setState({ playing });
     });
   }
 
   setTake(bodies: readonly Body[], duration: number, labels: readonly TakeLabel[] = []): void {
     this.lanes.setState({ bodies, duration, recording: null, labels });
-    this.head.setState({ t: this.t });
+    this.head.setState({ t: this.playback.t });
   }
 
   setRecording(frames: number | null, duration = 0): void {
     this.lanes.setState(frames === null ? { recording: null } : { recording: frames, duration });
-    this.head.setState({ t: this.t });
+    this.head.redraw();
   }
 
   setLabels(labels: readonly TakeLabel[]): void {
     this.lanes.setState({ labels });
-  }
-
-  setTime(t: number): void {
-    this.t = t;
-    this.head.setState({ t });
-  }
-
-  setPlaying(playing: boolean): void {
-    this.playing = playing;
-    this.play.setState({ playing });
   }
 
   private drawLanes(ctx: RecordingContext, s: TimelineState): void {
@@ -429,9 +432,5 @@ export class Timeline {
     ctx.moveTo(x, Timeline.TOP - Timeline.LANE - 6);
     ctx.lineTo(x, Timeline.TOP + LANES.length * Timeline.LANE);
     ctx.stroke();
-  }
-
-  get isPlaying(): boolean {
-    return this.playing;
   }
 }

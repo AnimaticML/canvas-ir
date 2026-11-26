@@ -6,6 +6,7 @@ export * from "./controls";
 export * from "./behaviours";
 export * from "./images";
 export * from "./desktop";
+export * from "./playback";
 export * from "./cards";
 export * from "./window";
 export * from "./connectors";
