@@ -70,8 +70,8 @@ export const ROBOT: CharacterSpec = {
 
 /**
  * A plain human mannequin rigged for MediaPipe (bones named hips, spine, chest, upper_chest, neck, head, clavicle,
- * upper_arm, forearm, hand, five three-bone fingers, thigh, shin, foot, toes, each ".L" or ".R"). It isn't in the repo:
- * give its file to whatever loads it.
+ * upper_arm, forearm, hand, five three-bone fingers, thigh, shin, foot, toes, each ".L" or ".R"). The motion bench
+ * supplies the bundled mannequin.glb; callers may also supply another compatible file.
  */
 export const mannequinSpec = (url: string): CharacterSpec => ({
   url,
